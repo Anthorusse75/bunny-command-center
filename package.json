@@ -20,7 +20,7 @@
     "lint": "eslint .",
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
-    "i18n:lint": "npm run i18n:lint --workspace=packages/shared && npm run i18n:lint:usage --workspace=packages/shared",
+    "i18n:lint": "npm run i18n:lint --workspace=packages/shared && npm run i18n:lint:usage --workspace=packages/shared && npm run i18n:lint:premiumplus --workspace=packages/shared",
     "contrast:check": "npm run contrast:check --workspace=apps/web",
     "test:e2e": "npm run test:e2e --workspace=apps/web",
     "migrate": "npm run migrate --workspace=apps/api",

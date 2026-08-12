@@ -83,6 +83,9 @@ jobs:
       - name: i18n completeness check
         run: npm run i18n:lint
 
+      - name: Design-system contrast check (WCAG 2.2 AA, all 9 theme x mode combinations)
+        run: npm run contrast:check
+
       - name: "Create Dashboard DB accounts (app: no DDL, migrator: DDL)"
         run: |
           mysql -h127.0.0.1 -P3306 -uroot -p"${MYSQL_ROOT_PASSWORD}" <<SQL
@@ -132,9 +135,17 @@ jobs:
           TEST_MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
         run: npx vitest run
 
-      - name: Unit tests (apps/web - i18n shell)
+      - name: Unit tests (apps/web - theme engine, design system, i18n)
         working-directory: apps/web
         run: npx vitest run
+
+      - name: Install Playwright's Chromium (for the real-browser e2e/a11y suite below)
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: "E2E: theme x mode matrix, i18n runtime, responsive, axe-core accessibility"
+        working-directory: apps/web
+        run: npx playwright test
 
       - name: Build (api + web)
         run: npm run build

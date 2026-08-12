@@ -13,7 +13,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "i18n:lint": "tsx scripts/lint-i18n.ts",
-    "i18n:lint:usage": "tsx scripts/lint-i18n-usage.ts"
+    "i18n:lint:usage": "tsx scripts/lint-i18n-usage.ts",
+    "i18n:lint:premiumplus": "tsx scripts/lint-i18n-premiumplus.ts"
   },
   "dependencies": {
     "zod": "4.4.3"
