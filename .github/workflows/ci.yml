@@ -28,8 +28,11 @@ jobs:
           MYSQL_DATABASE: ${{ env.MYSQL_DATABASE }}
         ports:
           - 3306:3306
+        # `options` doesn't support the `env` context (unlike `services.<id>.env`
+        # above), so this throwaway CI-only password is hardcoded rather than
+        # referencing the workflow-level env: block.
         options: >-
-          --health-cmd="mysqladmin ping -uroot -p${{ env.MYSQL_ROOT_PASSWORD }}"
+          --health-cmd="mysqladmin ping -uroot -pci_root_pass"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
