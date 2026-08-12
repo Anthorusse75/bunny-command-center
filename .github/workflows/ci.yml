@@ -54,13 +54,19 @@ jobs:
           node-version-file: ".nvmrc"
           cache: "npm"
 
-      - name: Setup Python (for the real Self-bot migrator - aiomysql only, no self-bot code touched)
+      - name: Setup Python (for the real Self-bot migrator - no self-bot code touched)
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      - name: Install Self-bot migrator's runtime dependency
-        run: pip install "aiomysql>=0.1.1"
+      - name: Install Self-bot migrator's runtime dependencies
+        # Matches 01_NEW_SELF_BOTS/requirements.txt's own pins for these two
+        # packages exactly (aiomysql itself, plus cryptography - required by
+        # PyMySQL/aiomysql for MySQL 8's default caching_sha2_password auth
+        # plugin; the first real run without it failed with "'cryptography'
+        # package is required for sha256_password or caching_sha2_password
+        # auth methods").
+        run: pip install "aiomysql>=0.1.1" "cryptography>=3.0.0"
 
       - name: Install npm dependencies
         run: npm ci
