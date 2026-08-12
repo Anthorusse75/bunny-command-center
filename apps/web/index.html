@@ -2,8 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-bottom) non-zero on notched
+         devices, which the bottom nav and the mobile toast placement depend on
+         (21_MOBILE_UX.md §Navigation). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Bunny Command Center</title>
+    <!-- Replaced at build/dev time by the generated pre-paint theme style + blocking script
+         (see vite.config.ts and src/theme/preload/generatePreloadSnippet.ts). Must stay
+         BEFORE the module script below, or it stops being blocking and the flash returns.
+         The `lang` attribute above is the pre-i18n default; BccI18nProvider replaces it with
+         the resolved locale on mount. -->
+    <!--BCC_PRELOAD_THEME-->
   </head>
   <body>
     <div id="root"></div>
