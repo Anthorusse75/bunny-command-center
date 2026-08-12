@@ -1,0 +1,5 @@
+dist/
+node_modules/
+coverage/
+vendor/
+apps/api/src/db/codegen-types.ts

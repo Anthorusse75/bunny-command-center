@@ -1,0 +1,3 @@
+[submodule "vendor/self-bot-schema"]
+	path = vendor/self-bot-schema
+	url = https://github.com/Anthorusse75/02-SELF-BOT.git

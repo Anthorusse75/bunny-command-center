@@ -1,0 +1,26 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+
+# Real secrets - never commit
+.env
+.env.local
+.env.*.local
+apps/api/.env
+apps/web/.env
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Vite
+apps/web/dist/
+apps/web/.vite/
+
+# Test/coverage artifacts
+.nyc_output/

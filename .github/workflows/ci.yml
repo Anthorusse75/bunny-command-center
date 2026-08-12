@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Shared MySQL schema, built fresh every run from the pinned Self-bot
+  # submodule ledger, then layered with the Dashboard's own (currently
+  # empty) ledger - 05_THIRD_REPOSITORY_ARCHITECTURE.md §Build & CI.
+  MYSQL_DATABASE: bunny_command_center
+  MYSQL_ROOT_PASSWORD: ci_root_pass
+  DASHBOARD_APP_DB_USER: bunny_dashboard_app
+  DASHBOARD_APP_DB_PASSWORD: ci_app_pass
+  DASHBOARD_MIGRATOR_DB_USER: bunny_dashboard_migrator
+  DASHBOARD_MIGRATOR_DB_PASSWORD: ci_migrator_pass
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0.39
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: ${{ env.MYSQL_DATABASE }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -p${{ env.MYSQL_ROOT_PASSWORD }}"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout (with pinned Self-bot schema submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Setup Python (for the real Self-bot migrator - aiomysql only, no self-bot code touched)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Self-bot migrator's runtime dependency
+        run: pip install "aiomysql>=0.1.1"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: i18n completeness check
+        run: npm run i18n:lint
+
+      - name: "Create Dashboard DB accounts (app: no DDL, migrator: DDL)"
+        run: |
+          mysql -h127.0.0.1 -P3306 -uroot -p"${MYSQL_ROOT_PASSWORD}" <<SQL
+          CREATE USER IF NOT EXISTS '${DASHBOARD_APP_DB_USER}'@'%' IDENTIFIED BY '${DASHBOARD_APP_DB_PASSWORD}';
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ${MYSQL_DATABASE}.* TO '${DASHBOARD_APP_DB_USER}'@'%';
+          CREATE USER IF NOT EXISTS '${DASHBOARD_MIGRATOR_DB_USER}'@'%' IDENTIFIED BY '${DASHBOARD_MIGRATOR_DB_PASSWORD}';
+          GRANT ALL PRIVILEGES ON *.* TO '${DASHBOARD_MIGRATOR_DB_USER}'@'%';
+          FLUSH PRIVILEGES;
+          SQL
+
+      - name: Apply the REAL Self-bot canonical migration ledger (shared schema)
+        working-directory: vendor/self-bot-schema
+        env:
+          MIGRATOR_DB_HOST: 127.0.0.1
+          MIGRATOR_DB_PORT: "3306"
+          MIGRATOR_DB_USER: ${{ env.DASHBOARD_MIGRATOR_DB_USER }}
+          MIGRATOR_DB_PASSWORD: ${{ env.DASHBOARD_MIGRATOR_DB_PASSWORD }}
+          MIGRATOR_DB_NAME: ${{ env.MYSQL_DATABASE }}
+        run: python database/migrate.py up
+
+      - name: Apply the Dashboard's own migration ledger (currently empty)
+        working-directory: apps/api
+        env:
+          MIGRATOR_DB_HOST: 127.0.0.1
+          MIGRATOR_DB_PORT: "3306"
+          MIGRATOR_DB_USER: ${{ env.DASHBOARD_MIGRATOR_DB_USER }}
+          MIGRATOR_DB_PASSWORD: ${{ env.DASHBOARD_MIGRATOR_DB_PASSWORD }}
+          MIGRATOR_DB_NAME: ${{ env.MYSQL_DATABASE }}
+          RUNNER_ENV: LOCAL_DISPOSABLE
+        run: npm run migrate -- up
+
+      - name: kysely-codegen freshness check
+        working-directory: apps/api
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_USER: ${{ env.DASHBOARD_APP_DB_USER }}
+          DB_PASSWORD: ${{ env.DASHBOARD_APP_DB_PASSWORD }}
+          DB_NAME: ${{ env.MYSQL_DATABASE }}
+        run: npm run codegen:check
+
+      - name: Unit + real-MySQL integration tests (apps/api - migration runner, health/readyz, additive audit)
+        working-directory: apps/api
+        env:
+          TEST_MYSQL_HOST: 127.0.0.1
+          TEST_MYSQL_PORT: "3306"
+          TEST_MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
+        run: npx vitest run
+
+      - name: Unit tests (apps/web - i18n shell)
+        working-directory: apps/web
+        run: npx vitest run
+
+      - name: Build (api + web)
+        run: npm run build
+
+      - name: apps/web production build sanity check
+        run: test -f apps/web/dist/index.html

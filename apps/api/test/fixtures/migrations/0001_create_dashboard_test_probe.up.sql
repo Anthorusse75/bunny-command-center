@@ -1,0 +1,5 @@
+CREATE TABLE dashboard_test_probe (
+  id INT NOT NULL AUTO_INCREMENT,
+  label VARCHAR(64) NOT NULL,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
