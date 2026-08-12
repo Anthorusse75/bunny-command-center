@@ -1,5 +1,151 @@
 {
   "app": {
     "title": "Bunny Command Center"
-  }
+  },
+  "common": {
+    "actions": {
+      "save": "Save",
+      "cancel": "Cancel",
+      "close": "Close",
+      "confirm": "Confirm",
+      "retry": "Try again",
+      "dismiss": "Dismiss",
+      "back": "Back",
+      "more": "More",
+      "refresh": "Refresh",
+      "copy": "Copy",
+      "expand": "Expand",
+      "collapse": "Collapse"
+    },
+    "theme": {
+      "label": "Theme",
+      "heroic": "Heroic",
+      "premium": "Premium",
+      "fusion": "Fusion"
+    },
+    "mode": {
+      "label": "Appearance",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "Match system"
+    },
+    "language": {
+      "label": "Language",
+      "fr": "Français",
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "status": {
+      "success": "Succeeded",
+      "warning": "Needs attention",
+      "error": "Failed",
+      "info": "Information",
+      "pending": "Waiting",
+      "progress": "In progress",
+      "neutral": "Unknown"
+    },
+    "state": {
+      "loading": "Loading…",
+      "empty": "Nothing here yet",
+      "offline": "You're offline — changes will sync when reconnected"
+    },
+    "screenshotCount_one": "{{count}} screenshot",
+    "screenshotCount_other": "{{count}} screenshots",
+    "lastUpdated": "Updated {{time}}",
+    "glossary": {
+      "guild": "Guild",
+      "quota": "Quota",
+      "screenshot": "Screenshot",
+      "stock": "Stock",
+      "season": "Season",
+      "guildAdmin": "Guild Admin",
+      "superadmin": "Superadmin",
+      "premiumPlus": "PremiumPlus"
+    }
+  },
+  "errors": {
+    "generic": "Something went wrong. Your data is safe — please try again.",
+    "network": "We can't reach the server right now. Check your connection and try again.",
+    "timeout": "That took too long to respond. Please try again.",
+    "unauthorized": "Your session has expired. Sign in again to continue.",
+    "forbidden": "You don't have access to this.",
+    "notFound": "We couldn't find what you were looking for.",
+    "conflict": "Someone else changed this while you were working. Reload to see the latest version.",
+    "rateLimited": "Too many requests in a row. Wait a moment and try again.",
+    "server": "The server hit an unexpected problem. It has been logged for support.",
+    "validation": "Please check the highlighted fields and try again.",
+    "upload": {
+      "fileTooLarge": "This file is larger than the {{maxMb}} MB limit."
+    }
+  },
+  "a11y": {
+    "skipToContent": "Skip to main content",
+    "bottomNavigation": "Main navigation",
+    "sidebar": {
+      "label": "Main navigation",
+      "expand": "Expand the navigation sidebar",
+      "collapse": "Collapse the navigation sidebar"
+    },
+    "themeSelector": "Choose a visual theme",
+    "modeSelector": "Choose light, dark, or system appearance",
+    "languageSelector": "Choose an interface language",
+    "notificationRegion": "Notifications",
+    "moreInformation": "More information",
+    "closeNotification": "Dismiss this notification",
+    "statusLabel": "Status: {{status}}"
+  },
+  "showcase": {
+    "title": "Design system",
+    "subtitle": "Every theme, appearance, and language renders from one component tree.",
+    "activeTheme": "Active theme: {{theme}}",
+    "resolvedMode": "Resolved appearance: {{mode}}",
+    "sections": {
+      "appearance": "Appearance",
+      "statusBadges": "Status badges",
+      "toasts": "Notifications",
+      "tooltips": "Contextual help",
+      "typography": "Typography",
+      "surfaces": "Surfaces"
+    },
+    "appearance": {
+      "description": "Theme identity and light/dark appearance are independent choices."
+    },
+    "statusBadges": {
+      "description": "Colour is never the only signal — every badge carries an icon and a label."
+    },
+    "toasts": {
+      "description": "Notifications queue instead of stacking; at most three are visible at once.",
+      "info": "Show an informational notification",
+      "success": "Show a success notification",
+      "error": "Show an error notification",
+      "sampleInfo": "Your preferences were loaded.",
+      "sampleSuccess": "Preferences saved.",
+      "sampleError": "Preferences could not be saved."
+    },
+    "tooltips": {
+      "description": "Help text is reachable with a mouse, a keyboard, and a fingertip.",
+      "help": "This value is stored on your device until you sign in."
+    },
+    "typography": {
+      "display": "Display face",
+      "body": "Body face",
+      "sample": "The quick brown fox jumps over the lazy dog."
+    },
+    "surfaces": {
+      "level": "Surface level {{level}}"
+    }
+  },
+  "auth": {},
+  "home": {},
+  "upload": {},
+  "guild": {},
+  "premiumplus": {},
+  "contributions": {},
+  "leaderboard": {},
+  "notifications": {},
+  "onboarding": {},
+  "adminGuild": {},
+  "superadmin": {},
+  "technical": {},
+  "profile": {}
 }
