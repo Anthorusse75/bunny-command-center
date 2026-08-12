@@ -8,8 +8,12 @@
 // The Profile screen (SCREENS/PROFILE.md, a later step) composes these, it does not rewrite
 // them.
 //
-// `ToggleButtonGroup` renders real <button>s: tab reaches each one, Enter/Space activates it,
-// and `aria-pressed` communicates the current choice - no custom key handling to get wrong.
+// `ToggleButtonGroup` renders real <button>s with `aria-pressed` communicating the current
+// choice, and Enter/Space activates the focused one - no custom key handling to get wrong.
+// MUI 9's exclusive `ToggleButtonGroup` gives the group a real ARIA composite keyboard model
+// (`@mui/utils/useRovingTabIndex`): Tab reaches ONE roving stop per group, and
+// ArrowLeft/ArrowRight move the roving stop within it - the group is a single Tab stop, not
+// three.
 
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";

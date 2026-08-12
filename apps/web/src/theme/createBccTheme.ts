@@ -209,6 +209,26 @@ function buildColorScheme(tokens: BccThemeTokens): { palette: Record<string, unk
 // Component overrides
 // ---------------------------------------------------------------------------
 
+/**
+ * 28_ACCESSIBILITY.md §Focus management: a visible ring on EVERY focusable element, tuned per
+ * theme. Two-tone by design - see BccPaletteExtras.focusRingHalo.
+ *
+ * MUI's `ButtonBase` (the root of Button/IconButton/ToggleButton/Chip's clickable variant/...)
+ * always sets `outline: 0` on its own root style and tracks focus-visibility itself via a
+ * `.Mui-focusVisible` class rather than relying on the native `:focus-visible` pseudo-class -
+ * axe-core's first browser run on Step 02 confirmed the browser DOES match `:focus-visible` on
+ * these elements, but `ButtonBase`'s own same-specificity `outline: 0` rule is injected later in
+ * the sheet and wins the cascade, so the global rule below never painted a ring on any button,
+ * icon button, or toggle button. Both rules share this one literal so they can never drift.
+ */
+function focusRingCss(v: Theme["vars"]): CSSObject {
+  return {
+    outline: `2px solid ${v.palette.bcc.focusRing}`,
+    outlineOffset: "1px",
+    boxShadow: `0 0 0 1px ${v.palette.bcc.focusRingHalo}`,
+  };
+}
+
 function buildComponents(tokens: BccThemeTokens): ThemeOptions["components"] {
   const { radius, spacing, surfaces, icons } = tokens;
   const glowsOnInteractive = surfaces.glow.scope === "interactive";
@@ -229,13 +249,10 @@ function buildComponents(tokens: BccThemeTokens): ThemeOptions["components"] {
             // inset as a variable keeps the arithmetic in one place.
             "--bcc-safe-area-bottom": "env(safe-area-inset-bottom, 0px)",
           },
-          // 28_ACCESSIBILITY.md §Focus management: a visible ring on EVERY focusable
-          // element, tuned per theme. Two-tone by design - see BccPaletteExtras.focusRingHalo.
-          ":focus-visible": {
-            outline: `2px solid ${v.palette.bcc.focusRing}`,
-            outlineOffset: "1px",
-            boxShadow: `0 0 0 1px ${v.palette.bcc.focusRingHalo}`,
-          },
+          // Non-ButtonBase focusable elements (links, inputs, the skip link, ...) still rely
+          // on the native pseudo-class; ButtonBase-derived controls get the same styling via
+          // MuiButtonBase's `&.Mui-focusVisible` override below.
+          ":focus-visible": focusRingCss(v),
           // 28_ACCESSIBILITY.md §Reduced motion: "reduced to an instant or minimal-crossfade
           // transition, never fully removing the state change itself". The motion token
           // dials intensity; this always wins over it, for every theme.
@@ -248,6 +265,13 @@ function buildComponents(tokens: BccThemeTokens): ThemeOptions["components"] {
             },
           },
         };
+      },
+    },
+    MuiButtonBase: {
+      styleOverrides: {
+        root: ({ theme }: { theme: Theme }) => ({
+          "&.Mui-focusVisible": focusRingCss(theme.vars),
+        }),
       },
     },
     MuiPaper: {
@@ -290,11 +314,28 @@ function buildComponents(tokens: BccThemeTokens): ThemeOptions["components"] {
     },
     MuiToggleButton: {
       styleOverrides: {
-        root: {
+        // MUI's stock ToggleButton colours its unselected label with
+        // `palette.action.active` - a translucent black/white that lands around 4:1 on a light
+        // canvas. axe-core flagged it as a real `color-contrast` violation on every light theme
+        // during Step 02's first browser run, on the theme/mode/language selectors themselves.
+        // These overrides put both states on gated tokens instead: `text.primary` on the surface,
+        // and `primary.contrastText` on `primary.main` when selected - both of which the contrast
+        // gate in ../contrast-requirements.ts already enforces at 4.5:1.
+        root: ({ theme }: { theme: Theme }) => ({
           minHeight: spacing.touchTarget,
           borderRadius: radius.md,
           textTransform: "none",
-        },
+          color: theme.vars.palette.text.primary,
+          borderColor: theme.vars.palette.bcc.border,
+          "&.Mui-selected": {
+            backgroundColor: theme.vars.palette.primary.main,
+            color: theme.vars.palette.primary.contrastText,
+            "&:hover": {
+              backgroundColor: theme.vars.palette.primary.main,
+              color: theme.vars.palette.primary.contrastText,
+            },
+          },
+        }),
       },
     },
     MuiChip: {
