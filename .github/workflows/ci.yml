@@ -7,8 +7,8 @@ on:
 
 env:
   # Shared MySQL schema, built fresh every run from the pinned Self-bot
-  # submodule ledger, then layered with the Dashboard's own (currently
-  # empty) ledger - 05_THIRD_REPOSITORY_ARCHITECTURE.md §Build & CI.
+  # submodule ledger, then layered with the Dashboard's own ledger
+  # (dashboard_sse_cursor as of Step 03) - 05_THIRD_REPOSITORY_ARCHITECTURE.md §Build & CI.
   MYSQL_DATABASE: bunny_command_center
   MYSQL_ROOT_PASSWORD: ci_root_pass
   DASHBOARD_APP_DB_USER: bunny_dashboard_app
@@ -127,7 +127,7 @@ jobs:
           DB_NAME: ${{ env.MYSQL_DATABASE }}
         run: npm run codegen:check
 
-      - name: Unit + real-MySQL integration tests (apps/api - migration runner, health/readyz, additive audit)
+      - name: Unit + real-MySQL integration tests (apps/api - migration runner, health/readyz, additive audit, SSE cursor/poller/hub/stream)
         working-directory: apps/api
         env:
           TEST_MYSQL_HOST: 127.0.0.1
@@ -147,8 +147,18 @@ jobs:
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
 
-      - name: "E2E: theme x mode matrix, i18n runtime, responsive, axe-core accessibility"
+      - name: "E2E: theme x mode matrix, i18n runtime, responsive, axe-core accessibility, realtime SSE (real apps/api E2E server)"
         working-directory: apps/web
+        env:
+          # apps/web/playwright.config.ts's webServer chain
+          # (e2e-db-setup -> e2e-server) and apps/web/e2e/realtime.spec.ts's
+          # own direct DB pool both read these to reach the SAME MySQL
+          # service this job already has running - a dedicated, disposable
+          # `bunny_cc_e2e` database, distinct from the `bunny_command_center`
+          # database used by every other step above.
+          TEST_MYSQL_HOST: 127.0.0.1
+          TEST_MYSQL_PORT: "3306"
+          TEST_MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
         run: npx playwright test
 
       - name: Upload Playwright failure artifacts (screenshots, traces, accessibility snapshots)
