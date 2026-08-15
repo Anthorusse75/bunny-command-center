@@ -47,7 +47,8 @@
     "state": {
       "loading": "Chargement…",
       "empty": "Rien à afficher pour le moment",
-      "offline": "Vous êtes hors ligne — vos modifications seront synchronisées à la reconnexion"
+      "offline": "Vous êtes hors ligne — vos modifications seront synchronisées à la reconnexion",
+      "reconnecting": "Les mises à jour en direct sont temporairement retardées — nous vérifions les changements périodiquement à la place"
     },
     "screenshotCount_one": "{{count}} capture d'écran",
     "screenshotCount_many": "{{count}} captures d'écran",

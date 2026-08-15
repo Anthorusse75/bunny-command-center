@@ -47,7 +47,8 @@
     "state": {
       "loading": "Wird geladen …",
       "empty": "Hier ist noch nichts",
-      "offline": "Sie sind offline — Änderungen werden synchronisiert, sobald die Verbindung zurück ist"
+      "offline": "Sie sind offline — Änderungen werden synchronisiert, sobald die Verbindung zurück ist",
+      "reconnecting": "Live-Updates sind vorübergehend verzögert — wir prüfen stattdessen regelmäßig auf Änderungen"
     },
     "screenshotCount_one": "{{count}} Screenshot",
     "screenshotCount_other": "{{count}} Screenshots",

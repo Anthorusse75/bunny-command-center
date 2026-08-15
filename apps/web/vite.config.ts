@@ -30,8 +30,27 @@ function bccPreloadThemePlugin(): Plugin {
   };
 }
 
+// 03_realtime_infrastructure.md's real-browser E2E suite needs `/api/*` (and
+// specifically `/api/stream`) reachable from the SAME origin the built SPA is
+// served from - proxying here rather than hardcoding a cross-origin URL
+// matches production's actual same-origin topology (ADR-017: "The Dashboard
+// is a same-origin app"), which Step 22 will wire for real via
+// `apps/api` serving the built SPA directly; until then, this dev/preview-time
+// proxy is the E2E-time stand-in. Only active when
+// `E2E_API_PROXY_TARGET` is set (apps/web/playwright.config.ts sets it to the
+// real apps/api E2E server it starts) - unset in every other context
+// (ordinary `vite dev`/`vite preview`, the production build, every non-E2E
+// test), so this never changes behavior outside the Playwright run.
+const E2E_API_PROXY_TARGET = process.env["E2E_API_PROXY_TARGET"];
+
 export default defineConfig({
   plugins: [react(), bccPreloadThemePlugin()],
+  ...(E2E_API_PROXY_TARGET
+    ? {
+        preview: { proxy: { "/api": { target: E2E_API_PROXY_TARGET, changeOrigin: true } } },
+        server: { proxy: { "/api": { target: E2E_API_PROXY_TARGET, changeOrigin: true } } },
+      }
+    : {}),
   test: {
     environment: "jsdom",
     globals: true,
