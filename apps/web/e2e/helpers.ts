@@ -86,18 +86,38 @@ export async function hasHorizontalOverflow(page: Page): Promise<boolean> {
   });
 }
 
+/**
+ * Names the element responsible for `hasHorizontalOverflow`, checking both directions: an
+ * element extending past the right edge (`rect.right > clientWidth`) is the common case, but
+ * a negative-margin technique (MUI's connected-border `ToggleButtonGroup`, for one) can just
+ * as easily push an element's LEFT edge past `x = 0`, which inflates `scrollWidth` exactly the
+ * same way and would otherwise go unreported here.
+ */
 export async function widestOverflowingElement(page: Page): Promise<string> {
   return page.evaluate(() => {
     const limit = document.documentElement.clientWidth;
     let worst = "";
     let worstRight = limit;
+    let worstLeft = 0;
     for (const element of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
       const rect = element.getBoundingClientRect();
+      const label = `${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)}`;
       if (rect.right > worstRight + 1) {
         worstRight = rect.right;
-        worst = `${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} right=${Math.round(rect.right)} limit=${limit}`;
+        worst = `${label} right=${Math.round(rect.right)} limit=${limit}`;
+      }
+      if (rect.left < worstLeft - 1) {
+        worstLeft = rect.left;
+        worst = `${label} left=${Math.round(rect.left)} (extends before x=0)`;
       }
     }
-    return worst;
+    if (worst) {
+      return worst;
+    }
+    // No single element's own box exceeds the viewport by more than the 1px tolerance, yet
+    // `scrollWidth` still does - report the raw numbers so this is distinguishable from "no
+    // overflow at all" and from a genuine large single-element offender.
+    const doc = document.documentElement;
+    return `(no single element individually exceeds the 1px tolerance) scrollWidth=${doc.scrollWidth} clientWidth=${doc.clientWidth} delta=${doc.scrollWidth - doc.clientWidth}`;
   });
 }
