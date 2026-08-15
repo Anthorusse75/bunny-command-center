@@ -248,6 +248,17 @@ function buildComponents(tokens: BccThemeTokens): ThemeOptions["components"] {
             // 21_MOBILE_UX.md §Navigation: the bottom nav is safe-area aware. Exposing the
             // inset as a variable keeps the arithmetic in one place.
             "--bcc-safe-area-bottom": "env(safe-area-inset-bottom, 0px)",
+            // Real bug, found via a real GitHub Actions CI run at 320px/German: a single
+            // unbreakable compound word ("Benachrichtigungen", 19 characters, zero spaces or
+            // hyphens) has no wrap opportunity under the default `overflow-wrap: normal`, so a
+            // font wide enough to need more than its container's width (confirmed: fits exactly
+            // under this machine's fonts, genuinely overflows under the CI Linux runner's) makes
+            // that single word - and therefore its container, and therefore the page - actually
+            // horizontally scrollable (21_MOBILE_UX.md/§29 "German expansion considered" covers
+            // exactly this, not just longer sentences). `break-word` lets the browser break
+            // inside a word only when it has no other choice, i.e. it never affects normal
+            // wrapping for any shorter or space-containing text.
+            overflowWrap: "break-word",
           },
           // Non-ButtonBase focusable elements (links, inputs, the skip link, ...) still rely
           // on the native pseudo-class; ButtonBase-derived controls get the same styling via
