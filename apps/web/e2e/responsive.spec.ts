@@ -12,6 +12,23 @@ import { LOCALES, hasHorizontalOverflow, seedPreferences, widestOverflowingEleme
 /** The narrowest mainstream viewport; see MIN_SUPPORTED_VIEWPORT_PX in src/theme/tokens/types.ts. */
 const MIN_WIDTH = 320;
 
+// Every test in this file drives its own size via `page.setViewportSize(...)` rather than
+// relying on either Playwright project's default viewport - that is what this file is FOR
+// (sweeping many exact widths). Combining that with the `mobile-chromium` project's
+// `devices["Pixel 7"]` emulation (`isMobile: true`) leaves Chromium's own viewport accounting
+// inconsistent: real CI evidence (a temporary diagnostic dump, since this never reproduced on
+// a local Windows Chromium) showed `window.innerWidth` reading 329 while
+// `document.documentElement.clientWidth` correctly read 320 after `setViewportSize({width:
+// 320, ...})` on an `isMobile: true` context - and `position: fixed; inset-inline: 0` resolves
+// against the former, not the latter, so the bottom nav rendered 9px wider than the page
+// actually was. No real device goes through "apply a device profile, then override the
+// viewport" - that sequence only exists here, in this test file - so this is a test-harness
+// mismatch, not a product bug: opting these tests out of mobile emulation makes
+// `setViewportSize` behave consistently on both projects. Real touch/DPR realism is exercised
+// elsewhere (accessibility.spec.ts's tooltip tap-fallback tests), which never overrides the
+// project's viewport.
+test.use({ isMobile: false, hasTouch: false });
+
 test.describe("breakpoint swap", () => {
   for (const { width, expected } of [
     { width: MIN_WIDTH, expected: "mobile" },

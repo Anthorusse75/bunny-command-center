@@ -91,33 +91,13 @@ export async function widestOverflowingElement(page: Page): Promise<string> {
     const limit = document.documentElement.clientWidth;
     let worst = "";
     let worstRight = limit;
-    let worstEl: Element | null = null;
     for (const element of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
       const rect = element.getBoundingClientRect();
       if (rect.right > worstRight + 1) {
         worstRight = rect.right;
         worst = `${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} right=${Math.round(rect.right)} limit=${limit}`;
-        worstEl = element;
       }
     }
-    if (!worstEl) {
-      return worst;
-    }
-    // TEMPORARY diagnostic (see e2e failure investigation): dump the offending element's own
-    // box plus every ancestor's rect/position/transform, since the CI-only failure this is
-    // chasing cannot be reproduced on a local Windows Chromium.
-    const chain: string[] = [];
-    let el: Element | null = worstEl;
-    while (el) {
-      const cs = getComputedStyle(el);
-      const r = el.getBoundingClientRect();
-      chain.push(
-        `${el.tagName.toLowerCase()}[${(el as HTMLElement).getAttribute?.("data-testid") ?? ""}] ` +
-          `pos=${cs.position} l=${cs.left} r=${cs.right} w=${cs.width} rect.right=${Math.round(r.right)} ` +
-          `rect.width=${Math.round(r.width)} transform=${cs.transform} overflowX=${cs.overflowX}`,
-      );
-      el = el.parentElement;
-    }
-    return `${worst} || CHAIN: ${chain.join(" <- ")} || windowInnerWidth=${window.innerWidth} docClientWidth=${document.documentElement.clientWidth} docScrollWidth=${document.documentElement.scrollWidth}`;
+    return worst;
   });
 }
