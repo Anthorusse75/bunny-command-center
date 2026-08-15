@@ -1,5 +1,152 @@
 {
   "app": {
     "title": "Bunny Command Center"
-  }
+  },
+  "common": {
+    "actions": {
+      "save": "Enregistrer",
+      "cancel": "Annuler",
+      "close": "Fermer",
+      "confirm": "Confirmer",
+      "retry": "Réessayer",
+      "dismiss": "Masquer",
+      "back": "Retour",
+      "more": "Plus",
+      "refresh": "Actualiser",
+      "copy": "Copier",
+      "expand": "Déplier",
+      "collapse": "Replier"
+    },
+    "theme": {
+      "label": "Thème",
+      "heroic": "Heroic",
+      "premium": "Premium",
+      "fusion": "Fusion"
+    },
+    "mode": {
+      "label": "Apparence",
+      "light": "Clair",
+      "dark": "Sombre",
+      "system": "Suivre le système"
+    },
+    "language": {
+      "label": "Langue",
+      "fr": "Français",
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "status": {
+      "success": "Réussi",
+      "warning": "À vérifier",
+      "error": "Échec",
+      "info": "Information",
+      "pending": "En attente",
+      "progress": "En cours",
+      "neutral": "Inconnu"
+    },
+    "state": {
+      "loading": "Chargement…",
+      "empty": "Rien à afficher pour le moment",
+      "offline": "Vous êtes hors ligne — vos modifications seront synchronisées à la reconnexion"
+    },
+    "screenshotCount_one": "{{count}} capture d'écran",
+    "screenshotCount_many": "{{count}} captures d'écran",
+    "screenshotCount_other": "{{count}} captures d'écran",
+    "lastUpdated": "Mis à jour {{time}}",
+    "glossary": {
+      "guild": "Guilde",
+      "quota": "Quota",
+      "screenshot": "Capture d'écran",
+      "stock": "Stock",
+      "season": "Saison",
+      "guildAdmin": "Administrateur de guilde",
+      "superadmin": "Superadministrateur",
+      "premiumPlus": "PremiumPlus"
+    }
+  },
+  "errors": {
+    "generic": "Une erreur est survenue. Vos données sont intactes — veuillez réessayer.",
+    "network": "Le serveur est injoignable pour l'instant. Vérifiez votre connexion et réessayez.",
+    "timeout": "La réponse a mis trop de temps à arriver. Veuillez réessayer.",
+    "unauthorized": "Votre session a expiré. Reconnectez-vous pour continuer.",
+    "forbidden": "Vous n'avez pas accès à cet élément.",
+    "notFound": "Nous n'avons pas trouvé ce que vous cherchiez.",
+    "conflict": "Quelqu'un a modifié cet élément pendant votre travail. Rechargez pour voir la dernière version.",
+    "rateLimited": "Trop de requêtes d'affilée. Patientez un instant puis réessayez.",
+    "server": "Le serveur a rencontré un problème inattendu. Il a été enregistré pour le support.",
+    "validation": "Vérifiez les champs signalés puis réessayez.",
+    "upload": {
+      "fileTooLarge": "Ce fichier dépasse la limite de {{maxMb}} Mo."
+    }
+  },
+  "a11y": {
+    "skipToContent": "Aller au contenu principal",
+    "bottomNavigation": "Navigation principale",
+    "sidebar": {
+      "label": "Navigation principale",
+      "expand": "Déplier la barre de navigation",
+      "collapse": "Replier la barre de navigation"
+    },
+    "themeSelector": "Choisir un thème visuel",
+    "modeSelector": "Choisir l'apparence claire, sombre ou système",
+    "languageSelector": "Choisir la langue de l'interface",
+    "notificationRegion": "Notifications",
+    "moreInformation": "Plus d'informations",
+    "closeNotification": "Masquer cette notification",
+    "statusLabel": "Statut : {{status}}"
+  },
+  "showcase": {
+    "title": "Système de design",
+    "subtitle": "Chaque thème, apparence et langue s'affiche depuis un seul arbre de composants.",
+    "activeTheme": "Thème actif : {{theme}}",
+    "resolvedMode": "Apparence appliquée : {{mode}}",
+    "sections": {
+      "appearance": "Apparence",
+      "statusBadges": "Badges de statut",
+      "toasts": "Notifications",
+      "tooltips": "Aide contextuelle",
+      "typography": "Typographie",
+      "surfaces": "Surfaces"
+    },
+    "appearance": {
+      "description": "L'identité du thème et l'apparence claire/sombre sont deux choix indépendants."
+    },
+    "statusBadges": {
+      "description": "La couleur n'est jamais le seul signal — chaque badge porte une icône et un libellé."
+    },
+    "toasts": {
+      "description": "Les notifications font la queue au lieu de s'empiler ; trois au maximum sont visibles.",
+      "info": "Afficher une notification d'information",
+      "success": "Afficher une notification de réussite",
+      "error": "Afficher une notification d'erreur",
+      "sampleInfo": "Vos préférences ont été chargées.",
+      "sampleSuccess": "Préférences enregistrées.",
+      "sampleError": "Impossible d'enregistrer les préférences."
+    },
+    "tooltips": {
+      "description": "L'aide est accessible à la souris, au clavier et au doigt.",
+      "help": "Cette valeur est conservée sur votre appareil jusqu'à votre connexion."
+    },
+    "typography": {
+      "display": "Police d'affichage",
+      "body": "Police de texte",
+      "sample": "Portez ce vieux whisky au juge blond qui fume."
+    },
+    "surfaces": {
+      "level": "Surface niveau {{level}}"
+    }
+  },
+  "auth": {},
+  "home": {},
+  "upload": {},
+  "guild": {},
+  "premiumplus": {},
+  "contributions": {},
+  "leaderboard": {},
+  "notifications": {},
+  "onboarding": {},
+  "adminGuild": {},
+  "superadmin": {},
+  "technical": {},
+  "profile": {}
 }

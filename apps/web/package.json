@@ -8,12 +8,16 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "contrast:check": "tsx scripts/check-contrast.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "@bunny-command-center/shared": "0.1.0-scaffold",
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.1",
+    "@mui/icons-material": "9.3.1",
     "@mui/material": "9.3.1",
     "i18next": "26.3.6",
     "react": "19.2.8",
@@ -21,12 +25,17 @@
     "react-i18next": "17.0.11"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.4",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "5.2.0",
+    "axe-core": "4.13.0",
     "jsdom": "30.0.1",
+    "tsx": "4.23.12",
     "typescript": "6.0.3",
     "vite": "7.3.6",
     "vitest": "4.1.10"

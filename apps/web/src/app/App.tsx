@@ -1,28 +1,32 @@
-import { useEffect } from "react";
-import { useTranslation } from "react-i18next";
-import CssBaseline from "@mui/material/CssBaseline";
-import Box from "@mui/material/Box";
-import Typography from "@mui/material/Typography";
+// The provider stack. 02_design_system_i18n.md §SCOPE, "Modify": "`apps/web`'s root App
+// component to wrap children in the new providers."
+//
+// Order matters and is not arbitrary:
+//   BccThemeProvider   - must be outermost of the two, because ToastProvider and every
+//                        primitive read `theme.bcc`/`theme.vars` and MUI's colour-scheme
+//                        context from it.
+//   BccI18nProvider    - owns `<html lang>`, `document.title` and the language context every
+//                        primitive's label goes through.
+//   ToastProvider      - renders the fixed toast region, so it must sit inside the theme but
+//                        outside the surface that raises toasts.
+//   AppShell           - the responsive chrome.
+
+import { BccI18nProvider } from "../i18n/BccI18nProvider.js";
+import { ToastProvider } from "../design-system/index.js";
+import { BccThemeProvider } from "../theme/BccThemeProvider.js";
+import { AppShell } from "../shell/AppShell.js";
+import { DesignSystemShowcase } from "../showcase/DesignSystemShowcase.js";
 
 export function App(): React.JSX.Element {
-  const { t } = useTranslation();
-  const title = t("app.title");
-
-  useEffect(() => {
-    document.title = title;
-  }, [title]);
-
   return (
-    <>
-      <CssBaseline />
-      <Box
-        component="main"
-        sx={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center" }}
-      >
-        <Typography variant="h1" sx={{ fontSize: "1.5rem" }}>
-          {title}
-        </Typography>
-      </Box>
-    </>
+    <BccThemeProvider>
+      <BccI18nProvider>
+        <ToastProvider>
+          <AppShell>
+            <DesignSystemShowcase />
+          </AppShell>
+        </ToastProvider>
+      </BccI18nProvider>
+    </BccThemeProvider>
   );
 }

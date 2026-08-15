@@ -24,3 +24,6 @@ apps/web/.vite/
 
 # Test/coverage artifacts
 .nyc_output/
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/.playwright/

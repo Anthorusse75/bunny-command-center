@@ -1,5 +1,151 @@
 {
   "app": {
     "title": "Bunny Command Center"
-  }
+  },
+  "common": {
+    "actions": {
+      "save": "Speichern",
+      "cancel": "Abbrechen",
+      "close": "Schließen",
+      "confirm": "Bestätigen",
+      "retry": "Erneut versuchen",
+      "dismiss": "Ausblenden",
+      "back": "Zurück",
+      "more": "Mehr",
+      "refresh": "Aktualisieren",
+      "copy": "Kopieren",
+      "expand": "Ausklappen",
+      "collapse": "Einklappen"
+    },
+    "theme": {
+      "label": "Design",
+      "heroic": "Heroic",
+      "premium": "Premium",
+      "fusion": "Fusion"
+    },
+    "mode": {
+      "label": "Erscheinungsbild",
+      "light": "Hell",
+      "dark": "Dunkel",
+      "system": "Systemeinstellung folgen"
+    },
+    "language": {
+      "label": "Sprache",
+      "fr": "Français",
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "status": {
+      "success": "Erfolgreich",
+      "warning": "Prüfung erforderlich",
+      "error": "Fehlgeschlagen",
+      "info": "Information",
+      "pending": "Wartet",
+      "progress": "In Bearbeitung",
+      "neutral": "Unbekannt"
+    },
+    "state": {
+      "loading": "Wird geladen …",
+      "empty": "Hier ist noch nichts",
+      "offline": "Sie sind offline — Änderungen werden synchronisiert, sobald die Verbindung zurück ist"
+    },
+    "screenshotCount_one": "{{count}} Screenshot",
+    "screenshotCount_other": "{{count}} Screenshots",
+    "lastUpdated": "Aktualisiert {{time}}",
+    "glossary": {
+      "guild": "Gilde",
+      "quota": "Kontingent",
+      "screenshot": "Screenshot",
+      "stock": "Bestand",
+      "season": "Saison",
+      "guildAdmin": "Gilden-Administrator",
+      "superadmin": "Superadministrator",
+      "premiumPlus": "PremiumPlus"
+    }
+  },
+  "errors": {
+    "generic": "Etwas ist schiefgelaufen. Ihre Daten sind sicher — bitte versuchen Sie es erneut.",
+    "network": "Der Server ist derzeit nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+    "timeout": "Die Antwort hat zu lange gedauert. Bitte versuchen Sie es erneut.",
+    "unauthorized": "Ihre Sitzung ist abgelaufen. Melden Sie sich erneut an, um fortzufahren.",
+    "forbidden": "Sie haben keinen Zugriff darauf.",
+    "notFound": "Wir konnten das Gesuchte nicht finden.",
+    "conflict": "Jemand anderes hat dies während Ihrer Bearbeitung geändert. Laden Sie neu, um die aktuelle Version zu sehen.",
+    "rateLimited": "Zu viele Anfragen in Folge. Warten Sie einen Moment und versuchen Sie es erneut.",
+    "server": "Auf dem Server ist ein unerwartetes Problem aufgetreten. Es wurde für den Support protokolliert.",
+    "validation": "Bitte prüfen Sie die markierten Felder und versuchen Sie es erneut.",
+    "upload": {
+      "fileTooLarge": "Diese Datei überschreitet das Limit von {{maxMb}} MB."
+    }
+  },
+  "a11y": {
+    "skipToContent": "Zum Hauptinhalt springen",
+    "bottomNavigation": "Hauptnavigation",
+    "sidebar": {
+      "label": "Hauptnavigation",
+      "expand": "Navigationsleiste ausklappen",
+      "collapse": "Navigationsleiste einklappen"
+    },
+    "themeSelector": "Visuelles Design wählen",
+    "modeSelector": "Helles, dunkles oder systemabhängiges Erscheinungsbild wählen",
+    "languageSelector": "Sprache der Oberfläche wählen",
+    "notificationRegion": "Benachrichtigungen",
+    "moreInformation": "Weitere Informationen",
+    "closeNotification": "Diese Benachrichtigung ausblenden",
+    "statusLabel": "Status: {{status}}"
+  },
+  "showcase": {
+    "title": "Design-System",
+    "subtitle": "Jedes Design, Erscheinungsbild und jede Sprache entsteht aus einem einzigen Komponentenbaum.",
+    "activeTheme": "Aktives Design: {{theme}}",
+    "resolvedMode": "Angewendetes Erscheinungsbild: {{mode}}",
+    "sections": {
+      "appearance": "Erscheinungsbild",
+      "statusBadges": "Status-Abzeichen",
+      "toasts": "Benachrichtigungen",
+      "tooltips": "Kontexthilfe",
+      "typography": "Typografie",
+      "surfaces": "Oberflächen"
+    },
+    "appearance": {
+      "description": "Design-Identität und helles/dunkles Erscheinungsbild sind unabhängige Entscheidungen."
+    },
+    "statusBadges": {
+      "description": "Farbe ist niemals das einzige Signal — jedes Abzeichen trägt ein Symbol und eine Beschriftung."
+    },
+    "toasts": {
+      "description": "Benachrichtigungen werden eingereiht statt gestapelt; höchstens drei sind gleichzeitig sichtbar.",
+      "info": "Informationsbenachrichtigung anzeigen",
+      "success": "Erfolgsbenachrichtigung anzeigen",
+      "error": "Fehlerbenachrichtigung anzeigen",
+      "sampleInfo": "Ihre Einstellungen wurden geladen.",
+      "sampleSuccess": "Einstellungen gespeichert.",
+      "sampleError": "Einstellungen konnten nicht gespeichert werden."
+    },
+    "tooltips": {
+      "description": "Hilfetexte sind mit Maus, Tastatur und Fingertipp erreichbar.",
+      "help": "Dieser Wert bleibt auf Ihrem Gerät, bis Sie sich anmelden."
+    },
+    "typography": {
+      "display": "Auszeichnungsschrift",
+      "body": "Textschrift",
+      "sample": "Franz jagt im komplett verwahrlosten Taxi quer durch Bayern."
+    },
+    "surfaces": {
+      "level": "Oberfläche Ebene {{level}}"
+    }
+  },
+  "auth": {},
+  "home": {},
+  "upload": {},
+  "guild": {},
+  "premiumplus": {},
+  "contributions": {},
+  "leaderboard": {},
+  "notifications": {},
+  "onboarding": {},
+  "adminGuild": {},
+  "superadmin": {},
+  "technical": {},
+  "profile": {}
 }

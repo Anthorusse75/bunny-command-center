@@ -9,5 +9,8 @@
     "noEmit": true,
     "types": ["vite/client", "vitest/globals"]
   },
-  "include": ["src", "vite.config.ts"]
+  // `scripts` holds the CI gates (contrast check) and `e2e` the Playwright suite. Both are
+  // typechecked and linted like the rest of the app; neither is ever imported BY `src`, so the
+  // one-way dependency direction that keeps `tsc` from emitting outside `outDir` is preserved.
+  "include": ["src", "scripts", "e2e", "vite.config.ts", "playwright.config.ts"]
 }

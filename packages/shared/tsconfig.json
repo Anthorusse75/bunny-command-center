@@ -4,5 +4,8 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src", "scripts"]
+  // `test` and `vitest.config.ts` are included so ESLint's type-aware rules cover them (they
+  // are otherwise "not found by the project service"). `src` never imports from `test`/`scripts`,
+  // so the rootDir/one-way-dependency discipline is unaffected.
+  "include": ["src", "scripts", "test", "vitest.config.ts"]
 }
