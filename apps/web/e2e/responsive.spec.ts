@@ -7,7 +7,7 @@
 // the product is broken for a third of its users.
 
 import { expect, test } from "@playwright/test";
-import { LOCALES, hasHorizontalOverflow, seedPreferences, widestOverflowingElement } from "./helpers.js";
+import { LOCALES, checkHorizontalOverflow, seedPreferences } from "./helpers.js";
 
 /** The narrowest mainstream viewport; see MIN_SUPPORTED_VIEWPORT_PX in src/theme/tokens/types.ts. */
 const MIN_WIDTH = 320;
@@ -79,10 +79,8 @@ test.describe("no horizontal overflow", () => {
       await page.getByTestId("toast-error-button").click();
       await expect(page.getByTestId("toast")).toHaveCount(1);
 
-      expect(
-        await hasHorizontalOverflow(page),
-        `overflow at ${MIN_WIDTH}px/${locale}: ${await widestOverflowingElement(page)}`,
-      ).toBe(false);
+      const result = await checkHorizontalOverflow(page);
+      expect(result.overflow, `overflow at ${MIN_WIDTH}px/${locale}: ${result.detail}`).toBe(false);
     });
   }
 
@@ -92,11 +90,38 @@ test.describe("no horizontal overflow", () => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/");
       await expect(page.locator("html")).toHaveAttribute("lang", "de");
-      expect(
-        await hasHorizontalOverflow(page),
-        `overflow at ${width}px in German: ${await widestOverflowingElement(page)}`,
-      ).toBe(false);
+      const result = await checkHorizontalOverflow(page);
+      expect(result.overflow, `overflow at ${width}px in German: ${result.detail}`).toBe(false);
     }
+  });
+});
+
+test.describe("overflow detector regression proof", () => {
+  test("the detector actually fails for a deliberately introduced real 5-9px horizontal overflow", async ({
+    page,
+  }) => {
+    // Proves checkHorizontalOverflow catches genuine overflow rather than silently tolerating
+    // exactly the class of bug this whole investigation was chasing (see its doc comment). The
+    // probe element is a real, unclipped, absolutely-positioned block wider than the viewport -
+    // the browser WILL let a user scroll to it, unlike the metrics-only discrepancy that
+    // motivated moving off a blind scrollWidth/clientWidth tolerance in the first place.
+    await page.setViewportSize({ width: MIN_WIDTH, height: 900 });
+    await page.goto("/");
+    await page.evaluate(() => {
+      const probe = document.createElement("div");
+      probe.setAttribute("data-testid", "deliberate-overflow-probe");
+      probe.style.position = "absolute";
+      probe.style.top = "0";
+      probe.style.left = "0";
+      probe.style.height = "1px";
+      // Inside the 5-9px range this investigation kept measuring, so this fixture is
+      // representative of the exact bug class the detector must not miss.
+      probe.style.width = `${document.documentElement.clientWidth + 7}px`;
+      document.body.appendChild(probe);
+    });
+
+    const result = await checkHorizontalOverflow(page);
+    expect(result.overflow, result.detail).toBe(true);
   });
 });
 
