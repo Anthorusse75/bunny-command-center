@@ -135,6 +135,10 @@ jobs:
           TEST_MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
         run: npx vitest run
 
+      - name: Unit tests (packages/shared - i18n gates incl. D-050, Intl formatting contracts)
+        working-directory: packages/shared
+        run: npx vitest run
+
       - name: Unit tests (apps/web - theme engine, design system, i18n)
         working-directory: apps/web
         run: npx vitest run
