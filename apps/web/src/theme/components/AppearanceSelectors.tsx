@@ -14,6 +14,14 @@
 // (`@mui/utils/useRovingTabIndex`): Tab reaches ONE roving stop per group, and
 // ArrowLeft/ArrowRight move the roving stop within it - the group is a single Tab stop, not
 // three.
+//
+// `flexWrap: "wrap"` on every group: MUI's ToggleButtonGroup is a non-wrapping flex row by
+// default, and German's longest label here - `common.mode.system` ("Systemeinstellung
+// folgen", 24 characters) - does not fit three-across at the 320px minimum supported width
+// (`MIN_SUPPORTED_VIEWPORT_PX`) under every font stack (21_MOBILE_UX.md/§29's "German
+// expansion considered" requirement). Wrapping degrades to two rows instead of causing real
+// page-level horizontal overflow; it does not change layout at any width the row already
+// fits.
 
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
@@ -34,6 +42,7 @@ export function ThemeSelector(): React.JSX.Element {
       aria-label={t("a11y.themeSelector")}
       data-testid="theme-selector"
       size="small"
+      sx={{ flexWrap: "wrap", rowGap: 1 }}
       onChange={(_event, next: BccThemeName | null) => {
         // `null` arrives when the user clicks the already-selected button; keeping the
         // current value stops the group from ever having no selection.
@@ -64,6 +73,7 @@ export function ModeSelector(): React.JSX.Element {
       aria-label={t("a11y.modeSelector")}
       data-testid="mode-selector"
       size="small"
+      sx={{ flexWrap: "wrap", rowGap: 1 }}
       onChange={(_event, next: BccModePreference | null) => {
         if (next) {
           setModePreference(next);
@@ -90,6 +100,7 @@ export function LocaleSelector(): React.JSX.Element {
       aria-label={t("a11y.languageSelector")}
       data-testid="locale-selector"
       size="small"
+      sx={{ flexWrap: "wrap", rowGap: 1 }}
       onChange={(_event, next: BccLocale | null) => {
         if (next) {
           setLocale(next);
