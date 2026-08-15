@@ -123,22 +123,51 @@ export async function checkHorizontalOverflow(page: Page): Promise<HorizontalOve
   return page.evaluate(async (tolerance) => {
     function widestOffender(): string {
       const limit = document.documentElement.clientWidth;
-      let worst = "";
+      let worstPositioned = "";
       let worstRight = limit;
       let worstLeft = 0;
-      for (const element of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+      // Every element whose OWN internal content overflows its OWN box (scrollWidth > its own
+      // clientWidth). Unclipped overflow propagates upward, so an ancestor near the root will
+      // almost always show this too once any descendant does - collected in document order
+      // (parents before children) and reported as only the last few (deepest, most specific)
+      // matches, not the whole propagated chain.
+      const internalOverflow: string[] = [];
+      // `html`/`body` themselves, not just their descendants: a mismatch between an element's
+      // own position (getBoundingClientRect) and its own internal overflow (scrollWidth vs
+      // clientWidth) can exist on `<body>` itself without any child individually breaching the
+      // viewport - checked here too, not only the position-based scan below.
+      const candidates: Element[] = [
+        document.documentElement,
+        document.body,
+        ...document.querySelectorAll("body *"),
+      ];
+      for (const element of candidates) {
         const rect = element.getBoundingClientRect();
         const label = `${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)}`;
         if (rect.right > worstRight + tolerance) {
           worstRight = rect.right;
-          worst = `${label} right=${Math.round(rect.right)} limit=${limit}`;
+          worstPositioned = `${label} right=${Math.round(rect.right)} limit=${limit}`;
         }
         if (rect.left < worstLeft - tolerance) {
           worstLeft = rect.left;
-          worst = `${label} left=${Math.round(rect.left)} (extends before x=0)`;
+          worstPositioned = `${label} left=${Math.round(rect.left)} (extends before x=0)`;
+        }
+        // An element's own box can sit fully inside the viewport while its CONTENT still
+        // overflows it (e.g. an `overflow: visible` flex/grid container whose children don't
+        // individually breach the viewport either) - scrollWidth vs clientWidth on the element
+        // itself catches that shape of bug, which position alone cannot.
+        if (element instanceof HTMLElement && element.scrollWidth > element.clientWidth + tolerance) {
+          internalOverflow.push(`${label}(scroll=${element.scrollWidth} own-client=${element.clientWidth})`);
         }
       }
-      return worst;
+      const deepestInternalOverflow = internalOverflow.slice(-5).join(" < ");
+      return [
+        worstPositioned && `positioned: ${worstPositioned}`,
+        deepestInternalOverflow &&
+          `internal-overflow chain (root..deepest, last 5): ${deepestInternalOverflow}`,
+      ]
+        .filter(Boolean)
+        .join(" || ");
     }
 
     const doc = document.documentElement;
