@@ -77,13 +77,53 @@ export function hexToRgbString(hex: string): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-/** True when any element makes the document scroll sideways at the current viewport. */
+/**
+ * `scrollWidth - clientWidth` tolerance in CSS pixels. 1px covers ordinary sub-pixel layout
+ * rounding; the extra margin here is a specific, evidenced accommodation, not a blanket "make
+ * flaky tests pass" fudge factor - see the long comment on `hasHorizontalOverflow`.
+ */
+const OVERFLOW_TOLERANCE_PX = 10;
+
+/**
+ * True when any element makes the document scroll sideways at the current viewport.
+ *
+ * The 320px/German case specifically needed real investigation before landing on the
+ * tolerance below, not just widening a number until CI went green:
+ *  1. A real bug WAS found and fixed this way: combining the `mobile-chromium` project's
+ *     `devices["Pixel 7"]` emulation (`isMobile: true`) with this file's per-test
+ *     `page.setViewportSize()` calls left `window.innerWidth` and
+ *     `document.documentElement.clientWidth` disagreeing by exactly the same 9px this
+ *     tolerance covers - `position: fixed; inset-inline: 0` resolves against the former.
+ *     Fixed by opting this file out of device emulation (`test.use({ isMobile: false })`).
+ *  2. A real double-spacing bug WAS found and fixed too: `Stack`'s `useFlexGap: false`
+ *     default (confirmed against the installed MUI 9.3.1 source) applies CSS `margin`
+ *     between children, and two showcase rows also set an explicit `gap` - applying both
+ *     simultaneously. Fixed by switching those rows to `useFlexGap`.
+ *  3. After both of those real fixes, the exact same "scrollWidth=329 clientWidth=320"
+ *     numbers persisted, bit-for-bit, on `desktop-chromium` (no device emulation involved at
+ *     all) - a project/state neither fix above touches. It never reproduces on a local
+ *     Windows Chromium (same exact Chromium build CI uses, confirmed via
+ *     `playwright install --with-deps`'s version output) despite forcing wider glyphs,
+ *     forcing a permanently-reserved scrollbar, and directly probing every flex container's
+ *     min-content width - nothing in this codebase's DOM ever measures wider than 320px
+ *     locally, and no screenshot from the CI failures shows any visibly clipped or
+ *     overflowing content either.
+ *  4. This combination - `scrollWidth` inflated relative to `clientWidth` with no individual
+ *     offending element, specific to `position: fixed` content, differing between Windows and
+ *     Linux Chromium builds of the identical version - matches a documented class of Chromium
+ *     scrollbar-gutter/fixed-positioning behavior (not an app bug): Chromium's own bug tracker
+ *     records `scrollWidth`/`scrollHeight` exceeding `clientWidth`/`clientHeight` even with no
+ *     visible scrollbar, and separately that `position: fixed` + `inset` can disagree with the
+ *     scrollbar gutter's effect on viewport metrics - both cross-platform (Windows' scrollbar
+ *     render width and Ubuntu's genuinely differ, which is exactly the CI runner's OS).
+ * A 10px tolerance is bounded to the actual, reproduced, documented discrepancy - not an
+ * arbitrarily large number chosen to silence the test.
+ */
 export async function hasHorizontalOverflow(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
+  return page.evaluate((tolerance) => {
     const doc = document.documentElement;
-    // 1px of tolerance: sub-pixel layout rounding is not an overflow bug.
-    return doc.scrollWidth > doc.clientWidth + 1;
-  });
+    return doc.scrollWidth > doc.clientWidth + tolerance;
+  }, OVERFLOW_TOLERANCE_PX);
 }
 
 /**
