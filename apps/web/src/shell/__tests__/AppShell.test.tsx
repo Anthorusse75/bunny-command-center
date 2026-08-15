@@ -99,7 +99,12 @@ describe("AppShell — collapsible sidebar", () => {
 
     const toggle = screen.getByRole("button", { name: i18next.t("a11y.sidebar.collapse") });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    toggle.focus();
+    // `.focus()` is a native DOM call, not a simulated React event - MUI's `ButtonBase`
+    // (IconButton's root) tracks its own focus-visible state via focus/blur listeners, so
+    // calling it unwrapped triggers that state update outside anything React is tracking.
+    act(() => {
+      toggle.focus();
+    });
     expect(toggle).toHaveFocus();
     await user.keyboard("{Enter}");
 

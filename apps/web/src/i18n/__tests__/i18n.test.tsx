@@ -7,7 +7,7 @@
 // which matters because FR's plural rules differ from EN/DE's at count 0.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SUPPORTED_LOCALES, type BccLocale } from "@bunny-command-center/shared";
 import i18next, { detectInitialLocale } from "../index.js";
@@ -15,6 +15,7 @@ import { BccI18nProvider, useBccLocale } from "../BccI18nProvider.js";
 import { BccThemeProvider } from "../../theme/BccThemeProvider.js";
 import { LocaleSelector } from "../../theme/components/AppearanceSelectors.js";
 import { LOCALE_STORAGE_KEY } from "../../theme/mode.js";
+import { clickLocaleOptionAndSettle } from "../../test/i18nTestUtils.js";
 
 function LocaleReadback(): React.JSX.Element {
   const { locale } = useBccLocale();
@@ -32,8 +33,15 @@ function renderI18n(): void {
   );
 }
 
+// Wrapped in act(): this runs BEFORE React Testing Library's own auto-cleanup (local
+// `afterEach` hooks fire before hooks registered at module-import time, and RTL registers its
+// cleanup that way), so the previous test's component is still mounted when `changeLanguage`
+// resolves and fires `languageChanged` - unwrapped, this alone produced a real
+// "not wrapped in act(...)" warning after every single test in this file.
 afterEach(async () => {
-  await i18next.changeLanguage("en");
+  await act(async () => {
+    await i18next.changeLanguage("en");
+  });
 });
 
 describe("pluralization via Intl.PluralRules, per locale", () => {
@@ -118,51 +126,39 @@ describe("runtime language switching", () => {
     renderI18n();
     expect(screen.getByTestId("locale-readback")).toHaveTextContent("en");
 
-    await user.click(screen.getByTestId("locale-option-de"));
-    await waitFor(() => {
-      expect(screen.getByTestId("locale-readback")).toHaveTextContent("de");
-    });
+    await clickLocaleOptionAndSettle(user, "locale-option-de");
+    expect(screen.getByTestId("locale-readback")).toHaveTextContent("de");
     expect(i18next.t("common.actions.save")).toBe("Speichern");
 
-    await user.click(screen.getByTestId("locale-option-fr"));
-    await waitFor(() => {
-      expect(screen.getByTestId("locale-readback")).toHaveTextContent("fr");
-    });
+    await clickLocaleOptionAndSettle(user, "locale-option-fr");
+    expect(screen.getByTestId("locale-readback")).toHaveTextContent("fr");
     expect(i18next.t("common.actions.save")).toBe("Enregistrer");
   });
 
   it("updates <html lang> so screen readers switch voice with the copy", async () => {
     const user = userEvent.setup();
     renderI18n();
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute("lang")).toBe("en");
-    });
-    await user.click(screen.getByTestId("locale-option-fr"));
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute("lang")).toBe("fr");
-    });
-    await user.click(screen.getByTestId("locale-option-de"));
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute("lang")).toBe("de");
-    });
+    expect(document.documentElement.getAttribute("lang")).toBe("en");
+
+    await clickLocaleOptionAndSettle(user, "locale-option-fr");
+    expect(document.documentElement.getAttribute("lang")).toBe("fr");
+
+    await clickLocaleOptionAndSettle(user, "locale-option-de");
+    expect(document.documentElement.getAttribute("lang")).toBe("de");
   });
 
   it("localises document.title too", async () => {
     const user = userEvent.setup();
     renderI18n();
-    await user.click(screen.getByTestId("locale-option-de"));
-    await waitFor(() => {
-      expect(document.title).toBe(i18next.getFixedT("de")("app.title"));
-    });
+    await clickLocaleOptionAndSettle(user, "locale-option-de");
+    expect(document.title).toBe(i18next.getFixedT("de")("app.title"));
   });
 
   it("persists the choice for the next visit", async () => {
     const user = userEvent.setup();
     renderI18n();
-    await user.click(screen.getByTestId("locale-option-de"));
-    await waitFor(() => {
-      expect(window.localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("de");
-    });
+    await clickLocaleOptionAndSettle(user, "locale-option-de");
+    expect(window.localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("de");
   });
 });
 

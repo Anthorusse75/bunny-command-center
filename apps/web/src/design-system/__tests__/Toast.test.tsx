@@ -115,7 +115,12 @@ describe("Toast", () => {
     renderToasts();
     await user.click(screen.getByTestId("raise-info"));
     const close = screen.getByRole("button", { name: i18next.t("a11y.closeNotification") });
-    close.focus();
+    // `.focus()` is a native DOM call, not a simulated React event - MUI's `ButtonBase` tracks
+    // its own focus-visible state via focus/blur listeners, so calling it unwrapped triggers
+    // that state update outside anything React (or RTL) is tracking.
+    act(() => {
+      close.focus();
+    });
     expect(close).toHaveFocus();
     await user.keyboard("{Enter}");
     await waitFor(() => {

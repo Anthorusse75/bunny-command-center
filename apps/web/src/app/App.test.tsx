@@ -10,17 +10,27 @@
 // stronger replacement.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18next from "../i18n/index.js";
 import { App } from "./App.js";
 import { COLOR_SCHEME_ATTRIBUTE, THEME_ATTRIBUTE } from "../theme/mode.js";
+import { clickLocaleOptionAndSettle } from "../test/i18nTestUtils.js";
 
 describe("App", () => {
   // i18next is a module singleton, so a language switched inside one test would otherwise
   // silently change the language every later test in this file runs under.
+  //
+  // Wrapped in act(): this `afterEach` runs BEFORE React Testing Library's own auto-cleanup
+  // (local `afterEach` hooks fire before hooks registered at module-import time, and RTL
+  // registers its cleanup that way), so the component from the test that just ran is still
+  // mounted when `changeLanguage` resolves and fires `languageChanged` - an unwrapped await
+  // here was a real "not wrapped in act(...)" warning on every single test in this file, not
+  // just the ones that switched languages themselves.
   afterEach(async () => {
-    await i18next.changeLanguage("en");
+    await act(async () => {
+      await i18next.changeLanguage("en");
+    });
   });
 
   it("sets document.title from the app.title i18n key, not a hardcoded string", async () => {
@@ -39,10 +49,8 @@ describe("App", () => {
   it("re-renders that copy in French when the language changes, with no reload", async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId("locale-option-fr"));
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute("lang")).toBe("fr");
-    });
+    await clickLocaleOptionAndSettle(user, "locale-option-fr");
+    expect(document.documentElement.getAttribute("lang")).toBe("fr");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       i18next.getFixedT("fr")("showcase.title"),
     );
