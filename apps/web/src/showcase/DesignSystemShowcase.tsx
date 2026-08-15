@@ -60,7 +60,7 @@ export function DesignSystemShowcase(): React.JSX.Element {
           <ModeSelector />
           <LocaleSelector />
         </Stack>
-        <Stack direction="row" spacing={2} sx={{ marginBlockStart: 2, flexWrap: "wrap" }}>
+        <Stack direction="row" spacing={2} useFlexGap sx={{ marginBlockStart: 2, flexWrap: "wrap" }}>
           {/* Readback for the proof-of-wiring chain: which theme and which RESOLVED mode
               actually ended up applied, rendered from the same state the tokens came from. */}
           <Typography variant="body2" data-testid="active-theme-readback">
@@ -76,7 +76,7 @@ export function DesignSystemShowcase(): React.JSX.Element {
         <Typography variant="body2" sx={{ marginBlockEnd: 2 }}>
           {t("showcase.statusBadges.description")}
         </Typography>
-        <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap" }}>
           {STATUS_TONES.map((tone) => (
             <StatusBadge key={tone} descriptor={statusDescriptorForTone(tone)} />
           ))}
@@ -87,7 +87,7 @@ export function DesignSystemShowcase(): React.JSX.Element {
         <Typography variant="body2" sx={{ marginBlockEnd: 2 }}>
           {t("showcase.toasts.description")}
         </Typography>
-        <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap" }}>
           <Button
             variant="contained"
             data-testid="toast-info-button"
