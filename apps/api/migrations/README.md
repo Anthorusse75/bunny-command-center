@@ -26,8 +26,8 @@ in every environment (`ADR-011`).
 
 ## Ledger
 
-| Version                            | Table                  | Step                                                                                                                                                                                                                                                                               |
-| ---------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Version                            | Table                  | Step                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `0001_create_dashboard_sse_cursor` | `dashboard_sse_cursor` | 03 (`03_realtime_infrastructure.md`) — durable per-(source_table, cursor_key) watermark backing the SSE poller's Last-Event-ID resume. See the migration file's own header comment for the full rationale; neither frozen document (`25_DATA_MODEL.md`, `26_REALTIME_SSE_AND_SYNC.md`) was modified by Step 03. |
 
 As of Step 01, this directory intentionally contained **zero** `.sql`
