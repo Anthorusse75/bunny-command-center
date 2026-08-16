@@ -22,6 +22,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import mysql from "mysql2/promise";
+import { STEP_03_TEST_SCOPE } from "@bunny-command-center/shared";
 import { buildServer } from "../src/server.js";
 import type { AppConfig } from "../src/config.js";
 import { runUp } from "../migrations/runner.js";
@@ -103,6 +104,55 @@ async function main(): Promise<void> {
   const fastify = await buildServer(config);
   await fastify.listen({ port: config.port, host: "127.0.0.1" });
   console.log(`[e2e-server] listening on http://127.0.0.1:${config.port}`);
+
+  startNativeDropSentinelWatcher(pool, fastify);
+}
+
+/**
+ * TEST-ONLY, this file only (never `src/`): watches for a sentinel row
+ * (`payload_json.label === "TRIGGER_NATIVE_DROP"`) inserted directly by
+ * apps/web/e2e/realtime.spec.ts's real-native-reconnect test, and - once
+ * the poller has had a chance to broadcast that row like any other real
+ * event - calls the hub's `simulateNetworkDropForTests` to genuinely sever
+ * every currently-open `test`-scope connection. This is what lets that one
+ * Playwright test prove a REAL native `EventSource` reconnect (the browser
+ * itself decides to reconnect and sends the real `Last-Event-ID` header -
+ * nothing in this repo's client code participates) rather than a
+ * client-driven `forceDisconnectForTests()`/manual-reconnect path, which
+ * proves a different (also real, also tested) mechanism.
+ *
+ * Polls the DB directly rather than going through the registered adapter/
+ * poller pipeline so this stays entirely outside the generic realtime
+ * mechanism under test - it observes, it never participates in, the thing
+ * being proven.
+ */
+function startNativeDropSentinelWatcher(
+  pool: mysql.Pool,
+  fastify: Awaited<ReturnType<typeof buildServer>>,
+): void {
+  const alreadyTriggered = new Set<number>();
+  const timer = setInterval(() => {
+    void (async () => {
+      const [rows] = await pool.query<(mysql.RowDataPacket & { id: number })[]>(
+        "SELECT id FROM dashboard_sse_test_source WHERE JSON_EXTRACT(payload_json, '$.label') = ? ORDER BY id ASC",
+        ["TRIGGER_NATIVE_DROP"],
+      );
+      for (const row of rows) {
+        if (alreadyTriggered.has(row.id)) {
+          continue;
+        }
+        alreadyTriggered.add(row.id);
+        // Give the poller a moment to have already broadcast this exact
+        // row to currently-connected clients before severing them - the
+        // test's own proof depends on the anchor event having genuinely
+        // arrived first.
+        setTimeout(() => {
+          fastify.sseTestHooks?.hub.simulateNetworkDropForTests(STEP_03_TEST_SCOPE);
+        }, 300);
+      }
+    })();
+  }, 150);
+  timer.unref();
 }
 
 void main();

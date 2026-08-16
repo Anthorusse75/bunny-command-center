@@ -147,6 +147,34 @@ describe("SseHub", () => {
     expect(handle.queuedFrameCount).toBe(0);
   });
 
+  it("simulateNetworkDropForTests abruptly destroys every connection in scope WITHOUT writing a frame first (unlike closeAll's graceful message)", () => {
+    const hub = new SseHub();
+    const resInScope = new FakeResponse();
+    const resOtherScope = new FakeResponse();
+    hub.register({
+      scopes: [STEP_03_TEST_SCOPE],
+      initialVector: new Map(),
+      res: resInScope as never,
+      maxQueuedFrames: 10,
+      retryMs: 1000,
+    });
+    hub.register({
+      scopes: ["platform"],
+      initialVector: new Map(),
+      res: resOtherScope as never,
+      maxQueuedFrames: 10,
+      retryMs: 1000,
+    });
+    expect(hub.activeConnectionCount).toBe(2);
+
+    hub.simulateNetworkDropForTests(STEP_03_TEST_SCOPE);
+
+    expect(hub.activeConnectionCount).toBe(1); // only the in-scope connection was dropped
+    expect(resInScope.written).toHaveLength(0); // no graceful frame, unlike closeAll
+    expect(resInScope.ended).toBe(true); // socket genuinely destroyed
+    expect(resOtherScope.ended).toBe(false); // the other scope's connection is untouched
+  });
+
   it("close() removes the connection from future broadcasts and decrements activeConnectionCount", () => {
     const hub = new SseHub();
     const res = new FakeResponse();

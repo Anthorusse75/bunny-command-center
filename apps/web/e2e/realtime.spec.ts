@@ -2,43 +2,69 @@
  * Real-browser proof of the Step-03 realtime infrastructure
  * (03_realtime_infrastructure.md §TESTS REQUIRED, mission §35/§36):
  *
- *   A. LIVE SSE   - real EventSource -> real Fastify /api/stream -> real
- *                   poller -> real TanStack Query reaction.
- *   B. DROP       - a real, active EventSource connection is genuinely
- *                   closed and NEW connection attempts are genuinely blocked
- *                   at the network layer beyond the grace period, which
- *                   activates the polling fallback.
- *   C. RECOVERY   - the network block is lifted -> live mode resumes,
- *                   fallback stops.
- *   D. RESUME     - a brief real drop (reconnecting via this layer's own
- *                   fast fatal-retry path, not the grace/polling path),
- *                   events produced while disconnected, reconnect resumes
- *                   via Last-Event-ID with no gap/dup.
- *   E. GAP        - a Last-Event-ID whose history was pruned server-side
- *                   triggers `resync_required` (never a silent partial
- *                   replay).
+ *   A. LIVE SSE     - real EventSource -> real Fastify /api/stream -> real
+ *                     poller -> real TanStack Query reaction.
+ *   A2. NATIVE RECONNECT (Case A) - the SAME real `EventSource` object,
+ *                     after a genuine server-initiated network-level
+ *                     connection failure, performs its own native browser
+ *                     reconnect and sends the real, standard
+ *                     `Last-Event-ID` HEADER - observed via `page.on('request')`,
+ *                     never mocked, never a manually-constructed header.
+ *   B. DROP         - a real, active EventSource connection is genuinely
+ *                     closed and NEW connection attempts are genuinely
+ *                     blocked at the network layer beyond the grace period,
+ *                     which activates the polling fallback.
+ *   C. RECOVERY     - the network block is lifted -> live mode resumes,
+ *                     fallback stops.
+ *   D. RESUME (Case B) - an application-level bootstrap of a BRAND-NEW
+ *                     `EventSource` object (this layer's own fast
+ *                     fatal-retry path, not the grace/polling path) carries
+ *                     its resume position via the `?lastEventId=` query
+ *                     parameter, since the native constructor has no way to
+ *                     set a custom header on a freshly-created object.
+ *                     Events produced while disconnected resume with no
+ *                     gap/dup.
+ *   E. GAP          - a Last-Event-ID whose history was pruned server-side
+ *                     triggers `resync_required` (never a silent partial
+ *                     replay).
  *   Multi-tab dedup - two real browser CONTEXTS (two real tabs), real
- *                   BroadcastChannel, exactly one claims the toast for the
- *                   same server-broadcast event.
+ *                     BroadcastChannel, exactly one claims the toast for
+ *                     the same server-broadcast event.
  *
  * Every scenario mutates `dashboard_sse_test_source` directly via a real
  * MySQL connection - the same "entrypoint: mutate the synthetic test table
  * directly in the DB" proof-of-wiring chain 03_realtime_infrastructure.md's
  * own spec names - never a debug HTTP call into the E2E server.
  *
- * Note on how the drop itself is induced: Playwright/CDP's
- * `context.setOffline(true)` was tried first and DOES flip `navigator.onLine`
- * for real (exercising this layer's own `offline` listener), but was found,
- * empirically, NOT to terminate an already-open long-lived HTTP/1.1
- * streaming response in Chromium - heartbeats kept flowing straight through
- * it. Real network-connection termination is instead induced via
- * `window.__bccE2E.forceDisconnect()` (apps/web/src/realtime/sseConnectionManager.ts's
- * `forceDisconnectForTests`, gated the same way `RealtimeTestProbe` is -
- * stripped from real production builds), which closes the real
- * `EventSource` and drives the exact same production `ERROR`/grace-timer/
- * fatal-retry code paths a genuine drop would. `page.route()` is used
- * separately to genuinely block NEW connection attempts at the network
- * layer for the grace->polling scenario specifically.
+ * TWO DISTINCT RECONNECT MECHANISMS, TWO DISTINCT TEST TECHNIQUES (see
+ * apps/api/src/sse/route.ts's own "Case A / Case B" doc comment for the
+ * server-side half of this same distinction):
+ *
+ *   - Case A (native reconnect, test A2 below): induced by a genuine
+ *     SERVER-SIDE network-level connection termination
+ *     (`SseHub.simulateNetworkDropForTests`, triggered here only by
+ *     inserting a `TRIGGER_NATIVE_DROP` sentinel row - the same "mutate the
+ *     DB directly" entrypoint as every other scenario, never an HTTP debug
+ *     call). Playwright/CDP's `context.setOffline(true)` was tried first
+ *     for this and DOES flip `navigator.onLine` for real (exercising this
+ *     layer's own `offline` listener), but was found, empirically, NOT to
+ *     terminate an already-open long-lived HTTP/1.1 streaming response in
+ *     Chromium - heartbeats kept flowing straight through it - so it cannot
+ *     be used to prove Case A. This test never calls `onerror` manually,
+ *     never manually instantiates a replacement `EventSource`, and never
+ *     mocks a request header - the SAME browser-owned `EventSource` object
+ *     reconnects entirely on its own.
+ *   - Case B (application bootstrap, test D below): induced via
+ *     `window.__bccE2E.forceDisconnect()` (apps/web/src/realtime/sseConnectionManager.ts's
+ *     `forceDisconnectForTests`, gated the same way `RealtimeTestProbe` is -
+ *     stripped from real production builds), which closes the real
+ *     `EventSource` and drives the exact same production `ERROR`/grace-
+ *     timer/fatal-retry code paths a genuine drop would, including
+ *     constructing a genuinely NEW `EventSource` object with the
+ *     `?lastEventId=` query bootstrap.
+ *
+ * `page.route()` is used separately (test B/C) to genuinely block NEW
+ * connection attempts at the network layer for the grace->polling scenario.
  */
 import { test, expect, type Page } from "@playwright/test";
 import mysql from "mysql2/promise";
@@ -106,6 +132,84 @@ test.describe("Realtime infrastructure (real browser, real API server)", () => {
     await insertTestRow("live-e2e-event");
 
     await expect.poll(async () => receivedLabels(page), { timeout: 10_000 }).toContain("live-e2e-event");
+  });
+
+  test("A2. NATIVE RECONNECT (Case A): the SAME real EventSource object reconnects on its own after a genuine server-side network failure, and Fastify observes the real Last-Event-ID header", async ({
+    page,
+  }) => {
+    const streamRequests: { url: string; headers: Record<string, string> }[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/stream") {
+        // `allHeaders()` (async, the full raw request headers as actually
+        // sent) rather than the synchronous `.headers()` snapshot - found
+        // empirically to be the reliable one for a header Chromium's own
+        // EventSource implementation sets internally (not via page JS),
+        // which `.headers()` did not always reflect for this exact request.
+        void request.allHeaders().then((headers) => {
+          streamRequests.push({ url: request.url(), headers });
+        });
+      }
+    });
+
+    await page.goto("/");
+    await waitForTransportState(page, "LIVE");
+    // `allHeaders()` resolves asynchronously - wait for the first request's
+    // headers to actually land before asserting on them.
+    await expect.poll(() => streamRequests.length, { timeout: 5_000 }).toBe(1);
+    expect(streamRequests[0]!.headers["last-event-id"]).toBeUndefined(); // first-ever connection carries no cursor
+
+    // The anchor event this browser must remember across the native
+    // reconnect - real DB mutation, the documented entrypoint.
+    await insertTestRow("anchor-before-native-drop");
+    await expect
+      .poll(async () => receivedLabels(page), { timeout: 10_000 })
+      .toContain("anchor-before-native-drop");
+
+    // Real, server-initiated, network-level connection termination - see
+    // this file's top comment for why this (not context.setOffline) is
+    // what actually proves Case A. The sentinel row is itself a completely
+    // ordinary row in the same source table, so it is ALSO delivered to
+    // this browser as a genuine business event (via the exact same real
+    // pipeline as any other row) before the drop actually fires - meaning
+    // the client's true last-known position by the time of the drop is
+    // THIS row's own ordinal, one past the anchor's, not the anchor's own
+    // id. That is the correct, honest expectation (proven below), not an
+    // approximation - the whole point of Last-Event-ID is "the last thing
+    // I actually saw," and this sentinel row is a real, actually-seen
+    // event like any other.
+    const triggerRowId = await insertTestRow("TRIGGER_NATIVE_DROP");
+    await expect.poll(async () => receivedLabels(page), { timeout: 5_000 }).toContain("TRIGGER_NATIVE_DROP");
+
+    // The browser's OWN EventSource notices the failure and reconnects
+    // entirely on its own (native `retry:` hint, ~3s) - this test performs
+    // no client-side action to cause or hasten that.
+    await expect.poll(() => streamRequests.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
+
+    const reconnectRequest = streamRequests[1]!;
+    const observedLastEventId = reconnectRequest.headers["last-event-id"];
+    expect(observedLastEventId).toBeDefined();
+    // The real, latest-seen source-1 ordinal (the sentinel row's own id)
+    // must be present in the real header the browser sent - proof the
+    // STANDARD Last-Event-ID mechanism carried the correct, true position,
+    // not a query-string bootstrap (which this request should not even
+    // have - Case A never uses it).
+    expect(observedLastEventId).toContain(`1:${triggerRowId}`);
+    // Case A's reconnect request carries the cursor via the standard
+    // HEADER only - unlike Case B (test D below), the reconnecting
+    // request's URL itself has no `?lastEventId=` query string, because the
+    // SAME EventSource object performed this reconnect (a query bootstrap
+    // is only ever added by THIS layer's own code when constructing a
+    // genuinely NEW EventSource, which never happened in this test).
+    expect(new URL(reconnectRequest.url).searchParams.has("lastEventId")).toBe(false);
+
+    // After resuming, live delivery keeps working with no duplicate of the anchor.
+    await insertTestRow("after-native-reconnect");
+    await expect
+      .poll(async () => receivedLabels(page), { timeout: 15_000 })
+      .toEqual(expect.arrayContaining(["anchor-before-native-drop", "after-native-reconnect"]));
+    const labels = await receivedLabels(page);
+    expect(labels.filter((l) => l === "anchor-before-native-drop")).toHaveLength(1);
   });
 
   test("B->C. DROP then RECOVERY: a real closed connection, blocked from reconnecting beyond grace, activates polling; unblocking deactivates it", async ({

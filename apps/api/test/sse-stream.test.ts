@@ -377,4 +377,175 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
     expect(client.isClosed).toBe(true);
     expect(client.frames.some((f) => f.event === "server_shutdown")).toBe(true);
   });
+
+  // ==================================================================
+  // Last-Event-ID precedence: standard HEADER (Case A - native
+  // EventSource reconnect) vs `?lastEventId=` QUERY (Case B - a brand-new
+  // EventSource bootstrapped by application code, e.g. after the polling
+  // fallback or this layer's own fatal-retry recreation - the native
+  // EventSource constructor has no way to set a custom request header, so
+  // it cannot use Case A at all). apps/api/src/sse/route.ts's own header
+  // comment documents the same seven cases exhaustively; this suite is the
+  // executable proof for each one, against a REAL server and REAL MySQL.
+  // ==================================================================
+  describe("Last-Event-ID precedence: header vs ?lastEventId= query", () => {
+    /** Connects, waits for one real business event, and returns its exact wire id plus the id of a SECOND event inserted afterward while this client is disconnected. */
+    async function primeAnchorAndFollowUp(
+      app: Awaited<ReturnType<typeof startTestServer>>["app"],
+      port: number,
+    ): Promise<{ anchorId: string; followUpLabel: string; currentWatermarkAheadId: string }> {
+      const primer = new SseTestClient(port);
+      await primer.statusCode;
+      await insertTestRow(rawPool, "precedence-anchor");
+      const anchorFrame = await primer.waitForFrame(businessFrame);
+      const anchorId = anchorFrame.id!;
+      primer.destroy();
+      await sleep(50);
+
+      const followUpLabel = "precedence-followup";
+      await insertTestRow(rawPool, followUpLabel);
+      await sleep(300); // let the poller advance its durable watermark
+
+      // A cursor claiming to be far AHEAD of anything the source has ever
+      // produced - "caught up, nothing to replay" - deliberately distinct
+      // from `anchorId` so a test can tell, from the OBSERVABLE replay
+      // behavior alone, which of the two candidate cursors the server
+      // actually used (real behavioral proof, not an internal inspection).
+      const currentWatermarkAheadId = `${TEST_SOURCE_INDEX}:999999999`;
+      void app; // kept for signature symmetry / future use
+      return { anchorId, followUpLabel, currentWatermarkAheadId };
+    }
+
+    it("1. HEADER ONLY: a valid standard Last-Event-ID header resumes replay from that position", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { anchorId, followUpLabel } = await primeAnchorAndFollowUp(app, port);
+        const client = new SseTestClient(port, { lastEventId: anchorId });
+        await client.statusCode;
+        await client.waitForFrame((f) => businessFrame(f) && f.data?.includes(followUpLabel) === true, 3000);
+        expect(client.frames.filter(businessFrame)).toHaveLength(1);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("2. QUERY ONLY: a valid ?lastEventId= query parameter resumes replay when no header is sent (Case B bootstrap)", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { anchorId, followUpLabel } = await primeAnchorAndFollowUp(app, port);
+        const client = new SseTestClient(port, {
+          path: `/api/stream?lastEventId=${encodeURIComponent(anchorId)}`,
+        });
+        await client.statusCode;
+        await client.waitForFrame((f) => businessFrame(f) && f.data?.includes(followUpLabel) === true, 3000);
+        expect(client.frames.filter(businessFrame)).toHaveLength(1);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("3. BOTH SAME: header and query carrying the identical valid cursor behave exactly like either alone", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { anchorId, followUpLabel } = await primeAnchorAndFollowUp(app, port);
+        const client = new SseTestClient(port, {
+          lastEventId: anchorId,
+          path: `/api/stream?lastEventId=${encodeURIComponent(anchorId)}`,
+        });
+        await client.statusCode;
+        await client.waitForFrame((f) => businessFrame(f) && f.data?.includes(followUpLabel) === true, 3000);
+        expect(client.frames.filter(businessFrame)).toHaveLength(1);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("4. BOTH DIFFERENT: the header ALWAYS wins over a conflicting query value, never merged, never overridden", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { anchorId, followUpLabel, currentWatermarkAheadId } = await primeAnchorAndFollowUp(app, port);
+        // Header says "replay from the anchor" (real, correct usage);
+        // query says "I'm already caught up" (would silently swallow the
+        // follow-up event if it won). If the header truly takes
+        // precedence, the follow-up event MUST still arrive.
+        const client = new SseTestClient(port, {
+          lastEventId: anchorId,
+          path: `/api/stream?lastEventId=${encodeURIComponent(currentWatermarkAheadId)}`,
+        });
+        await client.statusCode;
+        await client.waitForFrame((f) => businessFrame(f) && f.data?.includes(followUpLabel) === true, 3000);
+        expect(client.frames.filter(businessFrame)).toHaveLength(1);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("5. MALFORMED HEADER (no query): never falls through to guessing - safe resync_required, no replay", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        await primeAnchorAndFollowUp(app, port);
+        const client = new SseTestClient(port, { lastEventId: "not-a-valid-cursor" });
+        expect(await client.statusCode).toBe(200);
+        const resync = await client.waitForFrame((f) => f.event === "resync_required", 3000);
+        expect(JSON.parse(resync.data!)).toMatchObject({ reason: "INVALID_CURSOR" });
+        expect(client.frames.filter(businessFrame)).toHaveLength(0);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("5b. MALFORMED HEADER + a VALID query present: the malformed header still wins (never silently falls back to the query)", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { anchorId } = await primeAnchorAndFollowUp(app, port);
+        const client = new SseTestClient(port, {
+          lastEventId: "not-a-valid-cursor",
+          path: `/api/stream?lastEventId=${encodeURIComponent(anchorId)}`,
+        });
+        expect(await client.statusCode).toBe(200);
+        const resync = await client.waitForFrame((f) => f.event === "resync_required", 3000);
+        expect(JSON.parse(resync.data!)).toMatchObject({ reason: "INVALID_CURSOR" });
+        // Never silently replayed using the query value instead.
+        expect(client.frames.filter(businessFrame)).toHaveLength(0);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("6. MALFORMED QUERY (no header): resolved as the fallback source, fails the same safe way", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        await primeAnchorAndFollowUp(app, port);
+        const client = new SseTestClient(port, { path: "/api/stream?lastEventId=garbage-not-a-cursor" });
+        expect(await client.statusCode).toBe(200);
+        const resync = await client.waitForFrame((f) => f.event === "resync_required", 3000);
+        expect(JSON.parse(resync.data!)).toMatchObject({ reason: "INVALID_CURSOR" });
+        expect(client.frames.filter(businessFrame)).toHaveLength(0);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("7. NEITHER: a fresh connection with no header and no query is live-only, no resync, no replay", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        await primeAnchorAndFollowUp(app, port);
+        const client = new SseTestClient(port);
+        await client.statusCode;
+        await sleep(300);
+        expect(client.frames.some((f) => f.event === "resync_required")).toBe(false);
+        expect(client.frames.filter(businessFrame)).toHaveLength(0);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+  });
 });

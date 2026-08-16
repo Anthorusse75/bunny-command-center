@@ -276,6 +276,33 @@ export class SseHub {
       this.unregister(id, "server_shutdown");
     }
   }
+
+  /**
+   * TEST-ONLY (mission §35/§37, apps/api/scripts/e2e-server.ts's own
+   * sentinel-row watcher is the only real caller). Simulates a genuine
+   * network-level failure of every currently-open connection in `scope` -
+   * an ABRUPT `res.destroy()` with NO frame written first (deliberately
+   * unlike `closeAll`, which writes a graceful `server_shutdown` frame
+   * before closing: a real network drop gives the client no such warning).
+   * This is what makes it possible to prove native `EventSource` reconnect
+   * (Case A in apps/api/src/sse/route.ts's own doc comment) with a REAL
+   * browser: the browser's own `onerror`/auto-reconnect logic only
+   * activates on a genuine, unannounced connection failure, and there is no
+   * way to produce that from Playwright's side alone against an
+   * already-established long-lived HTTP/1.1 stream (verified empirically -
+   * see apps/web/e2e/realtime.spec.ts's own top comment). Never reachable
+   * from any HTTP route - this is a plain method call on the hub instance,
+   * only ever invoked by test-only server-side code, never by anything a
+   * client can trigger over the wire.
+   */
+  simulateNetworkDropForTests(scope: SseChannelScope): void {
+    for (const id of [...this.connections.keys()]) {
+      const internal = this.connections.get(id);
+      if (internal && internal.scopes.has(scope)) {
+        this.unregister(id, "simulated_network_drop");
+      }
+    }
+  }
 }
 
 export { formatSseFrame };

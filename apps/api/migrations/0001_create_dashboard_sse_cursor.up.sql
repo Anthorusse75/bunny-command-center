@@ -15,18 +15,23 @@
 -- Step 03's own single poller uses the fixed key 'sse_hub'
 -- (apps/api/src/sse/poller.ts's SSE_HUB_CURSOR_KEY constant).
 --
--- CORRECTION vs 25_DATA_MODEL.md's summary table, noted per
--- IMPLEMENTATION/03_realtime_infrastructure.md's explicit instruction ("if the
--- name differs from what's shown in 26_REALTIME_SSE_AND_SYNC.md, update that
--- document's example to match, and note the correction in the handover"):
--- 25_DATA_MODEL.md's one-line summary calls this a "per-connection/per-source
--- watermark" and says rows are "pruned once older than the replay-retention
--- window." 26_REALTIME_SSE_AND_SYNC.md's own operative description ("tracks
--- the last-delivered sequence per underlying source table") is authoritative
--- here and is what this migration implements: a small, bounded set of rows
--- (one per registered source adapter x cursor_key), continuously updated in
--- place, never one row per ephemeral browser connection and therefore never
--- needing age-based pruning. See the Step-03 HANDOVER for the full rationale.
+-- IMPLEMENTATION NOTE (not a correction to either frozen document -
+-- IMPLEMENTATION/03_realtime_infrastructure.md only authorizes editing
+-- 26_REALTIME_SSE_AND_SYNC.md's example if the TABLE NAME differs from
+-- 25_DATA_MODEL.md's; it doesn't here - both name it `dashboard_sse_cursor`,
+-- so neither frozen document was touched by Step 03):
+-- 25_DATA_MODEL.md's one-line summary describes this table as a
+-- "per-connection/per-source watermark" pruned "once older than the
+-- replay-retention window," while 26_REALTIME_SSE_AND_SYNC.md's own operative
+-- description calls it a table that "tracks the last-delivered sequence per
+-- underlying source table." These two summaries emphasize the table
+-- differently rather than actually conflicting on shape, and Step 03 treats
+-- this as an underspecified implementation detail, not a contradiction to
+-- resolve by editing either document. What this migration implements: a
+-- small, bounded set of rows (one per registered source adapter x
+-- cursor_key), continuously updated in place - never one row per ephemeral
+-- browser connection, and therefore never needing age-based pruning. See the
+-- Step-03 HANDOVER for the full rationale.
 CREATE TABLE dashboard_sse_cursor (
   source_table VARCHAR(64) NOT NULL,
   cursor_key VARCHAR(64) NOT NULL,

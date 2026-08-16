@@ -56,27 +56,63 @@ export function buildSseRoutePlugin(params: {
     fastify.get("/api/stream", (request, reply) => {
       const scopes = resolveSubscriptionScopes();
 
-      // Native `EventSource` sends `Last-Event-ID` automatically ONLY when
-      // the BROWSER's own internal reconnect re-uses the SAME EventSource
-      // object - there is no web-platform API to set custom request headers
-      // on `new EventSource(url)`, so a client-side reconnect that must
-      // construct a genuinely NEW object (this layer's own fatal-state
-      // recreation, ADR-005 §Risks) cannot carry the header forward. The
-      // well-established workaround: the client remembers its own
-      // last-received id and appends it as a `lastEventId` QUERY parameter
-      // on the new connection URL; the server accepts either, preferring
-      // the real header (only ever sent by a genuine native reconnect,
-      // therefore more trustworthy) when both are present.
+      // ==================================================================
+      // Last-Event-ID resolution — TWO DISTINCT RECONNECT CASES, one
+      // resolution rule. Documented explicitly here because the two cases
+      // are easy to conflate and have different trust characteristics.
+      //
+      // CASE A — NATIVE EVENTSOURCE RECONNECT (the standard SSE mechanism):
+      //   the SAME `EventSource` object the browser created initially loses
+      //   its connection and the BROWSER ITSELF (not any code in this
+      //   repo) automatically reconnects, sending the real, standard
+      //   `Last-Event-ID` HEADER with the value of the last `id:` field it
+      //   received. This is the spec-defined, browser-native path this
+      //   server does nothing special to enable - it only needs to read
+      //   `request.headers['last-event-id']` like any ordinary header.
+      //   Proven end-to-end with a REAL browser + REAL native reconnect
+      //   (not a mocked EventSource, not a manually-constructed header) in
+      //   apps/web/e2e/realtime.spec.ts's "native EventSource reconnect"
+      //   test.
+      //
+      // CASE B — APPLICATION-LEVEL BOOTSTRAP OF A BRAND-NEW EVENTSOURCE:
+      //   e.g. after the polling-fallback path (mission's own drop/grace/
+      //   polling/recovery flow) or this layer's own fatal-retry recreation
+      //   (apps/web/src/realtime/sseConnectionManager.ts), the CLIENT
+      //   application code constructs a genuinely NEW `EventSource` object.
+      //   The native `EventSource` constructor has NO parameter and no
+      //   subsequent API to set a custom `Last-Event-ID` (or any) request
+      //   header, so this path cannot use the standard header at all. The
+      //   client-side workaround (this repo's own application-level
+      //   extension, not part of the SSE spec) is to remember its own last-
+      //   received id and pass it as a `?lastEventId=` QUERY parameter on
+      //   the new connection's URL - accepted here ONLY as a fallback, and
+      //   ONLY consulted when case A's header is entirely absent.
+      //
+      // PRECEDENCE (deterministic, tested explicitly - see
+      // apps/api/test/sse-stream.test.ts's "Last-Event-ID precedence"
+      // suite for all 7 combinations):
+      //   1. A syntactically valid standard `Last-Event-ID` header, if present, ALWAYS wins -
+      //      never overridden by a query parameter, even a different one.
+      //   2. Otherwise, a syntactically valid `?lastEventId=` query parameter is used.
+      //   3. Otherwise (neither present), this is a fresh connection - no
+      //      cursor, no replay, live-only.
+      //   A header that IS present but fails to decode is never silently
+      //   replaced by a possibly-attacker-controlled query value instead -
+      //   it goes straight to the safe INVALID_CURSOR resync path (see
+      //   replayOrResync below). The two inputs are never merged/reconciled
+      //   field-by-field; exactly one of them is chosen as a whole.
+      // ==================================================================
       const rawHeader = request.headers["last-event-id"];
       const headerValue = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
       const queryValue = (request.query as Record<string, unknown> | undefined)?.["lastEventId"];
-      const lastEventIdHeader = headerValue ?? (typeof queryValue === "string" ? queryValue : undefined);
+      const queryBootstrapValue = typeof queryValue === "string" ? queryValue : undefined;
+      const resolvedLastEventId = headerValue ?? queryBootstrapValue;
 
       let vector: SseCursorVector = new Map();
       let malformedLastEventId = false;
-      if (lastEventIdHeader !== undefined) {
+      if (resolvedLastEventId !== undefined) {
         sseMetrics.reconnectWithLastEventId();
-        const decoded = decodeSseEventId(lastEventIdHeader);
+        const decoded = decodeSseEventId(resolvedLastEventId);
         if (decoded === null) {
           malformedLastEventId = true;
         } else {
