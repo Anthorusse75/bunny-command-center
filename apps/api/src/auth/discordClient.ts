@@ -147,6 +147,13 @@ export async function fetchDiscordIdentity(
     typeof json !== "object" ||
     json === null ||
     typeof (json as DiscordUser).id !== "string" ||
+    // Snowflakes are digit-only strings, up to 64 bits (commonly 18-19
+    // decimal digits) — this is checked as a STRING pattern, never by
+    // parsing the value into a number (Number.MAX_SAFE_INTEGER is only
+    // 16 digits; parsing a real snowflake to validate it would defeat the
+    // entire point of keeping it a string). A malformed/empty id fails
+    // closed here rather than silently reaching the DB layer.
+    !/^\d{1,20}$/.test((json as DiscordUser).id) ||
     typeof (json as DiscordUser).username !== "string"
   ) {
     throw new DiscordIdentityFetchError(
@@ -155,6 +162,10 @@ export async function fetchDiscordIdentity(
     );
   }
   return {
+    // The exact string Discord returned, untouched — never routed through
+    // Number(...)/parseInt(...)/unary +/any numeric coercion anywhere in
+    // this codebase's Step-04 identity path (userRepo.ts's
+    // DashboardUserRow.discord_user_id doc comment has the full rationale).
     id: (json as DiscordUser).id,
     username: (json as DiscordUser).username,
     avatar: (json as { avatar?: string | null }).avatar ?? null,

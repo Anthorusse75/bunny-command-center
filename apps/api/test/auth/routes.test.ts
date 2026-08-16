@@ -145,6 +145,7 @@ describe("/api/auth/* (real MySQL + local Discord test double)", () => {
     discord.state.tokenExchangeBody = undefined;
     discord.state.identityStatus = undefined;
     discord.state.identityBody = undefined;
+    discord.state.identityUserId = "700000000001";
     discord.state.receivedTokenRequests = [];
     await Promise.all(apps.map((a) => a.close()));
     apps = [];
@@ -285,6 +286,68 @@ describe("/api/auth/* (real MySQL + local Discord test double)", () => {
         [users[0]!.id],
       );
       expect(sessions.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      await conn.end();
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Discord Snowflake precision correction (2026-08-16): the FULL real
+  // login -> session -> API-readback chain, driven end to end by a
+  // genuinely unsafe (> Number.MAX_SAFE_INTEGER) Discord snowflake, proving
+  // the exact value survives every layer — Discord identity fetch, DB
+  // upsert, session creation, and the JSON the authenticated
+  // GET /api/auth/session response actually serializes.
+  // -----------------------------------------------------------------------
+  it("AUTHENTICATED SESSION RESOLVES THE EXACT DISCORD USER, and the API serializes the exact ID, for a 19-digit unsafe snowflake", async () => {
+    const UNSAFE_SNOWFLAKE = "800000000000000042"; // 19 digits, far beyond Number.MAX_SAFE_INTEGER
+    discord.state.identityUserId = UNSAFE_SNOWFLAKE;
+
+    const app = await buildApp();
+    const loginResponse = await app.inject({ method: "GET", url: "/api/auth/login" });
+    const txnCookie = findCookie(
+      parseSetCookieHeaders(loginResponse.headers["set-cookie"]),
+      "bcc_oauth_txn",
+    )!;
+    const location = new URL(loginResponse.headers.location as string);
+    const state = location.searchParams.get("state")!;
+
+    const callbackResponse = await app.inject({
+      method: "GET",
+      url: `/api/auth/callback?code=unsafe-snowflake-code&state=${state}`,
+      cookies: { bcc_oauth_txn: txnCookie.value },
+    });
+    expect(callbackResponse.statusCode).toBe(302);
+    const sessionCookie = findCookie(
+      parseSetCookieHeaders(callbackResponse.headers["set-cookie"]),
+      "bcc_session",
+    )!;
+
+    // API SERIALIZATION: the exact string, never a rounded/mangled number,
+    // never `800000000000000000` (what Number(UNSAFE_SNOWFLAKE) would give).
+    const sessionResponse = await app.inject({
+      method: "GET",
+      url: "/api/auth/session",
+      cookies: { bcc_session: sessionCookie.value },
+    });
+    expect(sessionResponse.statusCode).toBe(200);
+    // Asserted against the RAW response body text, not just the parsed
+    // JSON's `===` comparison — this also proves the wire format itself
+    // never carries a bare (precision-lossy) JSON number for this field.
+    expect(sessionResponse.body).toContain(`"discordUserId":"${UNSAFE_SNOWFLAKE}"`);
+    const body = sessionResponse.json<{ data: { user: { discordUserId: string } } }>();
+    expect(body.data.user.discordUserId).toBe(UNSAFE_SNOWFLAKE);
+    expect(body.data.user.discordUserId).not.toBe(String(Number(UNSAFE_SNOWFLAKE)));
+
+    // DURABLE row also holds the exact value.
+    const conn = await mysql.createConnection(dbConfig);
+    try {
+      const [users] = await conn.query<mysql.RowDataPacket[]>(
+        "SELECT discord_user_id FROM dashboard_users WHERE discord_user_id = ?",
+        [UNSAFE_SNOWFLAKE],
+      );
+      expect(users).toHaveLength(1);
+      expect(users[0]!.discord_user_id).toBe(UNSAFE_SNOWFLAKE);
     } finally {
       await conn.end();
     }

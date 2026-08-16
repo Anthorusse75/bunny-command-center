@@ -14,7 +14,7 @@ import type { DB } from "../../src/db/codegen-types.js";
 import { createKyselyClient } from "../../src/db/kysely.js";
 import { runUp } from "../../migrations/runner.js";
 import type { MigratorDbConfig } from "../../migrations/config.js";
-import { upsertDashboardUser } from "../../src/auth/userRepo.js";
+import { findDashboardUserById, upsertDashboardUser } from "../../src/auth/userRepo.js";
 import {
   createSession,
   deleteAllSessionsForUser,
@@ -357,5 +357,121 @@ describe("session/user lifecycle (real MySQL)", () => {
     } finally {
       await restartedDb.destroy();
     }
+  });
+
+  // -------------------------------------------------------------------
+  // Discord Snowflake precision (correction, 2026-08-16). Discord's HTTP
+  // API always serializes Snowflake IDs as strings because they are up to
+  // 64 bits and cannot be represented exactly by a JS `number`
+  // (IEEE-754 double, exact only up to Number.MAX_SAFE_INTEGER = 2^53-1,
+  // 16 decimal digits — real snowflakes are commonly 18-19 digits). Every
+  // ID below is deliberately > Number.MAX_SAFE_INTEGER and would silently
+  // collide with its neighbor under ANY numeric conversion
+  // (Number(...)/parseInt(...)/unary +) — confirmed directly: these are the
+  // exact two values that motivated this fix, previously verified with
+  // `Number("100000000000000001") === Number("100000000000000002")` (both
+  // round to 100000000000000000).
+  // -------------------------------------------------------------------
+  describe("Discord Snowflake precision — no JS-number coercion anywhere in the identity path", () => {
+    const UNSAFE_SNOWFLAKE_A = "100000000000000001";
+    const UNSAFE_SNOWFLAKE_B = "100000000000000002";
+    const UNSAFE_SNOWFLAKE_C = "999999999999999999"; // max-length (19 digits), all-nines edge case
+
+    it("sanity check: these fixture IDs really are beyond Number.MAX_SAFE_INTEGER and really would collide if coerced", () => {
+      expect(Number.isSafeInteger(Number(UNSAFE_SNOWFLAKE_A))).toBe(false);
+      expect(Number.isSafeInteger(Number(UNSAFE_SNOWFLAKE_B))).toBe(false);
+      expect(Number(UNSAFE_SNOWFLAKE_A)).toBe(Number(UNSAFE_SNOWFLAKE_B)); // proves the collision this fix prevents
+    });
+
+    it("EXACT ROUND TRIP: a 19-digit unsafe snowflake survives insert -> read back byte-for-byte, as a string", async () => {
+      const user = await upsertDashboardUser(db, {
+        discordUserId: UNSAFE_SNOWFLAKE_C,
+        username: "UnsafeSnowflakeUser",
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("a", KEY),
+        encryptedRefreshToken: encryptSecret("r", KEY),
+        tokenExpiresAt: new Date(Date.now() + 1000),
+      });
+      expect(user.discord_user_id).toBe(UNSAFE_SNOWFLAKE_C);
+      expect(typeof user.discord_user_id).toBe("string");
+
+      // Independent readback (not the same in-memory object the insert returned).
+      const reread = await db
+        .selectFrom("dashboard_users")
+        .selectAll()
+        .where("id", "=", user.id)
+        .executeTakeFirstOrThrow();
+      expect(reread.discord_user_id).toBe(UNSAFE_SNOWFLAKE_C);
+    });
+
+    it("DISTINCT IDs REMAIN DISTINCT: two snowflakes differing only past the 16th digit create TWO separate users, never one", async () => {
+      const userA = await upsertDashboardUser(db, {
+        discordUserId: UNSAFE_SNOWFLAKE_A,
+        username: "UserA",
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("a", KEY),
+        encryptedRefreshToken: encryptSecret("r", KEY),
+        tokenExpiresAt: new Date(Date.now() + 1000),
+      });
+      const userB = await upsertDashboardUser(db, {
+        discordUserId: UNSAFE_SNOWFLAKE_B,
+        username: "UserB",
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("a", KEY),
+        encryptedRefreshToken: encryptSecret("r", KEY),
+        tokenExpiresAt: new Date(Date.now() + 1000),
+      });
+
+      expect(userA.id).not.toBe(userB.id);
+      expect(userA.discord_user_id).toBe(UNSAFE_SNOWFLAKE_A);
+      expect(userB.discord_user_id).toBe(UNSAFE_SNOWFLAKE_B);
+
+      const rows = await db
+        .selectFrom("dashboard_users")
+        .select(["id", "discord_user_id"])
+        .where("id", "in", [userA.id, userB.id])
+        .execute();
+      expect(rows).toHaveLength(2);
+      expect(new Set(rows.map((r) => r.discord_user_id)).size).toBe(2);
+    });
+
+    it("UPSERT/LOOKUP CANNOT COLLIDE: upserting snowflake A never touches, renames, or merges with snowflake B's row", async () => {
+      const userA = await upsertDashboardUser(db, {
+        discordUserId: UNSAFE_SNOWFLAKE_A,
+        username: "OriginalA",
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("a", KEY),
+        encryptedRefreshToken: encryptSecret("r", KEY),
+        tokenExpiresAt: new Date(Date.now() + 1000),
+      });
+      const userB = await upsertDashboardUser(db, {
+        discordUserId: UNSAFE_SNOWFLAKE_B,
+        username: "OriginalB",
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("a", KEY),
+        encryptedRefreshToken: encryptSecret("r", KEY),
+        tokenExpiresAt: new Date(Date.now() + 1000),
+      });
+
+      // Re-upsert (a "second login") for A only, with a changed username.
+      const userAAgain = await upsertDashboardUser(db, {
+        discordUserId: UNSAFE_SNOWFLAKE_A,
+        username: "RenamedA",
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("a2", KEY),
+        encryptedRefreshToken: encryptSecret("r2", KEY),
+        tokenExpiresAt: new Date(Date.now() + 2000),
+      });
+
+      expect(userAAgain.id).toBe(userA.id); // same row, correctly matched
+      expect(userAAgain.username).toBe("RenamedA");
+
+      // B must be completely unaffected — a real bug here would show up as
+      // B's username silently becoming "RenamedA" (the exact failure mode a
+      // Number()-coerced collision would produce).
+      const bReread = await findDashboardUserById(db, userB.id);
+      expect(bReread?.username).toBe("OriginalB");
+      expect(bReread?.discord_user_id).toBe(UNSAFE_SNOWFLAKE_B);
+    });
   });
 });

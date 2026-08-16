@@ -17,6 +17,8 @@ export interface DiscordTestDoubleState {
   /** When set, `/api/users/@me` responds with this HTTP status and body instead of a success payload. */
   identityStatus: number | undefined;
   identityBody: unknown;
+  /** The `id` the success-path identity response returns — overridable so a test can drive the flow with a specific (e.g. deliberately unsafe-as-a-JS-number) Discord snowflake. */
+  identityUserId: string;
   /** Records every `code`/`code_verifier` pair presented to the token endpoint, for replay assertions. */
   receivedTokenRequests: { code: string; codeVerifier: string }[];
 }
@@ -35,6 +37,7 @@ export async function startDiscordTestDouble(): Promise<DiscordTestDouble> {
     tokenExchangeBody: undefined,
     identityStatus: undefined,
     identityBody: undefined,
+    identityUserId: "700000000001",
     receivedTokenRequests: [],
   };
 
@@ -76,7 +79,9 @@ export async function startDiscordTestDouble(): Promise<DiscordTestDouble> {
           return;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ id: "700000000001", username: "TestDiscordUser", avatar: "abc123hash" }));
+        res.end(
+          JSON.stringify({ id: state.identityUserId, username: "TestDiscordUser", avatar: "abc123hash" }),
+        );
         return;
       }
 

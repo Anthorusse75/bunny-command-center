@@ -169,8 +169,38 @@ jobs:
           path: apps/web/test-results/
           retention-days: 7
 
-      - name: Build (api + web)
+      - name: Build (api + web + shared)
         run: npm run build
 
       - name: apps/web production build sanity check
         run: test -f apps/web/dist/index.html
+
+      - name: "Compiled-production-runtime smoke test (Step 04 correction 2): plain 'node dist/server.js' must actually boot"
+        # Deliberately NOT just "does dist/server.js exist" - this actually
+        # launches the COMPILED artifact (via apps/api's real "start"
+        # script command) under plain Node, no tsx anywhere in the loop, and
+        # proves build -> launch -> real /healthz -> real /readyz (real
+        # MySQL, the SAME already-migrated `bunny_command_center` database
+        # the earlier steps in this job used) -> real /api/version -> real
+        # /api/auth/login redirect -> SIGTERM -> clean exit. Catches the
+        # exact class of defect this correction was opened for: a compiled
+        # server that `tsc` happily emits but that ERR_MODULE_NOT_FOUNDs the
+        # instant a real, plain-Node process tries to run it.
+        working-directory: apps/api
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_USER: ${{ env.DASHBOARD_APP_DB_USER }}
+          DB_PASSWORD: ${{ env.DASHBOARD_APP_DB_PASSWORD }}
+          DB_NAME: ${{ env.MYSQL_DATABASE }}
+          # Deliberately fake, non-secret, CI-only placeholder values (same
+          # convention as this workflow's own ci_root_pass/ci_app_pass) -
+          # this gate proves the compiled server BOOTS and SERVES, not that
+          # real Discord OAuth works (that is explicitly out of scope here,
+          # see Step 04's HANDOVER).
+          DISCORD_CLIENT_ID: ci-smoke-test-client-id
+          DISCORD_CLIENT_SECRET: ci-smoke-test-client-secret
+          DISCORD_REDIRECT_URI: http://127.0.0.1:8199/api/auth/callback
+          DASHBOARD_OAUTH_TRANSACTION_SIGNING_KEY: "1111111111111111111111111111111111111111111111111111111111111111"
+          DASHBOARD_TOKEN_ENCRYPTION_KEY: "2222222222222222222222222222222222222222222222222222222222222222"
+        run: npm run smoke-test-compiled

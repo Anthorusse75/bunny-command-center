@@ -360,7 +360,7 @@ export interface DashboardUsers {
   discord_access_token_enc: Buffer | null;
   discord_refresh_token_enc: Buffer | null;
   discord_token_expires_at: Date | null;
-  discord_user_id: number;
+  discord_user_id: string;
   id: Generated<number>;
   locale: Generated<string>;
   theme_mode: Generated<string>;

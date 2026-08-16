@@ -12,9 +12,26 @@
 -- tracks the ACCESS token's expiry (not the refresh token, which Discord does not
 -- expire on a fixed schedule) so a refresh can be attempted proactively as well as
 -- reactively on a 401.
+--
+-- discord_user_id is VARCHAR, deliberately NOT a numeric type (correction,
+-- 2026-08-16): Discord's HTTP API always serializes Snowflake IDs as JSON
+-- strings specifically because they are up to 64 bits and cannot be
+-- represented exactly by IEEE-754 doubles (JavaScript's only number type) --
+-- values above Number.MAX_SAFE_INTEGER (2^53-1, 16 digits; real snowflakes
+-- are commonly 18-19 digits) silently lose precision under ANY numeric
+-- conversion. A BIGINT UNSIGNED column would store the exact value in MySQL
+-- itself, but every read through this application's stack (mysql2's default
+-- BIGINT-to-JS-number coercion, Kysely's generated types) would still
+-- silently round it back down to an inexact JS number on the way OUT --
+-- which is exactly the class of defect that could let two DIFFERENT
+-- Discord accounts collide onto the SAME dashboard identity once their IDs
+-- differ only past the 16th significant digit. VARCHAR(24) (real snowflakes
+-- top out at 19-20 digits; generous headroom) sidesteps the entire class of
+-- risk: strings round-trip through MySQL/mysql2/Kysely/JSON exactly, always,
+-- with zero special driver configuration required anywhere in this codebase.
 CREATE TABLE dashboard_users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  discord_user_id BIGINT UNSIGNED NOT NULL,
+  discord_user_id VARCHAR(24) NOT NULL,
   username VARCHAR(64) NOT NULL,
   avatar_hash VARCHAR(64) NULL,
   locale VARCHAR(8) NOT NULL DEFAULT 'en',

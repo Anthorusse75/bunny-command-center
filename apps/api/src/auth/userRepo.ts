@@ -11,7 +11,16 @@ import type { DB } from "../db/codegen-types.js";
 
 export interface DashboardUserRow {
   id: number;
-  discord_user_id: number;
+  /**
+   * Kept as a `string`, exactly as Discord's own API serializes it and
+   * exactly as the `dashboard_users.discord_user_id` column stores it
+   * (`VARCHAR`, not `BIGINT`) — see migration 0002's own comment. Never
+   * pass this through `Number(...)`/`parseInt(...)`/unary `+`/any other
+   * numeric coercion anywhere: real snowflakes exceed
+   * `Number.MAX_SAFE_INTEGER` and would silently lose precision, risking
+   * two different Discord accounts colliding onto one dashboard identity.
+   */
+  discord_user_id: string;
   username: string;
   avatar_hash: string | null;
   locale: string;
@@ -41,11 +50,14 @@ export async function upsertDashboardUser(
   db: Kysely<DB>,
   params: UpsertUserParams,
 ): Promise<DashboardUserRow> {
-  const discordUserIdNum = Number(params.discordUserId);
+  // The Discord user ID travels through this whole function as the EXACT
+  // string Discord's API returned — never coerced to a JS number at any
+  // point (see DashboardUserRow.discord_user_id's own doc comment).
+  const discordUserId = params.discordUserId;
   await db
     .insertInto("dashboard_users")
     .values({
-      discord_user_id: discordUserIdNum,
+      discord_user_id: discordUserId,
       username: params.username,
       avatar_hash: params.avatarHash,
       discord_access_token_enc: params.encryptedAccessToken,
@@ -64,7 +76,7 @@ export async function upsertDashboardUser(
   const row = await db
     .selectFrom("dashboard_users")
     .selectAll()
-    .where("discord_user_id", "=", discordUserIdNum)
+    .where("discord_user_id", "=", discordUserId)
     .executeTakeFirstOrThrow();
   return row;
 }

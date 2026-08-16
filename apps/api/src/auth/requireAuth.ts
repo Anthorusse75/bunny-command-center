@@ -69,7 +69,11 @@ export async function resolveAuthenticatedUser(
     sessionId: session.id,
     user: {
       id: userRow.id,
-      discordUserId: String(userRow.discord_user_id),
+      // Already the exact string Discord returned / the DB stored (VARCHAR,
+      // never a numeric column) — no conversion, no wrapping, no risk of
+      // precision loss (userRepo.ts's DashboardUserRow.discord_user_id doc
+      // comment has the full rationale).
+      discordUserId: userRow.discord_user_id,
       username: userRow.username,
       avatarHash: userRow.avatar_hash,
       locale: userRow.locale,
