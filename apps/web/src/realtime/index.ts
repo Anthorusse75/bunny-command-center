@@ -2,6 +2,6 @@
 export { SseProvider, useRealtimeChannel, useRealtimeStatus, type RealtimeStatus } from "./SseProvider.js";
 export { registerQueryInvalidation, unregisterQueryInvalidation } from "./invalidationRegistry.js";
 export { createBccQueryClient } from "./queryClient.js";
-export { realtimeAwareQueryOptions } from "./realtimeAwareQuery.js";
+export { useRealtimeAwareQueryOptions } from "./realtimeAwareQuery.js";
 export { claimEventForToast } from "./multiTabDedup.js";
 export { OfflineBanner } from "./OfflineBanner.js";

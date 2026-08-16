@@ -16,13 +16,13 @@
 // real, production-code-path behavior without inventing a fake feature
 // query (Step 03 owns no real feature yet - `03_realtime_infrastructure.md`
 // §SCOPE forbids wiring one prematurely).
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RESYNC_REQUIRED_EVENT_TYPE, MULTI_TAB_DEDUP_WINDOW_MS } from "@bunny-command-center/shared";
 import {
   useRealtimeChannel,
   useRealtimeStatus,
-  realtimeAwareQueryOptions,
+  useRealtimeAwareQueryOptions,
   claimEventForToast,
 } from "./index.js";
 import { useRealtimeTestControls } from "./SseProvider.js";
@@ -53,6 +53,60 @@ export function realtimeTestProbeEnabled(): boolean {
   // finding, not a hypothetical one.
   return import.meta.env.VITE_ENABLE_REALTIME_TEST_PROBE === "true";
 }
+
+/**
+ * CORRECTNESS-REVIEW ROUND 4: isolated on purpose, as its own memoized,
+ * ZERO-PROPS component - never merged back into `RealtimeTestProbe` below.
+ * That component calls `useRealtimeStatus()`, whose own `useSyncExternalStore`
+ * subscription re-renders it on every transport-state change; if this
+ * query probe lived in the SAME component (or an un-memoized child of it),
+ * a transport change would incidentally re-render it too, and the E2E
+ * suite's polling assertions would pass even if `useRealtimeAwareQueryOptions`
+ * itself were completely non-reactive (exactly the bug
+ * apps/web/src/realtime/__tests__/realtimeAwareQuery.test.tsx caught: the
+ * OLD implementation only "worked" in this probe because of that
+ * incidental parent re-render). `memo()` with no props means React skips
+ * re-rendering this component when its PARENT re-renders for its own
+ * reasons - it only re-renders when a hook it calls ITSELF triggers one,
+ * which is exactly what proves the polling reactivity comes from
+ * `useRealtimeAwareQueryOptions`'s own subscription, not from incidental
+ * propagation down the tree.
+ */
+const FallbackQueryProbe = memo(function FallbackQueryProbe(): React.JSX.Element {
+  const pollQuery = useQuery(
+    useRealtimeAwareQueryOptions(
+      {
+        queryKey: ["e2e-realtime-probe-version"],
+        queryFn: async () => {
+          const res = await fetch("/api/version");
+          return (await res.json()) as unknown;
+        },
+      },
+      PROBE_POLL_INTERVAL_MS,
+    ),
+  );
+
+  // Counts real fetch completions (not renders) - `dataUpdatedAt` changes
+  // exactly once per successful fetch, giving a real, monotonic count of how
+  // many times the query function actually ran.
+  const [pollFetchCount, setPollFetchCount] = useState(0);
+  const lastSeenUpdatedAt = useRef(0);
+  useEffect(() => {
+    if (pollQuery.dataUpdatedAt > 0 && pollQuery.dataUpdatedAt !== lastSeenUpdatedAt.current) {
+      lastSeenUpdatedAt.current = pollQuery.dataUpdatedAt;
+      setPollFetchCount((n) => n + 1);
+    }
+  }, [pollQuery.dataUpdatedAt]);
+
+  return (
+    <div
+      data-testid="realtime-fallback-query-probe"
+      data-poll-fetch-count={String(pollFetchCount)}
+      data-poll-status={pollQuery.status}
+      style={{ position: "fixed", bottom: 0, left: 0, width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+    />
+  );
+});
 
 export function RealtimeTestProbe(): React.JSX.Element | null {
   const status = useRealtimeStatus();
@@ -86,43 +140,27 @@ export function RealtimeTestProbe(): React.JSX.Element | null {
     setResyncCount((n) => n + 1);
   });
 
-  const pollQuery = useQuery(
-    realtimeAwareQueryOptions(
-      {
-        queryKey: ["e2e-realtime-probe-version"],
-        queryFn: async () => {
-          const res = await fetch("/api/version");
-          return (await res.json()) as unknown;
-        },
-      },
-      PROBE_POLL_INTERVAL_MS,
-    ),
-  );
-
-  // Counts real fetch completions (not renders) - `dataUpdatedAt` changes
-  // exactly once per successful fetch, giving a real, monotonic count of how
-  // many times the query function actually ran.
-  const [pollFetchCount, setPollFetchCount] = useState(0);
-  const lastSeenUpdatedAt = useRef(0);
-  useEffect(() => {
-    if (pollQuery.dataUpdatedAt > 0 && pollQuery.dataUpdatedAt !== lastSeenUpdatedAt.current) {
-      lastSeenUpdatedAt.current = pollQuery.dataUpdatedAt;
-      setPollFetchCount((n) => n + 1);
-    }
-  }, [pollQuery.dataUpdatedAt]);
-
   return (
-    <div
-      data-testid="realtime-test-probe"
-      data-e2e-controls-ready="true"
-      data-transport-state={status.state}
-      data-polling-active={status.isPollingFallbackActive ? "true" : "false"}
-      data-received-labels={receivedLabels.join(",")}
-      data-resync-count={String(resyncCount)}
-      data-toast-claims={toastClaims.join(",")}
-      data-poll-fetch-count={String(pollFetchCount)}
-      data-poll-status={pollQuery.status}
-      style={{ position: "fixed", bottom: 0, right: 0, width: 1, height: 1, overflow: "hidden", opacity: 0 }}
-    />
+    <>
+      <div
+        data-testid="realtime-test-probe"
+        data-e2e-controls-ready="true"
+        data-transport-state={status.state}
+        data-polling-active={status.isPollingFallbackActive ? "true" : "false"}
+        data-received-labels={receivedLabels.join(",")}
+        data-resync-count={String(resyncCount)}
+        data-toast-claims={toastClaims.join(",")}
+        style={{
+          position: "fixed",
+          bottom: 0,
+          right: 0,
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+          opacity: 0,
+        }}
+      />
+      <FallbackQueryProbe />
+    </>
   );
 }

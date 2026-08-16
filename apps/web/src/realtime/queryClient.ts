@@ -1,7 +1,7 @@
 // Single shared QueryClient (ADR-003: "TanStack Query for server state").
 // Defaults are conservative and generic on purpose - Step 03 owns
 // introducing TanStack Query, not any real query. Later steps' `useQuery`
-// calls opt into realtime-aware polling via `realtimeAwareQueryOptions`
+// calls opt into realtime-aware polling via `useRealtimeAwareQueryOptions`
 // (./realtimeAwareQuery.ts), never by configuring `refetchInterval` ad hoc
 // per screen (mission §23: "Polling must be controlled centrally/by
 // reusable query configuration").

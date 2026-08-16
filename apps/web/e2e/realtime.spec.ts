@@ -118,6 +118,13 @@ async function deleteTestRowsUpTo(maxIdInclusive: number): Promise<void> {
 }
 
 const probe = (page: Page) => page.getByTestId("realtime-test-probe");
+// Deliberately a SEPARATE element (correctness-review round 4): the
+// fallback-aware polling query lives in its own memoized, zero-props
+// `FallbackQueryProbe` component (RealtimeTestProbe.tsx), never
+// incidentally re-rendered by `probe`'s own `useRealtimeStatus()`
+// subscription - so this suite's polling assertions genuinely exercise
+// `useRealtimeAwareQueryOptions`'s own reactivity, not a parent's.
+const fallbackQueryProbe = (page: Page) => page.getByTestId("realtime-fallback-query-probe");
 
 async function waitForTransportState(page: Page, state: string, timeout = 20_000): Promise<void> {
   await expect(probe(page)).toHaveAttribute("data-transport-state", state, { timeout });
@@ -245,7 +252,9 @@ test.describe("Realtime infrastructure (real browser, real API server)", () => {
     await page.goto("/");
     await waitForTransportState(page, "LIVE");
 
-    const pollCountBeforeDrop = Number((await probe(page).getAttribute("data-poll-fetch-count")) ?? "0");
+    const pollCountBeforeDrop = Number(
+      (await fallbackQueryProbe(page).getAttribute("data-poll-fetch-count")) ?? "0",
+    );
 
     // Block every NEW /api/stream connection attempt at the real network
     // layer BEFORE closing the current one, so the fast fatal-retry path
@@ -269,9 +278,12 @@ test.describe("Realtime infrastructure (real browser, real API server)", () => {
     // `data-polling-active` flipped to "true", so poll for it rather than
     // reading once.
     await expect
-      .poll(async () => Number((await probe(page).getAttribute("data-poll-fetch-count")) ?? "0"), {
-        timeout: 5_000,
-      })
+      .poll(
+        async () => Number((await fallbackQueryProbe(page).getAttribute("data-poll-fetch-count")) ?? "0"),
+        {
+          timeout: 5_000,
+        },
+      )
       .toBeGreaterThan(pollCountBeforeDrop);
 
     // C. Recovery: unblock new connections - live mode resumes, fallback stops.
