@@ -175,6 +175,31 @@ jobs:
       - name: apps/web production build sanity check
         run: test -f apps/web/dist/index.html
 
+      - name: "Reset Dashboard DB account passwords (Playwright's e2e-db-setup.ts mutates the shared MySQL accounts as a side effect)"
+        # apps/web/playwright.config.ts's webServer chain runs
+        # apps/api/scripts/e2e-db-setup.ts before every Playwright run, which
+        # does `ALTER USER 'bunny_dashboard_app'@'%' IDENTIFIED BY 'app_pass'`
+        # (and the same for the migrator account) against this job's SAME
+        # long-lived MySQL service container/global user - MySQL accounts are
+        # global, not scoped to the `bunny_cc_e2e` database that script
+        # otherwise confines itself to, and `ALTER USER` unconditionally
+        # overwrites the password (unlike the earlier `CREATE USER IF NOT
+        # EXISTS` step, which is a no-op on an existing user). Every step
+        # BEFORE the Playwright E2E step in this job used the original
+        # `ci_app_pass`/`ci_migrator_pass` values and passed; nothing ran
+        # after Playwright and relied on that account again until this
+        # correction added one - so the compiled-runtime smoke test below is
+        # the first thing to actually observe the stale password. Re-asserts
+        # the CI-declared passwords immediately before they're needed again,
+        # rather than depending on Playwright's own internal, unrelated
+        # password constant staying whatever it happens to be.
+        run: |
+          mysql -h127.0.0.1 -P3306 -uroot -p"${MYSQL_ROOT_PASSWORD}" <<SQL
+          ALTER USER '${DASHBOARD_APP_DB_USER}'@'%' IDENTIFIED BY '${DASHBOARD_APP_DB_PASSWORD}';
+          ALTER USER '${DASHBOARD_MIGRATOR_DB_USER}'@'%' IDENTIFIED BY '${DASHBOARD_MIGRATOR_DB_PASSWORD}';
+          FLUSH PRIVILEGES;
+          SQL
+
       - name: "Compiled-production-runtime smoke test (Step 04 correction 2): plain 'node dist/server.js' must actually boot"
         # Deliberately NOT just "does dist/server.js exist" - this actually
         # launches the COMPILED artifact (via apps/api's real "start"
