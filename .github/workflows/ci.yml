@@ -106,7 +106,7 @@ jobs:
           MIGRATOR_DB_NAME: ${{ env.MYSQL_DATABASE }}
         run: python database/migrate.py up
 
-      - name: Apply the Dashboard's own migration ledger (currently empty)
+      - name: Apply the Dashboard's own migration ledger (dashboard_users/dashboard_sessions/dashboard_sse_cursor)
         working-directory: apps/api
         env:
           MIGRATOR_DB_HOST: 127.0.0.1

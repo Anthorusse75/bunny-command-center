@@ -38,22 +38,9 @@ import {
   listSessionsForUser,
 } from "./sessionRepo.js";
 import { buildRequireAuth, requireCsrfHeader } from "./requireAuth.js";
+import { setSessionCookie, clearSessionCookie } from "./sessionCookie.js";
 
 const LOGIN_RATE_LIMIT = { max: 10, timeWindow: "15 minutes" };
-
-function setSessionCookie(reply: FastifyReply, config: AppConfig, rawToken: string): void {
-  reply.setCookie(config.session.cookieName, rawToken, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: Math.floor(config.session.slidingTtlMs / 1000),
-  });
-}
-
-function clearSessionCookie(reply: FastifyReply, config: AppConfig): void {
-  reply.clearCookie(config.session.cookieName, { path: "/" });
-}
 
 function hashIp(ip: string): string {
   return createHash("sha256").update(ip, "utf-8").digest("hex");
@@ -208,7 +195,11 @@ export function buildAuthRoutes(db: Kysely<DB>, config: AppConfig): FastifyPlugi
           absoluteTtlMs: config.session.absoluteTtlMs,
         });
 
-        setSessionCookie(reply, config, rawSessionToken);
+        // Fresh session: absolute cap (default 90d) is always farther away
+        // than one sliding window (default 30d) per config's own TTL
+        // invariant, so no clamping is needed here — unlike the renewal
+        // path (requireAuth.ts's onSend hook), which clamps every time.
+        setSessionCookie(reply, config, rawSessionToken, config.session.slidingTtlMs);
         request.log.info({ discordUserIdPresent: true }, "auth: login succeeded");
         reply.redirect(transaction.redirect);
       } catch (err) {
@@ -233,7 +224,7 @@ export function buildAuthRoutes(db: Kysely<DB>, config: AppConfig): FastifyPlugi
         if (rawToken) {
           await deleteSessionByRawToken(db, rawToken);
         }
-        clearSessionCookie(reply, config);
+        clearSessionCookie(reply, config, request);
         return { data: { success: true } };
       },
     );
@@ -248,7 +239,7 @@ export function buildAuthRoutes(db: Kysely<DB>, config: AppConfig): FastifyPlugi
       async (request, reply) => {
         if (reply.sent) return;
         const revokedCount = await deleteAllSessionsForUser(db, request.authUser!.id);
-        clearSessionCookie(reply, config);
+        clearSessionCookie(reply, config, request);
         return { data: { success: true, revokedCount } };
       },
     );
@@ -314,7 +305,7 @@ export function buildAuthRoutes(db: Kysely<DB>, config: AppConfig): FastifyPlugi
           return;
         }
         if (sessionId === request.authSessionId) {
-          clearSessionCookie(reply, config);
+          clearSessionCookie(reply, config, request);
         }
         return { data: { success: true } };
       },

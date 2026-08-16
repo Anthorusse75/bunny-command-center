@@ -12,12 +12,19 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Kysely } from "kysely";
 import { buildServer } from "../../src/server.js";
 import type { AppConfig } from "../../src/config.js";
+import type { DB } from "../../src/db/codegen-types.js";
+import { createKyselyClient } from "../../src/db/kysely.js";
 import { runUp } from "../../migrations/runner.js";
 import type { MigratorDbConfig } from "../../migrations/config.js";
 import { startDiscordTestDouble, type DiscordTestDouble } from "../helpers/discordTestDouble.js";
 import { serializeTransactionCookie, type OAuthTransaction } from "../../src/auth/transactionCookie.js";
+import { createSession } from "../../src/auth/sessionRepo.js";
+import { hashSessionToken } from "../../src/auth/sessionToken.js";
+import { upsertDashboardUser } from "../../src/auth/userRepo.js";
+import { encryptSecret } from "../../src/auth/tokenCrypto.js";
 
 const ROOT_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -132,6 +139,19 @@ async function buildApp(overrides: Partial<AppConfig> = {}): Promise<TestApp> {
 
 function findCookie(cookies: ParsedCookie[], name: string): ParsedCookie | undefined {
   return cookies.find((c) => c.name === name);
+}
+
+async function loginAndGetSessionCookie(app: TestApp): Promise<string> {
+  const loginResponse = await app.inject({ method: "GET", url: "/api/auth/login" });
+  const txnCookie = findCookie(parseSetCookieHeaders(loginResponse.headers["set-cookie"]), "bcc_oauth_txn")!;
+  const location = new URL(loginResponse.headers.location as string);
+  const state = location.searchParams.get("state")!;
+  const callbackResponse = await app.inject({
+    method: "GET",
+    url: `/api/auth/callback?code=login-code-${Math.random()}&state=${state}`,
+    cookies: { bcc_oauth_txn: txnCookie.value },
+  });
+  return findCookie(parseSetCookieHeaders(callbackResponse.headers["set-cookie"]), "bcc_session")!.value;
 }
 
 describe("/api/auth/* (real MySQL + local Discord test double)", () => {
@@ -589,22 +609,6 @@ describe("/api/auth/* (real MySQL + local Discord test double)", () => {
   // Logout / logout-all / individual session management
   // -----------------------------------------------------------------------
   describe("logout / session management", () => {
-    async function loginAndGetSessionCookie(app: TestApp): Promise<string> {
-      const loginResponse = await app.inject({ method: "GET", url: "/api/auth/login" });
-      const txnCookie = findCookie(
-        parseSetCookieHeaders(loginResponse.headers["set-cookie"]),
-        "bcc_oauth_txn",
-      )!;
-      const location = new URL(loginResponse.headers.location as string);
-      const state = location.searchParams.get("state")!;
-      const callbackResponse = await app.inject({
-        method: "GET",
-        url: `/api/auth/callback?code=login-code-${Math.random()}&state=${state}`,
-        cookies: { bcc_oauth_txn: txnCookie.value },
-      });
-      return findCookie(parseSetCookieHeaders(callbackResponse.headers["set-cookie"]), "bcc_session")!.value;
-    }
-
     it("mutating auth routes require the CSRF header (defense-in-depth beyond SameSite=Lax)", async () => {
       const app = await buildApp();
       const sessionCookie = await loginAndGetSessionCookie(app);
@@ -721,6 +725,232 @@ describe("/api/auth/* (real MySQL + local Discord test double)", () => {
         headers: { "x-requested-with": "BunnyCommandCenter" },
       });
       expect(response.statusCode).toBe(404);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Sliding session cookie renewal (correction pass — the sliding session
+  // was only ever sliding server-side; the browser's own bcc_session cookie
+  // never renewed, so an active user's browser cookie could expire days
+  // before the DB row did. These tests would all FAIL against the pre-
+  // correction HEAD, since that HEAD never re-emits bcc_session on an
+  // ordinary authenticated request at all.)
+  // -----------------------------------------------------------------------
+  describe("sliding session cookie renewal (correction pass)", () => {
+    let db: Kysely<DB>;
+
+    beforeAll(() => {
+      db = createKyselyClient(dbConfig);
+    });
+
+    afterAll(async () => {
+      await db.destroy();
+    });
+
+    async function createRawSessionForClampTest(
+      rawToken: string,
+      params: { slidingTtlMs: number; absoluteTtlMs: number; now?: Date },
+    ): Promise<void> {
+      const user = await upsertDashboardUser(db, {
+        discordUserId: `92${Math.floor(Math.random() * 1_000_000_000)}`,
+        username: "SlidingCookieTestUser",
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("fake-access-value", TOKEN_ENCRYPTION_KEY),
+        encryptedRefreshToken: encryptSecret("fake-refresh-value", TOKEN_ENCRYPTION_KEY),
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      });
+      await createSession(db, rawToken, {
+        userId: user.id,
+        deviceLabel: null,
+        userAgent: null,
+        ipHash: null,
+        ...params,
+      });
+    }
+
+    it("A. COOKIE SLIDES: a valid authenticated request re-issues bcc_session with a fresh ~30-day Max-Age, and the same server session stays valid", async () => {
+      const app = await buildApp();
+      const sessionCookie = await loginAndGetSessionCookie(app);
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        cookies: { bcc_session: sessionCookie },
+      });
+      expect(response.statusCode).toBe(200);
+
+      const renewed = findCookie(parseSetCookieHeaders(response.headers["set-cookie"]), "bcc_session");
+      expect(renewed).toBeDefined();
+      // Same opaque token — ordinary sliding renewal must NEVER silently
+      // become per-request session-token rotation (login-only, per ADR-020).
+      expect(renewed!.value).toBe(sessionCookie);
+      expect(renewed!.httpOnly).toBe(true);
+      expect(renewed!.secure).toBe(true);
+      expect(renewed!.sameSite?.toLowerCase()).toBe("lax");
+      expect(renewed!.path).toBe("/");
+      const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+      expect(renewed!.maxAge).toBeGreaterThan(THIRTY_DAYS_SECONDS - 10);
+      expect(renewed!.maxAge).toBeLessThanOrEqual(THIRTY_DAYS_SECONDS);
+
+      // Still the SAME server-side session — the identical, never-rotated
+      // token keeps working on a second authenticated read.
+      const secondResponse = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        cookies: { bcc_session: sessionCookie },
+      });
+      expect(secondResponse.statusCode).toBe(200);
+    });
+
+    it("B/E. COOKIE IS CLAMPED TO ABSOLUTE TTL: a session close to its absolute cap renews with Max-Age clamped to the remaining absolute lifetime, never the full 30-day sliding TTL — both the cookie and the DB row converge on the identical hard cap", async () => {
+      const app = await buildApp();
+      const rawToken = `absolute-clamp-token-${Math.random()}`;
+      const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+
+      // A sliding TTL far beyond the 5-day absolute cap isolates the clamp
+      // behavior from needing 85 real days of elapsed time / repeated
+      // touchSession calls to reach "close to the absolute cap."
+      await createRawSessionForClampTest(rawToken, {
+        slidingTtlMs: 365 * 24 * 60 * 60 * 1000,
+        absoluteTtlMs: FIVE_DAYS_MS,
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        cookies: { bcc_session: rawToken },
+      });
+      expect(response.statusCode).toBe(200);
+
+      const renewed = findCookie(parseSetCookieHeaders(response.headers["set-cookie"]), "bcc_session")!;
+      const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+      const FIVE_DAYS_SECONDS = FIVE_DAYS_MS / 1000;
+      expect(renewed.maxAge).toBeLessThan(THIRTY_DAYS_SECONDS);
+      expect(renewed.maxAge).toBeGreaterThan(FIVE_DAYS_SECONDS - 30);
+      expect(renewed.maxAge).toBeLessThanOrEqual(FIVE_DAYS_SECONDS);
+
+      // Server-side convergence: the DB row's own sliding expires_at must
+      // now equal its absolute_expires_at (the SQL CASE clamp in
+      // touchSession), the exact same hard cap the cookie above reflects.
+      const row = await db
+        .selectFrom("dashboard_sessions")
+        .selectAll()
+        .where("id", "=", hashSessionToken(rawToken))
+        .executeTakeFirstOrThrow();
+      expect(row.expires_at.getTime()).toBe(row.absolute_expires_at.getTime());
+    });
+
+    it("C. NO RENEWAL FOR INVALID SESSION: missing/forged/expired/revoked cookies get 401 and never a refreshed bcc_session", async () => {
+      const app = await buildApp();
+
+      const missing = await app.inject({ method: "GET", url: "/api/auth/session" });
+      expect(missing.statusCode).toBe(401);
+      expect(findCookie(parseSetCookieHeaders(missing.headers["set-cookie"]), "bcc_session")).toBeUndefined();
+
+      const forged = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        cookies: { bcc_session: "totally-forged-token-value" },
+      });
+      expect(forged.statusCode).toBe(401);
+      expect(findCookie(parseSetCookieHeaders(forged.headers["set-cookie"]), "bcc_session")).toBeUndefined();
+
+      const expiredToken = `expired-sliding-token-${Math.random()}`;
+      await createRawSessionForClampTest(expiredToken, {
+        slidingTtlMs: -1000, // already past its sliding TTL
+        absoluteTtlMs: 60 * 60 * 1000,
+      });
+      const expiredResponse = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        cookies: { bcc_session: expiredToken },
+      });
+      expect(expiredResponse.statusCode).toBe(401);
+      expect(
+        findCookie(parseSetCookieHeaders(expiredResponse.headers["set-cookie"]), "bcc_session"),
+      ).toBeUndefined();
+
+      // Revoked: a real login, then the DB row is deleted directly
+      // (simulating revocation via another device/admin action), then the
+      // now-dead cookie is presented again.
+      const revokedCookie = await loginAndGetSessionCookie(app);
+      await db.deleteFrom("dashboard_sessions").where("id", "=", hashSessionToken(revokedCookie)).execute();
+      const revokedResponse = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        cookies: { bcc_session: revokedCookie },
+      });
+      expect(revokedResponse.statusCode).toBe(401);
+      expect(
+        findCookie(parseSetCookieHeaders(revokedResponse.headers["set-cookie"]), "bcc_session"),
+      ).toBeUndefined();
+    });
+
+    it("D. LOGOUT / LOGOUT-ALL / REVOKE-CURRENT: exactly one, unambiguously CLEARED bcc_session Set-Cookie — never a valid renewed cookie racing (or resurrecting) the clear in the same response", async () => {
+      const app = await buildApp();
+
+      // requireAuth's preHandler runs before EVERY one of these route
+      // handlers and populates request.pendingSessionRenewal on each — this
+      // proves the clear path always wins outright, never leaving a second,
+      // still-valid Set-Cookie header alongside the cleared one.
+      const logoutSession = await loginAndGetSessionCookie(app);
+      const logoutResponse = await app.inject({
+        method: "POST",
+        url: "/api/auth/logout",
+        cookies: { bcc_session: logoutSession },
+        headers: { "x-requested-with": "BunnyCommandCenter" },
+      });
+      const logoutSetCookies = parseSetCookieHeaders(logoutResponse.headers["set-cookie"]).filter(
+        (c) => c.name === "bcc_session",
+      );
+      expect(logoutSetCookies).toHaveLength(1);
+      expect(logoutSetCookies[0]!.expired).toBe(true);
+
+      const logoutAllSession = await loginAndGetSessionCookie(app);
+      const logoutAllResponse = await app.inject({
+        method: "POST",
+        url: "/api/auth/logout-all",
+        cookies: { bcc_session: logoutAllSession },
+        headers: { "x-requested-with": "BunnyCommandCenter" },
+      });
+      const logoutAllSetCookies = parseSetCookieHeaders(logoutAllResponse.headers["set-cookie"]).filter(
+        (c) => c.name === "bcc_session",
+      );
+      expect(logoutAllSetCookies).toHaveLength(1);
+      expect(logoutAllSetCookies[0]!.expired).toBe(true);
+
+      const currentSession = await loginAndGetSessionCookie(app);
+      const listResponse = await app.inject({
+        method: "GET",
+        url: "/api/auth/sessions",
+        cookies: { bcc_session: currentSession },
+      });
+      const currentSessionId = listResponse
+        .json<{ data: { id: string; isCurrent: boolean }[] }>()
+        .data.find((s) => s.isCurrent)!.id;
+      const revokeCurrentResponse = await app.inject({
+        method: "DELETE",
+        url: `/api/auth/sessions/${currentSessionId}`,
+        cookies: { bcc_session: currentSession },
+        headers: { "x-requested-with": "BunnyCommandCenter" },
+      });
+      const revokeCurrentSetCookies = parseSetCookieHeaders(
+        revokeCurrentResponse.headers["set-cookie"],
+      ).filter((c) => c.name === "bcc_session");
+      expect(revokeCurrentSetCookies).toHaveLength(1);
+      expect(revokeCurrentSetCookies[0]!.expired).toBe(true);
+
+      // All three cleared sessions genuinely fail closed afterward — a
+      // conflicting renewed cookie header, if it existed, would still show
+      // up here as a lingering-valid session.
+      for (const cookie of [logoutSession, logoutAllSession, currentSession]) {
+        const readback = await app.inject({
+          method: "GET",
+          url: "/api/auth/session",
+          cookies: { bcc_session: cookie },
+        });
+        expect(readback.statusCode).toBe(401);
+      }
     });
   });
 });

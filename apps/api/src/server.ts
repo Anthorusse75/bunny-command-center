@@ -15,7 +15,12 @@ import {
   type SseCursorRepo,
   type SsePollerHandle,
 } from "./sse/index.js";
-import { buildAuthRoutes, startSessionSweep, type SessionSweepHandle } from "./auth/index.js";
+import {
+  buildAuthRoutes,
+  createSessionCookieRenewalHook,
+  startSessionSweep,
+  type SessionSweepHandle,
+} from "./auth/index.js";
 
 /**
  * In-process-only test seam (never an HTTP-reachable route - mission §35:
@@ -68,6 +73,13 @@ export async function buildServer(config = loadAppConfig()) {
   // rather than relying on this plugin's generic cookie-signing feature for
   // every cookie in the app.
   await fastify.register(fastifyCookie);
+  // Sliding session-cookie renewal (Step 04 correction pass, ADR-020: "30-day
+  // sliding window refreshed on any authenticated request") — registered
+  // once, globally on the root instance, so it covers every current AND
+  // future route gated by `requireAuth`, not just today's `/api/auth/*` set.
+  // See requireAuth.ts's `createSessionCookieRenewalHook` doc comment for why
+  // this lives in an `onSend` hook rather than inside `requireAuth` itself.
+  fastify.addHook("onSend", createSessionCookieRenewalHook(config));
   // Rate limiting (27_SECURITY.md: "/api/auth/login, /api/auth/callback:
   // tight rate limit per IP"). Global default is generous; the login/callback
   // routes set their own tighter `config.rateLimit` (auth/routes.ts).
