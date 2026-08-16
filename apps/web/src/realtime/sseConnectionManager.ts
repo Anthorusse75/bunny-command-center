@@ -45,6 +45,34 @@ export interface EventSourceFactory {
   readonly CLOSED: number;
 }
 
+/**
+ * TEST-ONLY (mission §35/§39 - "test-only seams MUST NOT become production
+ * backdoors"; correctness-review round 3, test-only bundle hygiene). Never
+ * named class methods (see `SseConnectionManagerOptions.registerTestOnlyControls`'s
+ * own doc comment for why), and never wired unless a caller EXPLICITLY
+ * supplies the option - the ordinary production `SseProvider.tsx` only does
+ * so inside a build-time-eliminable branch (`import.meta.env.VITE_ENABLE_REALTIME_TEST_PROBE`),
+ * so an ordinary production build never even calls this constructor option.
+ */
+export interface SseTestOnlyControls {
+  /** Closes the real EventSource and drives the real ERROR/grace/fatal-retry code paths - apps/web/e2e/realtime.spec.ts's Case-B ("D. RESUME") proof. */
+  forceDisconnect: () => void;
+  /**
+   * Same as `forceDisconnect`, but first seeds `lastKnownEventId` with an
+   * arbitrary value BEFORE triggering the reconnect - lets a real-browser
+   * test establish the CURSOR_AHEAD precondition (a business-source cursor
+   * this browser never actually received) through the SAME production
+   * Case-B reconnect mechanism `forceDisconnect` uses, without needing to
+   * insert an unrealistic number of real rows to reach that ordinal
+   * naturally. Everything AFTER this seed - resync_required handling,
+   * clearing the poisoned value, resuming live delivery - is the real,
+   * unmodified product code path (apps/web/e2e/realtime.spec.ts's "F.
+   * CURSOR_AHEAD" test never calls this a second time and never manipulates
+   * `lastKnownEventId` directly itself).
+   */
+  forceDisconnectWithSeededCursor: (id: string) => void;
+}
+
 export interface SseConnectionManagerOptions {
   url: string;
   eventSourceFactory: EventSourceFactory;
@@ -56,6 +84,19 @@ export interface SseConnectionManagerOptions {
   onEvent?: (eventType: string, data: unknown, rawId: string | null) => void;
   /** Invoked specifically for `resync_required` - separate from `onEvent` because it typically drives a broader "invalidate everything in this scope" action, not a single mapped query key. */
   onResyncRequired?: (data: unknown) => void;
+  /**
+   * TEST-ONLY extension point (correctness-review round 3). If provided,
+   * called ONCE, synchronously, from the constructor with a fresh
+   * `SseTestOnlyControls` object built from anonymous closures over this
+   * manager's private state - deliberately NOT exposed as named public
+   * class methods, so an ordinary production `SseConnectionManager`
+   * instance (which never receives this option - see `SseProvider.tsx`)
+   * has no discoverable, callable test-only API surface at all, and the
+   * literal strings `forceDisconnectForTests`/`simulateNetworkDropForTests`
+   * never appear anywhere in this class. Never called in production - only
+   * `SseProvider.tsx`'s own build-time-eliminable E2E branch supplies it.
+   */
+  registerTestOnlyControls?: (controls: SseTestOnlyControls) => void;
 }
 
 const FATAL_RETRY_BASE_MS_DEFAULT = 1000;
@@ -97,6 +138,52 @@ export class SseConnectionManager {
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
     }
+    // TEST-ONLY (mission §35/§37, correctness-review round 3): simulates a
+    // genuine real network drop of an already-OPEN connection. Exists
+    // because real browser automation tools (Playwright/CDP's
+    // `context.setOffline()`) were found, empirically, to flip
+    // `navigator.onLine` correctly but NOT to actually terminate an
+    // already-established long-lived HTTP/1.1 streaming socket - heartbeats
+    // kept flowing straight through the "offline" emulation, a real
+    // limitation of that automation layer, not a fact about production
+    // networks. These closures drive the exact same production code paths a
+    // genuine drop would (`ERROR` dispatch, the real grace timer, the real
+    // fatal-retry reconnect) - they do not fabricate a state transition,
+    // they trigger the real ones. Deliberately anonymous (never named class
+    // methods - see `SseConnectionManagerOptions.registerTestOnlyControls`'s
+    // own doc comment).
+    //
+    // The `import.meta.env.VITE_ENABLE_REALTIME_TEST_PROBE === "true"` guard
+    // here is NOT redundant with the caller-side optionality of
+    // `opts.registerTestOnlyControls` (correctness-review round 3, "do not
+    // merely rename the symbol"): without it, THIS constructor body would
+    // unconditionally compile the `{ forceDisconnect, forceDisconnectWithSeededCursor }`
+    // object literal into `sseConnectionManager.ts` itself regardless of
+    // what any CALLER passes - `SseConnectionManager` is a core, always-
+    // shipped production class, so an `?.()` optional call alone cannot make
+    // Vite/Terser dead-code-eliminate the object literal's own key strings
+    // (confirmed the hard way: this is exactly what leaked
+    // `forceDisconnectForTests` into the real production bundle in the
+    // FIRST place, and initially reappeared here as
+    // `forceDisconnectWithSeededCursor`/`registerTestOnlyControls` before
+    // this guard was added - verified via the real built
+    // dist/assets/*.js, not assumed). Dot-notation access is required for
+    // the same reason `SseProvider.tsx`/`RealtimeTestProbe.tsx` document.
+    if (import.meta.env.VITE_ENABLE_REALTIME_TEST_PROBE === "true") {
+      this.opts.registerTestOnlyControls?.({
+        forceDisconnect: () => {
+          this.es?.close();
+          this.dispatch({ type: "ERROR" });
+          this.scheduleFatalRetry();
+        },
+        forceDisconnectWithSeededCursor: (id: string) => {
+          this.lastKnownEventId = id;
+          this.es?.close();
+          this.dispatch({ type: "ERROR" });
+          this.scheduleFatalRetry();
+        },
+      });
+    }
   }
 
   getState(): RealtimeTransportState {
@@ -105,28 +192,6 @@ export class SseConnectionManager {
 
   isPollingFallbackActive(): boolean {
     return isPollingFallbackActive(this.state);
-  }
-
-  /**
-   * TEST-ONLY (mission §35/§37): simulates a genuine real network drop of an
-   * already-OPEN connection. Exists because real browser automation tools
-   * (Playwright/CDP's `context.setOffline()`) were found, empirically, to
-   * flip `navigator.onLine` correctly but NOT to actually terminate an
-   * already-established long-lived HTTP/1.1 streaming socket - heartbeats
-   * kept flowing straight through the "offline" emulation, which is a real
-   * limitation of that automation layer, not a fact about production
-   * networks. This method closes the real EventSource and drives the exact
-   * same production code paths a genuine drop would (`ERROR` dispatch, the
-   * real grace timer, the real fatal-retry reconnect) - it does not
-   * fabricate a state transition, it triggers the real ones. Only ever
-   * called from apps/web/e2e/realtime.spec.ts, and only ever reachable in a
-   * build where `RealtimeTestProbe` itself is compiled in (see
-   * `realtimeTestProbeEnabled()` - stripped from real production builds).
-   */
-  forceDisconnectForTests(): void {
-    this.es?.close();
-    this.dispatch({ type: "ERROR" });
-    this.scheduleFatalRetry();
   }
 
   /** Extension point: `useRealtimeChannel` registers here so a future feature's own event type gets a native listener attached (mission §56/§54's "extension point future steps use to add a new channel/event type"). */

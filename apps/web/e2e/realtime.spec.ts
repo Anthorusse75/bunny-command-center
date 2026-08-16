@@ -27,6 +27,13 @@
  *   E. GAP          - a Last-Event-ID whose history was pruned server-side
  *                     triggers `resync_required` (never a silent partial
  *                     replay).
+ *   F. CURSOR_AHEAD  - a deliberately future business-source cursor
+ *                     (`sourceIndex:999999999`) is rejected by the server
+ *                     (`resync_required`/`CURSOR_AHEAD`), and the PRODUCT's
+ *                     own recovery (never this test) ensures the rejected
+ *                     value can never resurface - not on the connection
+ *                     that triggered it, and not on a SECOND, independent
+ *                     reconnect afterward.
  *   Multi-tab dedup - two real browser CONTEXTS (two real tabs), real
  *                     BroadcastChannel, exactly one claims the toast for
  *                     the same server-broadcast event.
@@ -54,14 +61,20 @@
  *     never manually instantiates a replacement `EventSource`, and never
  *     mocks a request header - the SAME browser-owned `EventSource` object
  *     reconnects entirely on its own.
- *   - Case B (application bootstrap, test D below): induced via
+ *   - Case B (application bootstrap, tests D and F below): induced via
  *     `window.__bccE2E.forceDisconnect()` (apps/web/src/realtime/sseConnectionManager.ts's
- *     `forceDisconnectForTests`, gated the same way `RealtimeTestProbe` is -
- *     stripped from real production builds), which closes the real
- *     `EventSource` and drives the exact same production `ERROR`/grace-
- *     timer/fatal-retry code paths a genuine drop would, including
- *     constructing a genuinely NEW `EventSource` object with the
- *     `?lastEventId=` query bootstrap.
+ *     anonymous test-only closures, wired through `SseConnectionManagerOptions.registerTestOnlyControls`
+ *     and gated the same way `RealtimeTestProbe` is - see that file's own
+ *     `check-no-test-only-symbols.ts`-verified elimination from real
+ *     production builds), which closes the real `EventSource` and drives the
+ *     exact same production `ERROR`/grace-timer/fatal-retry code paths a
+ *     genuine drop would, including constructing a genuinely NEW
+ *     `EventSource` object with the `?lastEventId=` query bootstrap. Test F
+ *     uses the sibling `window.__bccE2E.forceDisconnectWithSeededCursor(id)`
+ *     - identical mechanism, except it first seeds the value this bootstrap
+ *     carries, letting the test establish the CURSOR_AHEAD precondition
+ *     without needing to insert an unrealistic number of real rows to reach
+ *     that ordinal naturally.
  *
  * `page.route()` is used separately (test B/C) to genuinely block NEW
  * connection attempts at the network layer for the grace->polling scenario.
@@ -119,6 +132,20 @@ async function receivedLabels(page: Page): Promise<string[]> {
 async function forceDisconnect(page: Page): Promise<void> {
   await expect(probe(page)).toHaveAttribute("data-e2e-controls-ready", "true");
   await page.evaluate(() => window.__bccE2E?.forceDisconnect());
+}
+
+/**
+ * Same production Case-B reconnect mechanism as `forceDisconnect`, except it
+ * first seeds the manager's OWN `lastKnownEventId` with `id` before
+ * triggering the reconnect - lets test F establish the CURSOR_AHEAD
+ * precondition (a business-source cursor this browser never actually
+ * received) through real product code, without inserting an unrealistic
+ * number of real rows to reach that ordinal naturally. Everything AFTER this
+ * call is unmodified product recovery.
+ */
+async function forceDisconnectWithPoisonedCursor(page: Page, poisonedId: string): Promise<void> {
+  await expect(probe(page)).toHaveAttribute("data-e2e-controls-ready", "true");
+  await page.evaluate((id) => window.__bccE2E?.forceDisconnectWithSeededCursor(id), poisonedId);
 }
 
 test.describe("Realtime infrastructure (real browser, real API server)", () => {
@@ -313,6 +340,127 @@ test.describe("Realtime infrastructure (real browser, real API server)", () => {
     // The pruned rows must never appear as if they were replayed.
     const labels = await receivedLabels(page);
     expect(labels).not.toContain("will-be-pruned-2");
+  });
+
+  test("F. CURSOR_AHEAD: the product autonomously recovers from a rejected future cursor - the poisoned position never resurfaces, even across a second, independent reconnect", async ({
+    page,
+  }) => {
+    const streamRequests: { url: string; headers: Record<string, string> }[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/stream") {
+        void request.allHeaders().then((headers) => {
+          streamRequests.push({ url: request.url(), headers });
+        });
+      }
+    });
+
+    await page.goto("/");
+    await waitForTransportState(page, "LIVE");
+    await expect.poll(() => streamRequests.length, { timeout: 5_000 }).toBe(1);
+
+    await insertTestRow("baseline-before-cursor-ahead");
+    await expect
+      .poll(async () => receivedLabels(page), { timeout: 10_000 })
+      .toContain("baseline-before-cursor-ahead");
+
+    const resyncCountBefore = Number((await probe(page).getAttribute("data-resync-count")) ?? "0");
+
+    // Seed a deliberately future business-source cursor (source 1 is the
+    // real synthetic test source - see helpers/sseTestSource.ts's
+    // TEST_SOURCE_INDEX) and reconnect with it - the SAME production Case-B
+    // mechanism test D already validates, carrying a value this browser
+    // never actually received instead of a real previously-seen one.
+    const POISONED_ID = "1:999999999";
+    await forceDisconnectWithPoisonedCursor(page, POISONED_ID);
+
+    await expect.poll(() => streamRequests.length, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    const poisonedReconnect = streamRequests[1]!;
+    // Sanity check on the precondition itself: this reconnect really did
+    // carry the untrustworthy cursor via the query bootstrap (Case B, same
+    // as test D) - never the header, since this is a brand-new EventSource.
+    expect(new URL(poisonedReconnect.url).searchParams.get("lastEventId")).toBe(POISONED_ID);
+    expect(poisonedReconnect.headers["last-event-id"]).toBeUndefined();
+
+    // The SERVER detects CURSOR_AHEAD and sends resync_required. From this
+    // point on, EVERYTHING is the PRODUCT's own recovery
+    // (apps/api/src/sse/hub.ts's `resetSourceVector` server-side,
+    // apps/web/src/realtime/sseConnectionManager.ts's `lastKnownEventId`
+    // clearing client-side) - this test performs no client-side cleanup, no
+    // manual EventSource manipulation, and no manual server-vector reset of
+    // its own.
+    await expect
+      .poll(async () => Number((await probe(page).getAttribute("data-resync-count")) ?? "0"), {
+        timeout: 15_000,
+      })
+      .toBeGreaterThan(resyncCountBefore);
+
+    // A genuinely new durable row - proves the browser converges on real
+    // data on the SAME (already-open, now self-healed) connection, rather
+    // than remaining stuck believing it is already caught up to 999999999.
+    await insertTestRow("after-cursor-ahead-recovery");
+    await expect
+      .poll(async () => receivedLabels(page), { timeout: 10_000 })
+      .toContain("after-cursor-ahead-recovery");
+
+    // Cause one MORE, entirely independent connection loss - this time via
+    // the NATIVE mechanism (the same real server-side network-level failure
+    // test A2 uses), which exercises the BROWSER's own internal
+    // Last-Event-ID tracking - a genuinely different code path from the
+    // app-level `lastKnownEventId` the poisoned seed above manipulated. If
+    // the server-side fix (`resetSourceVector`) were incomplete, this is
+    // where a resurrected 999999999 would surface.
+    const triggerRowId = await insertTestRow("TRIGGER_NATIVE_DROP");
+    await expect.poll(async () => receivedLabels(page), { timeout: 5_000 }).toContain("TRIGGER_NATIVE_DROP");
+    await expect.poll(() => streamRequests.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
+
+    const secondReconnect = streamRequests[streamRequests.length - 1]!;
+    const observedLastEventId = secondReconnect.headers["last-event-id"];
+    expect(observedLastEventId).toBeDefined();
+    // The REAL new durable ordinal, proven the same way test A2 proves it -
+    // and, critically, never the poisoned value, on the STANDARD header
+    // this time (this is a native reconnect of the SAME EventSource object,
+    // not a query bootstrap - Case A owns this reconnect, not this layer's
+    // code). This is the load-bearing assertion: the browser's own internal
+    // Last-Event-ID tracking, built from real received frames only, never
+    // absorbed the poison, because the server-side fix
+    // (`SseHub.resetSourceVector`) had already scrubbed it from every frame
+    // this connection emitted from CURSOR_AHEAD onward.
+    expect(observedLastEventId).toContain(`1:${triggerRowId}`);
+    expect(observedLastEventId).not.toContain("999999999");
+    // NOTE: this reconnect's URL itself may still contain the STALE
+    // `?lastEventId=1:999999999` query string - native EventSource reuses
+    // the EXACT url it was originally constructed with (this object was
+    // constructed by the earlier Case-B poisoned reconnect), it never
+    // regenerates the url for its own native retries. That is harmless and
+    // expected, not a resurrection of the poison: the query is only ever
+    // consulted when NO valid header is present (the precedence rule
+    // apps/api/test/sse-stream.test.ts's "Last-Event-ID precedence" suite
+    // proves exhaustively), and a native reconnect always carries a real
+    // header once any frame has been received on this object - which the
+    // assertions above already confirm happened correctly.
+
+    // Subsequent real events still arrive once, without gap or duplicate.
+    await insertTestRow("after-second-reconnect");
+    await expect
+      .poll(async () => receivedLabels(page), { timeout: 15_000 })
+      .toEqual(
+        expect.arrayContaining([
+          "baseline-before-cursor-ahead",
+          "after-cursor-ahead-recovery",
+          "TRIGGER_NATIVE_DROP",
+          "after-second-reconnect",
+        ]),
+      );
+    const finalLabels = await receivedLabels(page);
+    for (const label of [
+      "baseline-before-cursor-ahead",
+      "after-cursor-ahead-recovery",
+      "TRIGGER_NATIVE_DROP",
+      "after-second-reconnect",
+    ]) {
+      expect(finalLabels.filter((l) => l === label)).toHaveLength(1);
+    }
   });
 
   test.describe("multi-tab dedup", () => {

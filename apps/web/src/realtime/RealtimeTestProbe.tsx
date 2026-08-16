@@ -32,7 +32,7 @@ const PROBE_POLL_INTERVAL_MS = 1000;
 
 declare global {
   interface Window {
-    __bccE2E?: { forceDisconnect: () => void };
+    __bccE2E?: { forceDisconnect: () => void; forceDisconnectWithSeededCursor: (id: string) => void };
   }
 }
 
@@ -56,20 +56,20 @@ export function realtimeTestProbeEnabled(): boolean {
 
 export function RealtimeTestProbe(): React.JSX.Element | null {
   const status = useRealtimeStatus();
-  const { forceDisconnect } = useRealtimeTestControls();
+  const { forceDisconnect, forceDisconnectWithSeededCursor } = useRealtimeTestControls();
   const [receivedLabels, setReceivedLabels] = useState<string[]>([]);
   const [resyncCount, setResyncCount] = useState(0);
   const [toastClaims, setToastClaims] = useState<string[]>([]);
 
-  // Exposes the same test-only disconnect seam Playwright drives
+  // Exposes the same test-only disconnect seams Playwright drives
   // (apps/web/e2e/realtime.spec.ts) - never assigned in a real production
   // build (this whole component is compiled out there).
   useEffect(() => {
-    window.__bccE2E = { forceDisconnect };
+    window.__bccE2E = { forceDisconnect, forceDisconnectWithSeededCursor };
     return () => {
       delete window.__bccE2E;
     };
-  }, [forceDisconnect]);
+  }, [forceDisconnect, forceDisconnectWithSeededCursor]);
 
   useRealtimeChannel<{ label: string }>(TEST_EVENT_TYPE, (data) => {
     setReceivedLabels((current) => [...current, data.label]);
