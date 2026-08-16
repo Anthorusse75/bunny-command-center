@@ -30,13 +30,25 @@ function formatSseFrame(params: { event: string; id?: string; data: unknown; ret
 /**
  * Bounded, backpressure-aware writer for one connection's underlying HTTP
  * response (mission §16: "A slow client must not cause unlimited memory
- * growth ... bounded queues; dropped/coalesced invalidations"; mission §15:
- * "Where Node stream backpressure applies, respect it"). Respects
- * `res.write()`'s own boolean return value and the `drain` event rather than
- * reimplementing flow control - when the queue bound is exceeded, the OLDEST
- * queued frame is dropped (the client will still catch up to "current" on
- * its next reconnect via Last-Event-ID/resync, so losing an old queued frame
- * is safe - SSE events are invalidation hints, never mutations, mission §27).
+ * growth ... bounded queues"; mission §15: "Where Node stream backpressure
+ * applies, respect it"). Respects `res.write()`'s own boolean return value
+ * and the `drain` event rather than reimplementing flow control.
+ *
+ * CORRECTNESS-REVIEW DEFECT 1 FIX: once the queue bound is exceeded, the
+ * connection is TERMINATED, never kept open with an individual frame
+ * silently dropped. The earlier "drop the oldest queued frame and keep
+ * advancing the stream" design was unsafe specifically because these frames
+ * carry the connection's `id:` cursor: dropping frame N while still sending
+ * frame N+1 (with a NEWER id) lets the client's Last-Event-ID silently skip
+ * past the dropped event - on reconnect it asks for events AFTER the id it
+ * actually has, so the dropped one can never be replayed (SSE events being
+ * "invalidation hints, never mutations" does not help here - the id itself,
+ * not just the payload, is the thing that must never lie about what was
+ * delivered). Terminating instead means the client's own last ACTUALLY
+ * received id is the only position it can ever claim on reconnect, and
+ * ordinary Last-Event-ID replay (or `resync_required`, if retention already
+ * lost the gap) fills in the rest - see `onOverflow` below and
+ * `apps/api/test/sse-hub.test.ts`'s "backpressure overflow" tests.
  */
 class BackpressureWriter {
   private queue: string[] = [];
@@ -46,7 +58,7 @@ class BackpressureWriter {
   constructor(
     private readonly res: ServerResponse,
     private readonly maxQueued: number,
-    private readonly onDrop: () => void,
+    private readonly onOverflow: () => void,
   ) {
     this.res.on("drain", () => this.flush());
   }
@@ -72,10 +84,20 @@ class BackpressureWriter {
   }
 
   private enqueue(chunk: string): void {
+    if (this.closed) {
+      return;
+    }
     this.queue.push(chunk);
-    while (this.queue.length > this.maxQueued) {
-      this.queue.shift();
-      this.onDrop();
+    if (this.queue.length > this.maxQueued) {
+      // Hard safety bound reached - terminate rather than drop-and-continue
+      // (see class doc comment above). No later `write()` call can ever
+      // reach the client after this point (the `closed` flag makes every
+      // subsequent `write`/`enqueue` a silent no-op), so no cursor-bearing
+      // frame beyond this point can ever be delivered out of order with
+      // respect to the dropped one.
+      this.closed = true;
+      this.queue = [];
+      this.onOverflow();
     }
   }
 
@@ -110,13 +132,18 @@ class BackpressureWriter {
 export interface SseConnectionHandle {
   readonly connectionId: string;
   readonly scopes: ReadonlySet<SseChannelScope>;
-  /** A durable, replayable business/heartbeat event - advances this connection's own id vector for `sourceIndex`. */
+  /** A durable, replayable business/heartbeat event - advances this connection's own id vector for `sourceIndex`. Always written directly (never buffered by replay/live phase - see class doc comment): the caller is either the connection's OWN replay/heartbeat, never the poller's cross-connection fan-out. */
   sendEvent(sourceIndex: number, ordinal: number, eventType: string, data: unknown): void;
-  /** A control frame (`resync_required`) - carries no `id:`, never advances the vector (mission: control signals are not durable positions). */
+  /** A control frame (`resync_required`) - carries no `id:`, never advances the vector (mission: control signals are not durable positions). Always written directly, same reasoning as `sendEvent`. */
   sendControl(eventType: string, data: unknown): void;
   close(reason: string): void;
   readonly queuedFrameCount: number;
 }
+
+/** One item buffered on a still-REPLAYING connection's bridge buffer - see `SseHub`'s class doc comment. */
+type BufferedBroadcast =
+  | { readonly kind: "event"; sourceIndex: number; ordinal: number; eventType: string; data: unknown }
+  | { readonly kind: "control"; eventType: string; data: unknown };
 
 interface InternalConnection {
   readonly id: string;
@@ -125,6 +152,14 @@ interface InternalConnection {
   writer: BackpressureWriter;
   heartbeatLocalCounter: number;
   res: ServerResponse;
+  /**
+   * REPLAYING until the connection's own catch-up (apps/api/src/sse/route.ts's
+   * `replayOrResync`) explicitly calls `completeReplay` - see class doc
+   * comment for why this exists (correctness-review defect 3).
+   */
+  phase: "REPLAYING" | "LIVE";
+  bridgeBuffer: BufferedBroadcast[];
+  readonly maxBridgeBufferFrames: number;
 }
 
 /**
@@ -135,6 +170,34 @@ interface InternalConnection {
  * to every connection subscribed to that scope, and how to keep each
  * connection's per-connection Last-Event-ID vector correct
  * (packages/shared/src/realtime/envelope.ts's `SseCursorVector`).
+ *
+ * REPLAY <-> LIVE SERIALIZATION (correctness-review defect 3): a freshly
+ * registered, resuming connection starts in the `REPLAYING` phase. While
+ * REPLAYING, `broadcast`/`broadcastControl` (the poller's cross-connection
+ * fan-out - never this connection's OWN replay/heartbeat calls, which use
+ * `sendEvent`/`sendControl` directly and are unaffected) do not write to the
+ * connection at all - they push onto a bounded per-connection bridge buffer
+ * instead. This exists because `route.ts`'s `replayOrResync` snapshots each
+ * source's target watermark and then asynchronously pages through history to
+ * reach it; if the poller broadcast a genuinely newer row for that same
+ * source WHILE that paging was still in flight, the connection would receive
+ * frames out of the order its own id vector implies (e.g. an id jump ahead
+ * via the live broadcast, immediately followed by an older replay frame that
+ * can no longer advance the vector at all - `advanceVector` is monotonic by
+ * design, so that older frame's `id:` would silently show the ALREADY-newer
+ * position instead of its own, which is exactly the "payload ordering
+ * inconsistent with the cursor position" defect). Once `replayOrResync`
+ * finishes (successfully or via a per-source resync), it calls
+ * `completeReplay`, which flips the connection to `LIVE` and flushes the
+ * bridge buffer in the order items were buffered - by construction, every
+ * buffered item's ordinal is guaranteed to be ABOVE whatever replay itself
+ * delivered for that source (the poller only ever broadcasts after
+ * advancing `dashboard_sse_cursor` past whatever `replayOrResync` already
+ * snapshotted as its target), so flushing in arrival order can never
+ * duplicate or invert a source's sequence. If the buffer itself would
+ * overflow before replay finishes, the connection is terminated (the same
+ * fail-safe `BackpressureWriter` uses for its own bound, and for the exact
+ * same reason - never silently drop a cursor-bearing event and continue).
  */
 export class SseHub {
   private readonly connections = new Map<string, InternalConnection>();
@@ -148,7 +211,8 @@ export class SseHub {
   }): SseConnectionHandle {
     const id = randomUUID();
     const writer = new BackpressureWriter(params.res, params.maxQueuedFrames, () => {
-      sseMetrics.frameDroppedForBackpressure();
+      sseMetrics.connectionClosedForBackpressure();
+      this.unregister(id, "backpressure_overflow");
     });
     const internal: InternalConnection = {
       id,
@@ -157,6 +221,9 @@ export class SseHub {
       writer,
       heartbeatLocalCounter: 0,
       res: params.res,
+      phase: "REPLAYING",
+      bridgeBuffer: [],
+      maxBridgeBufferFrames: params.maxQueuedFrames,
     };
     this.connections.set(id, internal);
     sseMetrics.connectionOpened();
@@ -188,6 +255,44 @@ export class SseHub {
     return handle;
   }
 
+  /**
+   * Ends the REPLAYING phase for one connection (called once by
+   * `route.ts`'s `replayOrResync` after it has paged every replayable
+   * source through to its snapshotted target, or determined there was
+   * nothing to replay). Idempotent - a connection already LIVE, or one that
+   * no longer exists (closed mid-replay), is a silent no-op. Flushes the
+   * bridge buffer in arrival order before flipping the phase, so a caller
+   * observing the connection's writer afterward sees every buffered event
+   * already delivered.
+   */
+  completeReplay(connectionId: string): void {
+    const internal = this.connections.get(connectionId);
+    if (!internal || internal.phase === "LIVE") {
+      return;
+    }
+    const buffered = internal.bridgeBuffer;
+    internal.bridgeBuffer = [];
+    internal.phase = "LIVE";
+    for (const item of buffered) {
+      if (item.kind === "event") {
+        internal.vector = advanceVector(internal.vector, item.sourceIndex, item.ordinal);
+        internal.writer.write(
+          formatSseFrame({ event: item.eventType, id: encodeSseEventId(internal.vector), data: item.data }),
+        );
+      } else {
+        internal.writer.write(formatSseFrame({ event: item.eventType, data: item.data }));
+      }
+    }
+  }
+
+  private bufferOrOverflow(internal: InternalConnection, item: BufferedBroadcast): void {
+    internal.bridgeBuffer.push(item);
+    if (internal.bridgeBuffer.length > internal.maxBridgeBufferFrames) {
+      sseMetrics.connectionClosedForBridgeOverflow();
+      this.unregister(internal.id, "replay_live_bridge_overflow");
+    }
+  }
+
   /** Called by the connection's own `sendEvent(HEARTBEAT_SOURCE_INDEX, ...)` caller (route.ts's heartbeat timer) - exposed as a helper so callers don't need to track the per-connection counter themselves. */
   nextHeartbeatOrdinal(connectionId: string): number {
     const internal = this.connections.get(connectionId);
@@ -206,20 +311,30 @@ export class SseHub {
     data: unknown,
   ): void {
     for (const internal of this.connections.values()) {
-      if (internal.scopes.has(scope)) {
-        internal.vector = advanceVector(internal.vector, sourceIndex, ordinal);
-        internal.writer.write(
-          formatSseFrame({ event: eventType, id: encodeSseEventId(internal.vector), data }),
-        );
+      if (!internal.scopes.has(scope)) {
+        continue;
       }
+      if (internal.phase === "REPLAYING") {
+        this.bufferOrOverflow(internal, { kind: "event", sourceIndex, ordinal, eventType, data });
+        continue;
+      }
+      internal.vector = advanceVector(internal.vector, sourceIndex, ordinal);
+      internal.writer.write(
+        formatSseFrame({ event: eventType, id: encodeSseEventId(internal.vector), data }),
+      );
     }
   }
 
   broadcastControl(scope: SseChannelScope, eventType: string, data: unknown): void {
     for (const internal of this.connections.values()) {
-      if (internal.scopes.has(scope)) {
-        internal.writer.write(formatSseFrame({ event: eventType, data }));
+      if (!internal.scopes.has(scope)) {
+        continue;
       }
+      if (internal.phase === "REPLAYING") {
+        this.bufferOrOverflow(internal, { kind: "control", eventType, data });
+        continue;
+      }
+      internal.writer.write(formatSseFrame({ event: eventType, data }));
     }
   }
 
@@ -300,6 +415,36 @@ export class SseHub {
       const internal = this.connections.get(id);
       if (internal && internal.scopes.has(scope)) {
         this.unregister(id, "simulated_network_drop");
+      }
+    }
+  }
+
+  /**
+   * TEST-ONLY, same status and placement as `simulateNetworkDropForTests`
+   * immediately above (never reachable from any HTTP route - a plain method
+   * call on the hub instance). Produces the EXACT SAME observable
+   * consequence a genuine backpressure-bound overflow produces (abrupt
+   * termination, same metric, same `unregister` path) without depending on
+   * real OS/Node socket buffer sizes actually filling - which real
+   * integration testing found to be genuinely non-deterministic across
+   * runs/environments (variable wall-clock time, sometimes 1s, sometimes
+   * 18s+, depending on kernel socket buffer state), unlike the native-
+   * reconnect case above where Playwright genuinely has no other way to
+   * produce an unannounced failure at all. Here, a real overflow's
+   * mechanism (`BackpressureWriter`'s bound) is already proven directly and
+   * deterministically at the unit level (apps/api/test/sse-hub.test.ts's
+   * "backpressure overflow terminates the connection" suite, against the
+   * real `BackpressureWriter` class); this hook exists so an INTEGRATION
+   * test can deterministically prove the RECOVERY half (real reconnect from
+   * the last-actually-received id, real paginated replay) without also
+   * fighting real-world buffer-size non-determinism to get there.
+   */
+  simulateBackpressureOverflowForTests(scope: SseChannelScope): void {
+    for (const id of [...this.connections.keys()]) {
+      const internal = this.connections.get(id);
+      if (internal && internal.scopes.has(scope)) {
+        sseMetrics.connectionClosedForBackpressure();
+        this.unregister(id, "simulated_backpressure_overflow");
       }
     }
   }

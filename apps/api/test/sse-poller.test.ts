@@ -103,13 +103,16 @@ describe("SSE poller (real MySQL, real adapter)", () => {
       },
       on: () => undefined,
     };
-    hub.register({
+    const handle = hub.register({
       scopes: [STEP_03_TEST_SCOPE],
       initialVector: new Map(),
       res: fakeRes as never,
       maxQueuedFrames: 50,
       retryMs: 1000,
     });
+    // A real caller (route.ts) always calls completeReplay once replay
+    // finishes - this connection has nothing to replay, so it's immediate.
+    hub.completeReplay(handle.connectionId);
 
     const insertedId = await insertTestRow(rawPool as never, "hello-world");
 
@@ -139,13 +142,14 @@ describe("SSE poller (real MySQL, real adapter)", () => {
     const cursorRepo = createSseCursorRepo(kysely);
     const received: string[] = [];
     const fakeRes = { write: (c: string) => (received.push(c), true), on: () => undefined };
-    hub.register({
+    const handle = hub.register({
       scopes: [STEP_03_TEST_SCOPE],
       initialVector: new Map(),
       res: fakeRes as never,
       maxQueuedFrames: 50,
       retryMs: 1000,
     });
+    hub.completeReplay(handle.connectionId);
 
     const poller = startSsePoller({
       hub,
@@ -177,13 +181,14 @@ describe("SSE poller (real MySQL, real adapter)", () => {
     const hub1 = new SseHub();
     const cursorRepo1 = createSseCursorRepo(kysely);
     const received1: string[] = [];
-    hub1.register({
+    const handle1 = hub1.register({
       scopes: [STEP_03_TEST_SCOPE],
       initialVector: new Map(),
       res: { write: (c: string) => (received1.push(c), true), on: () => undefined } as never,
       maxQueuedFrames: 50,
       retryMs: 1000,
     });
+    hub1.completeReplay(handle1.connectionId);
     const pollerA = startSsePoller({
       hub: hub1,
       cursorRepo: cursorRepo1,
@@ -201,13 +206,14 @@ describe("SSE poller (real MySQL, real adapter)", () => {
     const hub2 = new SseHub();
     const cursorRepo2 = createSseCursorRepo(kysely);
     const received2: string[] = [];
-    hub2.register({
+    const handle2 = hub2.register({
       scopes: [STEP_03_TEST_SCOPE],
       initialVector: new Map(),
       res: { write: (c: string) => (received2.push(c), true), on: () => undefined } as never,
       maxQueuedFrames: 50,
       retryMs: 1000,
     });
+    hub2.completeReplay(handle2.connectionId);
     const pollerB = startSsePoller({
       hub: hub2,
       cursorRepo: cursorRepo2,
@@ -272,5 +278,89 @@ describe("SSE poller (real MySQL, real adapter)", () => {
     const oldest = await adapter.oldestAvailableOrdinal();
     expect(oldest).toBe(id3);
     expect(oldest).toBeGreaterThan(id1);
+  });
+
+  describe("single-flight scheduling (correctness-review defect 6): overlapping DB ticks must be impossible", () => {
+    it("poll interval shorter than adapter latency -> maximum concurrent tick count is 1, row broadcast count is exactly 1 (no duplicate fan-out), cursor advances once, and stop() cleans up with no further ticks", async () => {
+      const hub = new SseHub();
+      const cursorRepo = createSseCursorRepo(kysely);
+      const received: string[] = [];
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: { write: (c: string) => (received.push(c), true), on: () => undefined } as never,
+        maxQueuedFrames: 50,
+        retryMs: 1000,
+      });
+      hub.completeReplay(handle.connectionId);
+
+      const realAdapter = createTestSourceAdapter(rawPool);
+      let concurrentFetches = 0;
+      let maxConcurrentFetches = 0;
+      let fetchCallCount = 0;
+      const ADAPTER_LATENCY_MS = 250;
+      const slowAdapter = {
+        sourceTable: realAdapter.sourceTable,
+        sourceIndex: realAdapter.sourceIndex,
+        async fetchSince(since: number, limit: number) {
+          fetchCallCount += 1;
+          concurrentFetches += 1;
+          maxConcurrentFetches = Math.max(maxConcurrentFetches, concurrentFetches);
+          try {
+            await new Promise((resolve) => setTimeout(resolve, ADAPTER_LATENCY_MS));
+            return await realAdapter.fetchSince(since, limit);
+          } finally {
+            concurrentFetches -= 1;
+          }
+        },
+        oldestAvailableOrdinal: () => realAdapter.oldestAvailableOrdinal(),
+      };
+      resetRegistryForTests();
+      registerEventType({ type: TEST_EVENT_TYPE, schema: testEventDataSchema });
+      registerSourceAdapter(slowAdapter);
+
+      const insertedId = await insertTestRow(rawPool as never, "single-flight-probe");
+
+      // A poll interval MUCH shorter than the adapter's own latency - the
+      // pre-fix `setInterval` design would have started a new tick every
+      // 20ms regardless of whether the previous one's 250ms fetchSince call
+      // had even returned yet, producing many overlapping in-flight fetches.
+      const poller = startSsePoller({
+        hub,
+        cursorRepo,
+        logger: silentLogger,
+        pollIntervalMs: 20,
+        maxRowsPerTick: 100,
+      });
+
+      try {
+        // Real wall-clock wait, long enough for several WOULD-BE overlapping
+        // intervals under the old design (many multiples of 20ms), but only
+        // ~2-3 real ticks under single-flight scheduling (~270ms apart:
+        // 250ms adapter latency + 20ms gap).
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      } finally {
+        poller.stop();
+        // Drain any tick that was already in-flight the instant stop() was
+        // called (stop() cannot cancel work already in progress) so no
+        // dangling async work crosses into the next test.
+        for (let i = 0; i < 50 && concurrentFetches > 0; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      }
+
+      expect(maxConcurrentFetches).toBe(1); // never more than one tick's fetchSince in flight at once
+      expect(fetchCallCount).toBeGreaterThanOrEqual(1); // the poller genuinely ran
+      expect(received).toHaveLength(1); // the single real row was broadcast exactly once, never duplicated by an overlapping tick
+      expect(received[0]).toContain("single-flight-probe");
+      expect(await cursorRepo.getLastSequence("dashboard_sse_test_source", "sse_hub")).toBe(insertedId);
+
+      // stop() must prevent any FURTHER tick from starting.
+      const callCountAtStop = fetchCallCount;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(fetchCallCount).toBe(callCountAtStop);
+
+      resetRegistryForTests();
+    });
   });
 });

@@ -15,7 +15,22 @@ export interface SseMetrics {
   eventsReplayedTotal: number;
   replayGapsTotal: number;
   resyncsSentTotal: number;
-  framesDroppedForBackpressureTotal: number;
+  /**
+   * Renamed from `framesDroppedForBackpressureTotal` (correctness-review
+   * defect 1): the fix no longer drops an individual queued frame and keeps
+   * the stream open (that could let a later id silently skip the dropped
+   * event) - once a connection's outbound queue hits its bound, the WHOLE
+   * connection is terminated instead, so this now counts connections closed
+   * for that reason, never individual frames.
+   */
+  connectionsClosedForBackpressureTotal: number;
+  /**
+   * Correctness-review defect 3: the replay<->live bridge buffer (per
+   * connection, bounded the same way the outbound queue is) overflowed
+   * before replay could finish - the connection was terminated rather than
+   * silently dropping a buffered live event and continuing.
+   */
+  connectionsClosedForBridgeOverflowTotal: number;
   pollTicksTotal: number;
   pollErrorsTotal: number;
 }
@@ -29,7 +44,8 @@ function empty(): SseMetrics {
     eventsReplayedTotal: 0,
     replayGapsTotal: 0,
     resyncsSentTotal: 0,
-    framesDroppedForBackpressureTotal: 0,
+    connectionsClosedForBackpressureTotal: 0,
+    connectionsClosedForBridgeOverflowTotal: 0,
     pollTicksTotal: 0,
     pollErrorsTotal: 0,
   };
@@ -66,8 +82,11 @@ export const sseMetrics = {
   resyncSent(): void {
     metrics.resyncsSentTotal += 1;
   },
-  frameDroppedForBackpressure(): void {
-    metrics.framesDroppedForBackpressureTotal += 1;
+  connectionClosedForBackpressure(): void {
+    metrics.connectionsClosedForBackpressureTotal += 1;
+  },
+  connectionClosedForBridgeOverflow(): void {
+    metrics.connectionsClosedForBridgeOverflowTotal += 1;
   },
   pollTick(): void {
     metrics.pollTicksTotal += 1;

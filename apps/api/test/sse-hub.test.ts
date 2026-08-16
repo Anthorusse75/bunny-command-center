@@ -47,20 +47,24 @@ describe("SseHub", () => {
     const hub = new SseHub();
     const resA = new FakeResponse();
     const resB = new FakeResponse();
-    hub.register({
+    const handleA = hub.register({
       scopes: [STEP_03_TEST_SCOPE],
       initialVector: new Map(),
       res: resA as never,
       maxQueuedFrames: 10,
       retryMs: 1000,
     });
-    hub.register({
+    const handleB = hub.register({
       scopes: ["platform"],
       initialVector: new Map(),
       res: resB as never,
       maxQueuedFrames: 10,
       retryMs: 1000,
     });
+    // A real caller (route.ts's replayOrResync) always calls completeReplay
+    // once - here, simulating two fresh connections with nothing to replay.
+    hub.completeReplay(handleA.connectionId);
+    hub.completeReplay(handleB.connectionId);
 
     hub.broadcast(STEP_03_TEST_SCOPE, 1, 5, "dashboard.sse_test_event", { n: 1 });
 
@@ -73,13 +77,14 @@ describe("SseHub", () => {
   it("advances a connection's id vector across multiple sources without losing earlier positions", () => {
     const hub = new SseHub();
     const res = new FakeResponse();
-    hub.register({
+    const handle = hub.register({
       scopes: [STEP_03_TEST_SCOPE],
       initialVector: new Map(),
       res: res as never,
       maxQueuedFrames: 10,
       retryMs: 1000,
     });
+    hub.completeReplay(handle.connectionId);
 
     hub.broadcast(STEP_03_TEST_SCOPE, 1, 5, "a", {});
     hub.broadcast(STEP_03_TEST_SCOPE, 2, 9, "b", {});
@@ -90,39 +95,221 @@ describe("SseHub", () => {
     expect(res.written[2]).toContain("id: 1:6,2:9");
   });
 
-  it("bounds a slow client's outbound queue and drops the OLDEST frame once full (mission §16)", () => {
-    const hub = new SseHub();
-    const res = new FakeResponse();
-    res.acceptWrites = false; // simulate an immediately-backpressured client
-    const handle = hub.register({
-      scopes: [STEP_03_TEST_SCOPE],
-      initialVector: new Map(),
-      res: res as never,
-      maxQueuedFrames: 3,
-      retryMs: 1000,
+  describe("backpressure overflow terminates the connection (correctness-review defect 1 - superseded drop-oldest-and-continue design)", () => {
+    it("test A: once a slow client's outbound queue exceeds its bound, the connection is terminated - not kept open with a frame dropped", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      res.acceptWrites = false; // simulate an immediately-backpressured client
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 3,
+        retryMs: 1000,
+      });
+
+      for (let i = 1; i <= 5; i++) {
+        handle.sendEvent(1, i, "dashboard.sse_test_event", { n: i });
+      }
+
+      // Frame 1 was handed directly to res.write() (real Node's first-call
+      // semantics). Frames 2,3,4 queue behind it (queue length reaches 3,
+      // exactly at the bound - still fine). Frame 5 pushes the queue to 4,
+      // EXCEEDING the bound of 3 - the connection is terminated right there,
+      // not "frame 5 dropped, 6.. delivered normally".
+      expect(res.written).toHaveLength(1); // only the direct write for frame 1 ever happened
+      expect(res.ended).toBe(true); // socket genuinely destroyed, not left open
+      expect(hub.activeConnectionCount).toBe(0);
     });
 
-    for (let i = 1; i <= 5; i++) {
-      handle.sendEvent(1, i, "dashboard.sse_test_event", { n: i });
-    }
+    it("test B: no event queued or sent AFTER the overflow can ever reach the client - a later cursor can never silently represent progress past the dropped position", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      res.acceptWrites = false;
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 2,
+        retryMs: 1000,
+      });
 
-    // Frame 1 was handed directly to res.write() (real Node's first-call
-    // semantics - nothing is lost, the return value only flags backpressure
-    // for what comes NEXT). Frames 2-5 queue behind it, and the bound (3)
-    // means the oldest queued frame (n=2) is dropped once n=5 arrives.
-    expect(res.written).toHaveLength(1);
-    expect(handle.queuedFrameCount).toBe(3);
+      handle.sendEvent(1, 1, "a", {}); // direct write (frame 1)
+      handle.sendEvent(1, 2, "a", {}); // queued (queue length 1)
+      handle.sendEvent(1, 3, "a", {}); // queued (queue length 2 - AT the bound, not yet over)
+      expect(res.ended).toBe(false);
+      handle.sendEvent(1, 4, "a", {}); // queued (queue length 3) - EXCEEDS bound of 2 -> overflow, terminate
+      expect(res.ended).toBe(true);
 
-    res.simulateDrain();
+      // Anything sent after this point must never be delivered - proving
+      // event 4 (the one that overflowed) can never be silently skipped by
+      // a later id reaching the client instead.
+      handle.sendEvent(1, 5, "a", {});
+      handle.sendEvent(1, 6, "a", {});
+      expect(res.written).toHaveLength(1); // still just frame 1's direct write
+      expect(handle.queuedFrameCount).toBe(0); // queue was cleared on termination, not left holding 5/6
+    });
 
-    // n=1 (direct) + n=3,4,5 (survived the bound) = 4 total. n=2 was
-    // dropped as oldest-first once the queue exceeded its bound.
-    expect(res.written).toHaveLength(4);
-    expect(res.written.join("")).not.toContain('"n":2');
-    expect(res.written.join("")).toContain('"n":1');
-    expect(res.written.join("")).toContain('"n":3');
-    expect(res.written.join("")).toContain('"n":5');
-    expect(handle.queuedFrameCount).toBe(0);
+    it("test E: another healthy client on the same broadcast is completely unaffected by a slow client's overflow", () => {
+      const hub = new SseHub();
+      const resSlow = new FakeResponse();
+      resSlow.acceptWrites = false;
+      const resHealthy = new FakeResponse();
+      const slowHandle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: resSlow as never,
+        maxQueuedFrames: 2,
+        retryMs: 1000,
+      });
+      const healthyHandle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: resHealthy as never,
+        maxQueuedFrames: 2,
+        retryMs: 1000,
+      });
+      // Both connections are already "caught up" for this test's purposes -
+      // move them LIVE so `broadcast()` writes directly instead of
+      // buffering into the replay bridge (a separate concern, tested below).
+      hub.completeReplay(slowHandle.connectionId);
+      hub.completeReplay(healthyHandle.connectionId);
+      expect(hub.activeConnectionCount).toBe(2);
+
+      for (let i = 1; i <= 5; i++) {
+        hub.broadcast(STEP_03_TEST_SCOPE, 1, i, "a", { n: i });
+      }
+
+      // The slow connection overflowed its queue (bound 2) and was
+      // terminated by broadcast 4.
+      expect(resSlow.ended).toBe(true);
+      // The healthy connection received every single broadcast normally -
+      // the slow client's overflow had zero effect on it.
+      expect(resHealthy.written).toHaveLength(5);
+      expect(hub.activeConnectionCount).toBe(1);
+    });
+  });
+
+  describe("replay <-> live phase and bridge buffer (correctness-review defect 3)", () => {
+    it("a connection still REPLAYING (the default at registration) does not receive broadcast() events directly - they are buffered instead", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 10,
+        retryMs: 1000,
+      });
+
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 5, "a", { n: 5 });
+      hub.broadcastControl(STEP_03_TEST_SCOPE, "resync_required", {
+        scope: STEP_03_TEST_SCOPE,
+        reason: "REPLAY_GAP",
+      });
+
+      expect(res.written).toHaveLength(0); // nothing written yet - still buffered
+    });
+
+    it("completeReplay() flushes buffered events in arrival order and flips the connection LIVE", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 10,
+        retryMs: 1000,
+      });
+
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 5, "a", { n: 5 });
+      hub.broadcast(STEP_03_TEST_SCOPE, 2, 9, "b", { n: 9 });
+      expect(res.written).toHaveLength(0);
+
+      hub.completeReplay(handle.connectionId);
+
+      expect(res.written).toHaveLength(2);
+      expect(res.written[0]).toContain("id: 1:5");
+      expect(res.written[1]).toContain("id: 1:5,2:9");
+
+      // Now genuinely LIVE - further broadcasts write immediately, no more buffering.
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 6, "a", { n: 6 });
+      expect(res.written).toHaveLength(3);
+      expect(res.written[2]).toContain("id: 1:6,2:9");
+    });
+
+    it("completeReplay() is idempotent - calling it twice never re-flushes or double-delivers", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 10,
+        retryMs: 1000,
+      });
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 5, "a", {});
+      hub.completeReplay(handle.connectionId);
+      expect(res.written).toHaveLength(1);
+
+      hub.completeReplay(handle.connectionId); // second call - no-op
+      expect(res.written).toHaveLength(1);
+    });
+
+    it("completeReplay() on an already-closed/unknown connectionId is a silent no-op (never throws)", () => {
+      const hub = new SseHub();
+      expect(() => hub.completeReplay("nonexistent-connection-id")).not.toThrow();
+    });
+
+    it("the bridge buffer is bounded - exceeding it terminates the connection rather than silently dropping a buffered live event", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 2, // also used as the bridge buffer bound
+        retryMs: 1000,
+      });
+
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 1, "a", {}); // buffered (1)
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 2, "a", {}); // buffered (2) - at bound
+      expect(hub.activeConnectionCount).toBe(1);
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 3, "a", {}); // buffered (3) - EXCEEDS bound -> terminate
+
+      expect(hub.activeConnectionCount).toBe(0);
+      expect(res.ended).toBe(true);
+      expect(res.written).toHaveLength(0); // never got to flush anything - terminated first
+
+      // completeReplay on the now-gone connection must not throw or resurrect it.
+      expect(() => hub.completeReplay(handle.connectionId)).not.toThrow();
+    });
+
+    it("broadcastControl also respects the REPLAYING phase and is included in the flush, in the same relative order as the events around it", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 10,
+        retryMs: 1000,
+      });
+
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 1, "a", {});
+      hub.broadcastControl(STEP_03_TEST_SCOPE, "resync_required", {
+        scope: STEP_03_TEST_SCOPE,
+        reason: "REPLAY_GAP",
+      });
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 2, "a", {});
+      hub.completeReplay(handle.connectionId);
+
+      expect(res.written).toHaveLength(3);
+      expect(res.written[0]).toContain("id: 1:1");
+      expect(res.written[1]).toContain("event: resync_required");
+      expect(res.written[1]).not.toMatch(/^id:/m); // control frames never carry an id
+      expect(res.written[2]).toContain("id: 1:2");
+    });
   });
 
   it("flushes queued frames once the real Node 'drain' event fires, respecting partial re-backpressure", () => {
@@ -173,6 +360,34 @@ describe("SseHub", () => {
     expect(resInScope.written).toHaveLength(0); // no graceful frame, unlike closeAll
     expect(resInScope.ended).toBe(true); // socket genuinely destroyed
     expect(resOtherScope.ended).toBe(false); // the other scope's connection is untouched
+  });
+
+  it("simulateBackpressureOverflowForTests produces the same observable termination a real overflow would, scoped the same way as simulateNetworkDropForTests", () => {
+    const hub = new SseHub();
+    const resInScope = new FakeResponse();
+    const resOtherScope = new FakeResponse();
+    hub.register({
+      scopes: [STEP_03_TEST_SCOPE],
+      initialVector: new Map(),
+      res: resInScope as never,
+      maxQueuedFrames: 10,
+      retryMs: 1000,
+    });
+    hub.register({
+      scopes: ["platform"],
+      initialVector: new Map(),
+      res: resOtherScope as never,
+      maxQueuedFrames: 10,
+      retryMs: 1000,
+    });
+    expect(hub.activeConnectionCount).toBe(2);
+
+    hub.simulateBackpressureOverflowForTests(STEP_03_TEST_SCOPE);
+
+    expect(hub.activeConnectionCount).toBe(1); // only the in-scope connection was dropped
+    expect(resInScope.written).toHaveLength(0); // abrupt, no graceful frame - same as a real overflow
+    expect(resInScope.ended).toBe(true);
+    expect(resOtherScope.ended).toBe(false);
   });
 
   it("close() removes the connection from future broadcasts and decrements activeConnectionCount", () => {

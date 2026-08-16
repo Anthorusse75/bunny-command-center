@@ -14,7 +14,7 @@ import { validateSourceRow } from "./validate.js";
 import { listSourceAdapters } from "./registry.js";
 import { sseMetrics } from "./metrics.js";
 import type { SseCursorRepo } from "./cursorRepo.js";
-import { SSE_HUB_CURSOR_KEY } from "./types.js";
+import { SSE_HUB_CURSOR_KEY, type SourceAdapter } from "./types.js";
 
 /**
  * 26_REALTIME_SSE_AND_SYNC.md §Reconnection and resume: "`EventSource`'s
@@ -149,6 +149,7 @@ export function buildSseRoutePlugin(params: {
       );
 
       void replayOrResync({
+        hub: params.hub,
         handle,
         vector,
         malformedLastEventId,
@@ -179,7 +180,86 @@ export function buildSseRoutePlugin(params: {
   };
 }
 
+/**
+ * Pages a single source adapter's replay forward from
+ * `fromOrdinalExclusive` up to (and including) `targetOrdinalInclusive` - a
+ * watermark value SNAPSHOTTED by the caller before this loop started
+ * (correctness-review defect 2: the previous version made exactly ONE
+ * `fetchSince` call, silently truncating replay whenever the number of
+ * missed rows exceeded one page). Every page is still bounded by `pageSize`
+ * (never an unbounded query), but the loop keeps paging until either the
+ * target is reached or a page comes back short (meaning no more rows
+ * currently exist above the cursor - the natural end condition, since a
+ * short page can only happen at the true head of what `fetchSince` can see
+ * right now).
+ *
+ * Every row returned by a page is explicitly capped at `targetOrdinalInclusive`
+ * before being delivered - `fetchSince` itself has no notion of "target", so
+ * if real time passes between the target being snapshotted and this
+ * function's (possibly paginated, possibly delayed) fetch actually running,
+ * the underlying source may legitimately have grown PAST the target by then.
+ * Delivering those extra rows here would double-deliver them: the SAME rows
+ * are, by construction, also what the poller's own live `broadcast()` is
+ * fanning out for this connection's bridge buffer while it is still
+ * REPLAYING (SseHub's class doc comment) - so this function must never claim
+ * responsibility for anything beyond its own snapshotted target, leaving
+ * everything past it to that buffered live path instead.
+ */
+async function replaySourceToTarget(params: {
+  handle: SseConnectionHandle;
+  adapter: SourceAdapter;
+  fromOrdinalExclusive: number;
+  targetOrdinalInclusive: number;
+  pageSize: number;
+  scopes: SseChannelScope[];
+  logger: FastifyBaseLogger;
+}): Promise<number> {
+  let cursor = params.fromOrdinalExclusive;
+  let totalReplayed = 0;
+  while (cursor < params.targetOrdinalInclusive) {
+    const rows = await params.adapter.fetchSince(cursor, params.pageSize);
+    if (rows.length === 0) {
+      break;
+    }
+    const pageWasShort = rows.length < params.pageSize;
+    let sawBeyondTarget = false;
+    for (const row of rows) {
+      if (row.ordinal > params.targetOrdinalInclusive) {
+        // This row (and everything after it in this ascending-order page)
+        // is beyond what this replay snapshot is responsible for - stop
+        // here, never deliver it from this function.
+        sawBeyondTarget = true;
+        break;
+      }
+      const validated = validateSourceRow(row, params.adapter.sourceTable, params.logger);
+      if (validated && params.scopes.includes(validated.scope)) {
+        params.handle.sendEvent(
+          params.adapter.sourceIndex,
+          validated.ordinal,
+          validated.eventType,
+          validated.data,
+        );
+        totalReplayed += 1;
+      }
+      if (row.ordinal > cursor) {
+        cursor = row.ordinal;
+      }
+    }
+    if (sawBeyondTarget) {
+      // `break` here exits the outer `while` unconditionally (this function
+      // returns right after), so no further read of `cursor` ever happens -
+      // termination doesn't depend on advancing it further.
+      break;
+    }
+    if (pageWasShort) {
+      break;
+    }
+  }
+  return totalReplayed;
+}
+
 async function replayOrResync(params: {
+  hub: SseHub;
   handle: SseConnectionHandle;
   vector: SseCursorVector;
   malformedLastEventId: boolean;
@@ -195,6 +275,7 @@ async function replayOrResync(params: {
     for (const scope of params.scopes) {
       sendResync(params.handle, scope, "INVALID_CURSOR");
     }
+    params.hub.completeReplay(params.handle.connectionId);
     return;
   }
 
@@ -207,14 +288,30 @@ async function replayOrResync(params: {
       continue;
     }
     try {
+      // Snapshotted ONCE, before any paging happens - this is the exact
+      // target `replaySourceToTarget` pages up to, and also what makes the
+      // replay<->live bridge buffer correct (SseHub's class doc comment):
+      // any live broadcast the poller makes for this source AFTER this
+      // snapshot is, by construction, for an ordinal above it.
       const [oldest, currentWatermark] = await Promise.all([
         adapter.oldestAvailableOrdinal(),
         params.cursorRepo.getLastSequence(adapter.sourceTable, SSE_HUB_CURSOR_KEY),
       ]);
 
-      if (knownOrdinal >= currentWatermark) {
-        // Cursor ahead of (or exactly caught up to) the source - documented
-        // safe handling: nothing to replay, just resume live.
+      if (knownOrdinal > currentWatermark) {
+        // Correctness-review defect 5: a Last-Event-ID claiming a position
+        // AHEAD of the server's own durable truth must never be trusted or
+        // silently clamped down to "caught up" - the request is either
+        // stale (server data was reset/rebuilt) or outright forged. The
+        // only safe response is the same one used for any other
+        // untrustworthy cursor: a full resync.
+        for (const scope of params.scopes) {
+          sendResync(params.handle, scope, "CURSOR_AHEAD");
+        }
+        continue;
+      }
+      if (knownOrdinal === currentWatermark) {
+        // Genuinely, exactly caught up - nothing to replay.
         continue;
       }
       if (oldest !== null && knownOrdinal < oldest - 1) {
@@ -227,36 +324,51 @@ async function replayOrResync(params: {
         continue;
       }
 
-      const rows = await adapter.fetchSince(knownOrdinal, params.config.sse.maxRowsPerSourcePerTick);
-      let replayedCount = 0;
-      for (const row of rows) {
-        const validated = validateSourceRow(row, adapter.sourceTable, params.logger);
-        if (validated && params.scopes.includes(validated.scope)) {
-          params.handle.sendEvent(
-            adapter.sourceIndex,
-            validated.ordinal,
-            validated.eventType,
-            validated.data,
-          );
-          replayedCount += 1;
-        }
-      }
+      const replayedCount = await replaySourceToTarget({
+        handle: params.handle,
+        adapter,
+        fromOrdinalExclusive: knownOrdinal,
+        targetOrdinalInclusive: currentWatermark,
+        pageSize: params.config.sse.maxRowsPerSourcePerTick,
+        scopes: params.scopes,
+        logger: params.logger,
+      });
       if (replayedCount > 0) {
         sseMetrics.eventsReplayed(replayedCount);
       }
     } catch (err) {
+      // Correctness-review defect 4: a replay failure for one source must
+      // never leave the connection looking fully synchronized - the server
+      // cannot know how much of the target range was actually delivered
+      // before the adapter threw, so "log and continue as live" (the
+      // previous behavior) could silently strand the client mid-gap. The
+      // safe response is the same resync signal used for a genuine
+      // retention gap: the client does a full refetch for this scope rather
+      // than trusting a replay that may have stopped partway through.
       params.logger.error(
         { err, sourceTable: adapter.sourceTable },
-        "sse: replay failed for one source adapter",
+        "sse: replay failed for one source adapter - sending resync_required rather than treating the connection as caught up",
       );
+      for (const scope of params.scopes) {
+        sendResync(params.handle, scope, "REPLAY_FAILED");
+      }
     }
   }
+
+  // Correctness-review defect 3: only now - after every replayable source
+  // has either reached its snapshotted target or been resynced - does this
+  // connection leave the REPLAYING phase and start receiving the poller's
+  // live fan-out directly (SseHub's class doc comment has the full
+  // invariant). Called unconditionally on every exit path above (including
+  // the malformed-cursor early return) so a connection can never be stuck
+  // buffering live events forever.
+  params.hub.completeReplay(params.handle.connectionId);
 }
 
 function sendResync(
   handle: SseConnectionHandle,
   scope: SseChannelScope,
-  reason: "REPLAY_GAP" | "INVALID_CURSOR",
+  reason: "REPLAY_GAP" | "INVALID_CURSOR" | "REPLAY_FAILED" | "CURSOR_AHEAD",
 ): void {
   const data = resyncRequiredDataSchema.parse({ scope, reason });
   handle.sendControl(RESYNC_REQUIRED_EVENT_TYPE, data);

@@ -224,6 +224,68 @@ describe("SSE event id vector encode/decode", () => {
       expect(decoded).toEqual(new Map([[999, 1]]));
     });
   });
+
+  describe("internal invariants: advanceVector/encodeSseEventId reject invalid INTERNAL state (correctness-review defect 8)", () => {
+    // These are distinct from the "malformed / hostile input safety" suite
+    // above: that suite is about untrusted WIRE input (decodeSseEventId,
+    // which never throws). These are about this codebase's OWN internal
+    // callers (apps/api/src/sse/hub.ts's sendEvent/broadcast, fed only by a
+    // registered adapter's own sourceIndex constant and a source row's own
+    // durable ordinal) passing an invalid value - which is a genuine
+    // programming bug, not attacker input, so the right behavior is to
+    // throw loudly rather than silently produce a wire id the decoder would
+    // itself reject.
+
+    it("advanceVector rejects a negative sourceIndex", () => {
+      expect(() => advanceVector(new Map(), -1, 5)).toThrow(/sourceIndex/);
+    });
+
+    it("advanceVector rejects a non-safe-integer sourceIndex", () => {
+      expect(() => advanceVector(new Map(), 1.5, 5)).toThrow(/sourceIndex/);
+      expect(() => advanceVector(new Map(), Number.NaN, 5)).toThrow(/sourceIndex/);
+      expect(() => advanceVector(new Map(), Number.POSITIVE_INFINITY, 5)).toThrow(/sourceIndex/);
+    });
+
+    it("advanceVector rejects a negative ordinal", () => {
+      expect(() => advanceVector(new Map(), 1, -1)).toThrow(/ordinal/);
+    });
+
+    it("advanceVector rejects a non-safe-integer ordinal", () => {
+      expect(() => advanceVector(new Map(), 1, 5.5)).toThrow(/ordinal/);
+      expect(() => advanceVector(new Map(), 1, Number.NaN)).toThrow(/ordinal/);
+    });
+
+    it("advanceVector accepts ordinal 0 (a source's very first, zero-based durable row)", () => {
+      expect(() => advanceVector(new Map(), 1, 0)).not.toThrow();
+    });
+
+    it("encodeSseEventId throws rather than emitting an id decodeSseEventId would reject, if handed an internally-invalid vector directly", () => {
+      // A hostile/buggy caller bypassing advanceVector's own guard by
+      // constructing a Map directly - encodeSseEventId must not trust its
+      // input either, so corrupt internal state can never reach the wire.
+      expect(() => encodeSseEventId(new Map([[-1, 5]]))).toThrow(/sourceIndex/);
+      expect(() => encodeSseEventId(new Map([[1, -5]]))).toThrow(/ordinal/);
+      expect(() => encodeSseEventId(new Map([[1.5, 5]]))).toThrow(/sourceIndex/);
+    });
+
+    it("encodeSseEventId throws if the internal vector exceeds MAX_VECTOR_ENTRIES, rather than truncating and silently losing a source's position", () => {
+      const oversized = new Map<number, number>();
+      for (let i = 0; i < 65; i++) {
+        oversized.set(i + 1, 1); // 65 entries > MAX_VECTOR_ENTRIES (64), sourceIndex 0 avoided (heartbeat-reserved)
+      }
+      expect(() => encodeSseEventId(oversized)).toThrow(/MAX_VECTOR_ENTRIES/);
+    });
+
+    it("every output of encodeSseEventId for a VALID vector is always successfully re-decoded (the guard never rejects legitimate internal state)", () => {
+      const vector = new Map([
+        [1, 100],
+        [2, 250],
+        [64, 9999],
+      ]);
+      const encoded = encodeSseEventId(vector);
+      expect(decodeSseEventId(encoded)).toEqual(vector);
+    });
+  });
 });
 
 describe("channel scope helpers", () => {

@@ -36,8 +36,24 @@ export function getEventType(type: string): RegisteredEventType | undefined {
 }
 
 export function registerSourceAdapter(adapter: SourceAdapter): void {
+  // Runtime invariants on sourceIndex (correctness-review defect 8): a
+  // registering adapter's sourceIndex is a fixed constant chosen by the
+  // REGISTERING code (types.ts's own doc comment), never runtime-derived -
+  // so an invalid value here is a genuine programming bug, caught at
+  // registration time (server startup) rather than surfacing later as a
+  // corrupt wire id or a silent misattribution between two adapters.
+  if (!Number.isSafeInteger(adapter.sourceIndex)) {
+    throw new Error(
+      `SSE source adapter "${adapter.sourceTable}" has a non-safe-integer sourceIndex: ${String(adapter.sourceIndex)}`,
+    );
+  }
   if (adapter.sourceIndex === HEARTBEAT_SOURCE_INDEX) {
     throw new Error(`sourceIndex ${HEARTBEAT_SOURCE_INDEX} is reserved for heartbeat frames`);
+  }
+  if (adapter.sourceIndex < 0) {
+    throw new Error(
+      `SSE source adapter "${adapter.sourceTable}" has a negative sourceIndex (${adapter.sourceIndex}) - business adapters must use a positive sourceIndex (0 is reserved for heartbeat)`,
+    );
   }
   if (adapter.sourceTable.length > 64) {
     throw new Error(

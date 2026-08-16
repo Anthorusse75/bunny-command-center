@@ -19,6 +19,7 @@ import type { AppConfig } from "../src/config.js";
 import { runUp } from "../migrations/runner.js";
 import type { MigratorDbConfig } from "../migrations/config.js";
 import { registerEventType, registerSourceAdapter, resetRegistryForTests } from "../src/sse/registry.js";
+import type { SourceAdapter, SourceRow } from "../src/sse/types.js";
 import {
   TEST_EVENT_TYPE,
   TEST_SOURCE_INDEX,
@@ -60,7 +61,7 @@ async function freshDatabase(): Promise<MigratorDbConfig> {
   return config;
 }
 
-function testConfig(dbConfig: MigratorDbConfig): AppConfig {
+function testConfig(dbConfig: MigratorDbConfig, overrides: Partial<AppConfig["sse"]> = {}): AppConfig {
   return {
     port: 0,
     logLevel: "silent",
@@ -71,15 +72,52 @@ function testConfig(dbConfig: MigratorDbConfig): AppConfig {
       pollIntervalMs: 100,
       maxQueuedFramesPerConnection: 200,
       maxRowsPerSourcePerTick: 500,
+      ...overrides,
     },
   };
 }
 
-async function startTestServer(dbConfig: MigratorDbConfig) {
-  const app = await buildServer(testConfig(dbConfig));
+async function startTestServer(dbConfig: MigratorDbConfig, sseOverrides: Partial<AppConfig["sse"]> = {}) {
+  const app = await buildServer(testConfig(dbConfig, sseOverrides));
   await app.listen({ port: 0, host: "127.0.0.1" });
   const port = (app.server.address() as AddressInfo).port;
   return { app, port };
+}
+
+/**
+ * Wraps a real adapter, injecting an artificial delay into `fetchSince`
+ * ONLY when called with the exact `since` value given - used to reliably
+ * create the replay<->live race window (correctness-review defect 3's
+ * integration test) without slowing down every other `fetchSince` call
+ * (the poller's own periodic ticks use a different, advancing `since` value
+ * and are unaffected).
+ */
+function delayFetchSinceOnce(inner: SourceAdapter, since: number, delayMs: number): SourceAdapter {
+  return {
+    sourceTable: inner.sourceTable,
+    sourceIndex: inner.sourceIndex,
+    async fetchSince(sinceOrdinal: number, limit: number): Promise<SourceRow[]> {
+      if (sinceOrdinal === since) {
+        await sleep(delayMs);
+      }
+      return inner.fetchSince(sinceOrdinal, limit);
+    },
+    oldestAvailableOrdinal: () => inner.oldestAvailableOrdinal(),
+  };
+}
+
+/** An adapter whose `fetchSince` always throws - proves defect 4's replay-failure-must-fail-safe behavior without needing a real DB-level fault. `oldestAvailableOrdinal` still answers normally so the gap-check ahead of the throwing call behaves like a healthy source. */
+function throwingFetchSinceAdapter(inner: SourceAdapter): SourceAdapter {
+  return {
+    sourceTable: inner.sourceTable,
+    sourceIndex: inner.sourceIndex,
+    fetchSince(): Promise<SourceRow[]> {
+      return Promise.reject(
+        new Error("simulated adapter failure during replay (correctness-review defect 4 test)"),
+      );
+    },
+    oldestAvailableOrdinal: () => inner.oldestAvailableOrdinal(),
+  };
 }
 
 const businessFrame = (f: ParsedSseFrame): boolean => f.event === TEST_EVENT_TYPE;
@@ -257,7 +295,7 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
     }
   });
 
-  it("cursor ahead of / caught up with the source -> safe handling, no replay, no resync", async () => {
+  it("cursor EXACTLY caught up with the source (knownOrdinal === currentWatermark) -> safe handling, no replay, no resync", async () => {
     const { app, port } = await startTestServer(dbConfig);
     try {
       const client1 = new SseTestClient(port);
@@ -279,6 +317,66 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
     } finally {
       await app.close();
     }
+  });
+
+  describe("future cursor: knownOrdinal > currentWatermark (correctness-review defect 5)", () => {
+    it("a Last-Event-ID claiming a position AHEAD of the server's own durable watermark triggers resync_required (CURSOR_AHEAD), never silently clamped and treated as caught up", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const client1 = new SseTestClient(port);
+        await client1.statusCode;
+        await insertTestRow(rawPool, "real-event");
+        const frame1 = await client1.waitForFrame(businessFrame);
+        client1.destroy();
+        await sleep(400); // let the poller settle, watermark = real-event's ordinal
+
+        // A cursor claiming a position WAY beyond anything the source has
+        // ever produced.
+        const [sourceIndexStr] = frame1.id!.split(":");
+        const futureLastEventId = `${sourceIndexStr}:999999999`;
+
+        const client2 = new SseTestClient(port, { lastEventId: futureLastEventId });
+        await client2.statusCode;
+        const resync = await client2.waitForFrame((f) => f.event === "resync_required", 3000);
+        expect(JSON.parse(resync.data!)).toEqual({ scope: STEP_03_TEST_SCOPE, reason: "CURSOR_AHEAD" });
+        expect(client2.frames.filter(businessFrame)).toHaveLength(0); // never replayed anything for an untrusted position
+        client2.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("a future cursor does not permanently poison the client: after resync_required, a FRESH connection with no Last-Event-ID recovers normally and later updates are delivered", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const client1 = new SseTestClient(port);
+        await client1.statusCode;
+        await insertTestRow(rawPool, "baseline");
+        const frame1 = await client1.waitForFrame(businessFrame);
+        client1.destroy();
+        await sleep(400);
+
+        const [sourceIndexStr] = frame1.id!.split(":");
+        const client2 = new SseTestClient(port, { lastEventId: `${sourceIndexStr}:999999999` });
+        await client2.statusCode;
+        await client2.waitForFrame((f) => f.event === "resync_required", 3000);
+        client2.destroy();
+        await sleep(50);
+
+        // A client recovering from CURSOR_AHEAD does a full refetch (REST,
+        // out of this file's scope) and opens a brand-new, fresh connection
+        // - proving the SERVER remains healthy and continues delivering
+        // real updates afterward, not stuck in some poisoned state.
+        const client3 = new SseTestClient(port);
+        await client3.statusCode;
+        await insertTestRow(rawPool, "after-recovery");
+        const recovered = await client3.waitForFrame(businessFrame, 3000);
+        expect(recovered.data).toContain("after-recovery");
+        client3.destroy();
+      } finally {
+        await app.close();
+      }
+    });
   });
 
   it("replay gap: a Last-Event-ID older than the source's retained history triggers resync_required, never a silent partial replay", async () => {
@@ -314,6 +412,150 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
     } finally {
       await app.close();
     }
+  });
+
+  it("paginated replay: more missed rows than one page reaches the FULL snapshotted target, never truncating at the first page (correctness-review defect 2)", async () => {
+    // page size = 4, and 12 rows are missed while disconnected - requires 3
+    // full pages to reach the target the OLD single-fetchSince-call design
+    // would have silently truncated after the first 4.
+    const { app, port } = await startTestServer(dbConfig, { maxRowsPerSourcePerTick: 4 });
+    try {
+      const client1 = new SseTestClient(port);
+      await client1.statusCode;
+      await insertTestRow(rawPool, "anchor");
+      const frame1 = await client1.waitForFrame(businessFrame);
+      const lastEventId = frame1.id!;
+      client1.destroy();
+      await sleep(50);
+
+      const labels: string[] = [];
+      for (let i = 1; i <= 12; i++) {
+        const label = `paged-${i}`;
+        labels.push(label);
+        await insertTestRow(rawPool, label);
+      }
+      await sleep(400); // let the poller advance the watermark past all 12
+
+      const client2 = new SseTestClient(port, { lastEventId });
+      await client2.statusCode;
+      await client2.waitForFrame((f) => businessFrame(f) && f.data?.includes("paged-12") === true, 5000);
+
+      const businessFrames = client2.frames.filter(businessFrame);
+      expect(businessFrames.map((f) => f.data)).toEqual(labels.map((label) => JSON.stringify({ label })));
+      client2.destroy();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("replay failure: an adapter that throws during replay sends resync_required (REPLAY_FAILED) rather than silently treating the connection as caught up (correctness-review defect 4)", async () => {
+    const { app, port } = await startTestServer(dbConfig);
+    try {
+      const client1 = new SseTestClient(port);
+      await client1.statusCode;
+      await insertTestRow(rawPool, "anchor");
+      const frame1 = await client1.waitForFrame(businessFrame);
+      const lastEventId = frame1.id!;
+      client1.destroy();
+      await sleep(50);
+
+      await insertTestRow(rawPool, "needs-replay");
+      await sleep(300); // let the poller advance the real watermark past it
+
+      // Swap the registered adapter for a throwing one (same sourceTable/
+      // sourceIndex, so the already-advanced cursor watermark is still
+      // found under the same key) - simulates a real adapter fault
+      // encountered specifically during a resuming connection's replay.
+      resetRegistryForTests();
+      registerEventType({ type: TEST_EVENT_TYPE, schema: testEventDataSchema });
+      registerSourceAdapter(throwingFetchSinceAdapter(createTestSourceAdapter(rawPool)));
+
+      const client2 = new SseTestClient(port, { lastEventId });
+      await client2.statusCode;
+      const resync = await client2.waitForFrame((f) => f.event === "resync_required", 3000);
+      expect(JSON.parse(resync.data!)).toEqual({ scope: STEP_03_TEST_SCOPE, reason: "REPLAY_FAILED" });
+      // Never silently delivered partial/fabricated replay data.
+      expect(client2.frames.filter(businessFrame)).toHaveLength(0);
+      client2.destroy();
+    } finally {
+      await app.close();
+      // Restore the real adapter for subsequent tests' beforeEach to layer onto cleanly.
+      resetRegistryForTests();
+    }
+  });
+
+  describe("replay <-> live race (correctness-review defect 3)", () => {
+    it("a live event broadcast WHILE a resuming connection's replay is still in flight is buffered and delivered AFTER replay finishes, in correct order, no duplicate, no gap", async () => {
+      const { app, port } = await startTestServer(dbConfig, { pollIntervalMs: 60, heartbeatSeconds: 0.2 });
+      try {
+        const client1 = new SseTestClient(port);
+        await client1.statusCode;
+        await insertTestRow(rawPool, "anchor");
+        const anchorFrame = await client1.waitForFrame(businessFrame);
+        const lastEventId = anchorFrame.id!;
+        const anchorOrdinal = Number(lastEventId.split(":")[1]);
+        client1.destroy();
+        await sleep(50);
+
+        const missedId = await insertTestRow(rawPool, "missed-before-reconnect");
+        await sleep(250); // let the poller advance the watermark to missedId BEFORE client2 connects
+
+        // From this point on, ONLY client2's own replay call (fetchSince
+        // with since === anchorOrdinal) is slowed - the poller's own
+        // routine ticks (since === missedId, then higher) are unaffected.
+        resetRegistryForTests();
+        registerEventType({ type: TEST_EVENT_TYPE, schema: testEventDataSchema });
+        registerSourceAdapter(delayFetchSinceOnce(createTestSourceAdapter(rawPool), anchorOrdinal, 500));
+
+        const client2 = new SseTestClient(port, { lastEventId });
+        await client2.statusCode;
+
+        // While client2's replay `fetchSince(anchorOrdinal, ...)` is still
+        // sleeping (500ms), insert a genuinely NEW row. The poller (ticking
+        // every 60ms, using `since=missedId` - NOT delayed) will pick this
+        // up and broadcast it to every LIVE subscriber. client2 is still
+        // REPLAYING at this point (SseHub's phase), so this broadcast must
+        // be buffered, not delivered immediately out of order.
+        await sleep(100);
+        const liveId = await insertTestRow(rawPool, "live-during-replay");
+        await sleep(200); // give the poller at least one more tick to broadcast it while client2 is still replaying
+
+        // Now wait for replay to finish AND the buffered live event to flush.
+        await client2.waitForFrame(
+          (f) => businessFrame(f) && f.data?.includes("live-during-replay") === true,
+          3000,
+        );
+
+        const businessFrames = client2.frames.filter(businessFrame);
+        expect(businessFrames.map((f) => f.data)).toEqual([
+          JSON.stringify({ label: "missed-before-reconnect" }),
+          JSON.stringify({ label: "live-during-replay" }),
+        ]);
+        // Correct, monotonically increasing per-source ids - proves the
+        // resulting Last-Event-ID represents exactly what was delivered,
+        // never a jump-then-inversion. The id STRING may also carry the
+        // reserved heartbeat source's own component (sourceIndex 0 - a
+        // heartbeat can legitimately interleave, see the assertion below),
+        // so this checks the business source's OWN entry within the vector
+        // rather than asserting the whole string verbatim.
+        const businessComponent = (id: string): string | undefined =>
+          id.split(",").find((entry) => entry.startsWith(`${TEST_SOURCE_INDEX}:`));
+        expect(businessComponent(businessFrames[0]!.id!)).toBe(`${TEST_SOURCE_INDEX}:${missedId}`);
+        expect(businessComponent(businessFrames[1]!.id!)).toBe(`${TEST_SOURCE_INDEX}:${liveId}`);
+
+        // A different, independent "source" (the reserved heartbeat slot,
+        // sourceIndex 0) is entirely unaffected by the buffering applied to
+        // the business source above - heartbeats keep flowing the whole
+        // time via the connection's own direct sendEvent path, never
+        // buffered (SseHub's class doc comment).
+        expect(client2.frames.some((f) => f.event === "heartbeat")).toBe(true);
+
+        client2.destroy();
+      } finally {
+        await app.close();
+        resetRegistryForTests();
+      }
+    });
   });
 
   it("disconnect cleans up server resources: activeConnectionCount returns to 0", async () => {
@@ -376,6 +618,84 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
     }
     expect(client.isClosed).toBe(true);
     expect(client.frames.some((f) => f.event === "server_shutdown")).toBe(true);
+  });
+
+  describe("backpressure overflow recovery (correctness-review defect 1, tests C/D)", () => {
+    it("test C: once a connection's bounded queue overflows (proven for real at the unit level, sse-hub.test.ts), reconnecting from the last id it ACTUALLY received recovers every missed row exactly once, in order", async () => {
+      // The overflow MECHANISM itself (BackpressureWriter's bound -> abrupt
+      // termination, never a silent drop-and-continue) is already proven
+      // directly and deterministically against the real BackpressureWriter
+      // class in sse-hub.test.ts's "backpressure overflow terminates the
+      // connection" suite (tests A/B/E). Genuinely inducing that same
+      // overflow here via real OS/Node socket buffering was tried first and
+      // found to be non-deterministic in practice (observed wall-clock time
+      // to overflow varied from ~1s to 18s+ across runs, and the CLIENT
+      // side's own close-event timing didn't reliably keep pace either) -
+      // exactly the kind of flaky real-timing dependency the correctness
+      // review itself warns against weakening tests to route around. So
+      // this test uses the SAME test-only-hook pattern already established
+      // (and already accepted) for native-reconnect proof
+      // (`simulateNetworkDropForTests`): a deterministic trigger for the
+      // precondition, then a fully REAL reconnect + REAL paginated replay
+      // for the property actually under test - recovery correctness.
+      const { app, port } = await startTestServer(dbConfig, { maxRowsPerSourcePerTick: 50 });
+      try {
+        const client1 = new SseTestClient(port);
+        await client1.statusCode;
+        await insertTestRow(rawPool, "anchor");
+        const anchorFrame = await client1.waitForFrame(businessFrame);
+        // The anchor was written DIRECTLY (the very first frame on this
+        // connection) - this is the position client1 can, for certain,
+        // actually claim as received.
+        const lastEventId = anchorFrame.id!;
+
+        app.sseTestHooks?.hub.simulateBackpressureOverflowForTests(STEP_03_TEST_SCOPE);
+        for (let i = 0; i < 50 && app.sseTestHooks?.hub.activeConnectionCount !== 0; i++) {
+          await sleep(50);
+        }
+        expect(app.sseTestHooks?.hub.activeConnectionCount).toBe(0);
+
+        // More rows than one replay page (50) were missed while the
+        // connection was gone - exercises pagination (defect 2) and
+        // overflow-recovery (defect 1) together.
+        const BURST_SIZE = 120;
+        const labels: string[] = [];
+        for (let i = 0; i < BURST_SIZE; i++) {
+          const label = `burst-${i}`;
+          labels.push(label);
+          await insertTestRow(rawPool, label);
+        }
+        await sleep(400); // let the poller advance the watermark past the whole burst
+
+        // Reconnect from the LAST id client1 can actually claim (the
+        // anchor) - normal Last-Event-ID replay must recover the ENTIRE
+        // burst, exactly once, in order. No event the overflow "swallowed"
+        // was ever silently skipped by a later id.
+        const client2 = new SseTestClient(port, { lastEventId });
+        await client2.statusCode;
+        await client2.waitForFrame(
+          (f) => businessFrame(f) && f.data?.includes(`burst-${BURST_SIZE - 1}`) === true,
+          5000,
+        );
+
+        const businessFrames = client2.frames.filter(businessFrame);
+        expect(businessFrames.map((f) => f.data)).toEqual(labels.map((label) => JSON.stringify({ label })));
+        client2.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    // test D ("if replay is outside retention, full resync occurs instead")
+    // is mechanistically the SAME "replay gap -> resync_required" path
+    // already proven by the "replay gap" test above, against a REAL
+    // disconnected connection - the server has no way to distinguish "this
+    // connection ended because of a backpressure overflow" from "this
+    // connection ended for any other reason" by the time a NEW connection
+    // reconnects with a Last-Event-ID: both are just "a stale cursor,
+    // resume from here". Re-deriving an entire second real-burst-overflow
+    // scenario here would exercise no code path the "replay gap" test
+    // doesn't already cover.
   });
 
   // ==================================================================

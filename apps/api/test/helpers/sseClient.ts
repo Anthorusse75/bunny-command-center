@@ -62,6 +62,9 @@ export class SseTestClient {
         res.on("end", () => {
           this.closed = true;
         });
+        res.on("close", () => {
+          this.closed = true;
+        });
       },
     );
     this.req.on("error", () => {

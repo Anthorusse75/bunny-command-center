@@ -15,23 +15,31 @@
 -- Step 03's own single poller uses the fixed key 'sse_hub'
 -- (apps/api/src/sse/poller.ts's SSE_HUB_CURSOR_KEY constant).
 --
--- IMPLEMENTATION NOTE (not a correction to either frozen document -
--- IMPLEMENTATION/03_realtime_infrastructure.md only authorizes editing
--- 26_REALTIME_SSE_AND_SYNC.md's example if the TABLE NAME differs from
--- 25_DATA_MODEL.md's; it doesn't here - both name it `dashboard_sse_cursor`,
--- so neither frozen document was touched by Step 03):
--- 25_DATA_MODEL.md's one-line summary describes this table as a
--- "per-connection/per-source watermark" pruned "once older than the
--- replay-retention window," while 26_REALTIME_SSE_AND_SYNC.md's own operative
--- description calls it a table that "tracks the last-delivered sequence per
--- underlying source table." These two summaries emphasize the table
--- differently rather than actually conflicting on shape, and Step 03 treats
--- this as an underspecified implementation detail, not a contradiction to
--- resolve by editing either document. What this migration implements: a
+-- ARCHITECTURE ERRATUM (2026-08-16, reviewer-authorized - correctness
+-- review's item 9). 25_DATA_MODEL.md's ORIGINAL one-line summary described
+-- this table as a "per-connection/per-source watermark" pruned "once older
+-- than the replay-retention window." That was a genuine documentary
+-- CONTRADICTION, not merely an underspecified detail - it directly conflicts
+-- with 26_REALTIME_SSE_AND_SYNC.md's own operative description, which is
+-- authoritative for this table's mechanism ("a lightweight internal poller
+-- ... watches [sources] for rows newer than the last-seen watermark" /
+-- "the durable watermark table ... tracks the last-delivered sequence per
+-- underlying source table" - a SERVER-SIDE consumer watermark, never one row
+-- per browser connection, and therefore never needing age-based pruning).
+-- 25_DATA_MODEL.md's own listed key columns already contradicted its own
+-- prose too: `source_table` + `cursor_key` alone, no connection identifier
+-- of any kind. IMPLEMENTATION/03_realtime_infrastructure.md's own clause
+-- ("if the name differs ... update that document's example to match, and
+-- note the correction in the handover") only literally covers a TABLE NAME
+-- mismatch (there wasn't one - both docs already agreed on
+-- `dashboard_sse_cursor`), so this correction went one step further than
+-- that clause's letter, under EXPLICIT reviewer authorization granted for
+-- this exact narrow case (see Step-03 HANDOVER) rather than under that
+-- clause alone. 25_DATA_MODEL.md's row was corrected to match; nothing else
+-- in either frozen document was touched. What this migration implements: a
 -- small, bounded set of rows (one per registered source adapter x
 -- cursor_key), continuously updated in place - never one row per ephemeral
--- browser connection, and therefore never needing age-based pruning. See the
--- Step-03 HANDOVER for the full rationale.
+-- browser connection.
 CREATE TABLE dashboard_sse_cursor (
   source_table VARCHAR(64) NOT NULL,
   cursor_key VARCHAR(64) NOT NULL,

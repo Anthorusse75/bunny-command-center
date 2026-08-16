@@ -34,6 +34,7 @@ export function startSsePoller(params: {
   onPollError?: (sourceTable: string) => void;
 }): SsePollerHandle {
   let stopped = false;
+  let timer: NodeJS.Timeout | null = null;
 
   async function tick(): Promise<void> {
     params.onPollTick?.();
@@ -71,18 +72,45 @@ export function startSsePoller(params: {
     }
   }
 
-  const timer = setInterval(() => {
+  /**
+   * Correctness-review defect 6: production polling previously used
+   * `setInterval(() => void tick(), interval)` with no in-flight guard - if
+   * one tick's DB round-trips ever took longer than `pollIntervalMs`, a
+   * second tick could start while the first was still reading the SAME
+   * `dashboard_sse_cursor` watermark, and both would broadcast the same
+   * rows (duplicate fan-out) before either had advanced the cursor. Fixed
+   * by scheduling the NEXT tick's timer only once the CURRENT tick's
+   * `await tick()` has fully settled (recursive `setTimeout`, not
+   * `setInterval`) - this makes "at most one tick in flight at any moment"
+   * true by construction, not by a separate guard flag that could itself
+   * race. `runOnceForTests` calls `tick()` directly and is documented
+   * (SsePollerHandle's own doc comment) as a test-only synchronous
+   * alternative to the timer loop, so it is intentionally NOT routed
+   * through this scheduler - a test calling it manages its own timing.
+   */
+  function scheduleNext(): void {
     if (stopped) {
       return;
     }
-    void tick();
-  }, params.pollIntervalMs);
-  timer.unref?.();
+    timer = setTimeout(() => {
+      if (stopped) {
+        return;
+      }
+      void tick().finally(() => {
+        scheduleNext();
+      });
+    }, params.pollIntervalMs);
+    timer.unref?.();
+  }
+  scheduleNext();
 
   return {
     stop() {
       stopped = true;
-      clearInterval(timer);
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
     },
     async runOnceForTests() {
       await tick();

@@ -26,7 +26,21 @@ export const RESYNC_REQUIRED_EVENT_TYPE = "resync_required" as const;
 export const resyncRequiredDataSchema = z
   .object({
     scope: z.string().min(1),
-    reason: z.enum(["REPLAY_GAP", "INVALID_CURSOR"]),
+    /**
+     * `REPLAY_GAP` — the client's Last-Event-ID is older than the source's
+     * retained history (a real, unrecoverable gap).
+     * `INVALID_CURSOR` — the supplied Last-Event-ID failed to decode.
+     * `REPLAY_FAILED` — the source adapter threw while serving replay for
+     * this scope; the server cannot know whether the client is actually
+     * caught up, so it never silently treats the connection as synchronized
+     * (correctness-review defect 4 — a caught-and-logged replay failure must
+     * never leave a stream looking healthy while the client missed data).
+     * `CURSOR_AHEAD` — the client's Last-Event-ID claims a position AHEAD of
+     * the server's own durable watermark, which a request must never be
+     * trusted to assert (correctness-review defect 5) — treated the same as
+     * any other untrustworthy cursor, never silently clamped and accepted.
+     */
+    reason: z.enum(["REPLAY_GAP", "INVALID_CURSOR", "REPLAY_FAILED", "CURSOR_AHEAD"]),
   })
   .strict();
 export type ResyncRequiredData = z.infer<typeof resyncRequiredDataSchema>;
@@ -131,11 +145,51 @@ const MAX_VECTOR_ENTRIES = 64;
  */
 const MAX_ENCODED_LENGTH = 4096;
 
+/**
+ * Internal-invariant guard shared by `encodeSseEventId` and `advanceVector`
+ * (correctness-review defect 8: "the encoder must never emit an SSE id the
+ * decoder would reject; reject an invalid internal vector rather than
+ * emitting corrupt wire protocol"). Both `sourceIndex` and `ordinal` must be
+ * non-negative JS safe integers — the exact same bound `decodeSseEventId`
+ * enforces on the way IN, checked here on the way OUT so the two directions
+ * can never drift apart.
+ */
+function assertValidVectorEntry(sourceIndex: number, ordinal: number, callerName: string): void {
+  if (!Number.isSafeInteger(sourceIndex) || sourceIndex < 0) {
+    throw new RangeError(
+      `${callerName}: sourceIndex must be a non-negative safe integer, got ${String(sourceIndex)}`,
+    );
+  }
+  if (!Number.isSafeInteger(ordinal) || ordinal < 0) {
+    throw new RangeError(
+      `${callerName}: ordinal must be a non-negative safe integer, got ${String(ordinal)}`,
+    );
+  }
+}
+
 export function encodeSseEventId(vector: SseCursorVector): string {
-  return [...vector.entries()]
+  if (vector.size > MAX_VECTOR_ENTRIES) {
+    // Never emit an id `decodeSseEventId` would itself reject on the way
+    // back in - an internal vector exceeding the wire bound is a genuine
+    // internal bug (e.g. a runaway source registration), not something to
+    // paper over by truncating entries and losing a source's position.
+    throw new RangeError(
+      `encodeSseEventId: internal vector has ${vector.size} entries, exceeding MAX_VECTOR_ENTRIES (${MAX_VECTOR_ENTRIES})`,
+    );
+  }
+  for (const [sourceIndex, ordinal] of vector.entries()) {
+    assertValidVectorEntry(sourceIndex, ordinal, "encodeSseEventId");
+  }
+  const encoded = [...vector.entries()]
     .sort(([a], [b]) => a - b)
     .map(([sourceIndex, ordinal]) => `${sourceIndex}:${ordinal}`)
     .join(",");
+  if (encoded.length > MAX_ENCODED_LENGTH) {
+    throw new RangeError(
+      `encodeSseEventId: encoded length ${encoded.length} exceeds MAX_ENCODED_LENGTH (${MAX_ENCODED_LENGTH})`,
+    );
+  }
+  return encoded;
 }
 
 /**
@@ -189,12 +243,24 @@ export function decodeSseEventId(raw: string): SseCursorVector | null {
   return vector;
 }
 
-/** Returns a new vector with `sourceIndex` advanced to `ordinal` (never regressing - mission §51: "cursor regression cannot silently move backward"). */
+/**
+ * Returns a new vector with `sourceIndex` advanced to `ordinal` (never
+ * regressing - mission §51: "cursor regression cannot silently move
+ * backward"). Throws on an invalid internal `sourceIndex`/`ordinal`
+ * (correctness-review defect 8) rather than silently accepting a value that
+ * would later fail `encodeSseEventId`'s own guard or corrupt the wire
+ * protocol - both call sites in this codebase (apps/api/src/sse/hub.ts's
+ * `sendEvent`/`broadcast`) only ever pass a registered adapter's own
+ * `sourceIndex` constant and a source row's own durable ordinal, so a
+ * violation here means an internal programming bug, not untrusted input
+ * (untrusted input is `decodeSseEventId`'s job, not this function's).
+ */
 export function advanceVector(
   vector: SseCursorVector,
   sourceIndex: number,
   ordinal: number,
 ): SseCursorVector {
+  assertValidVectorEntry(sourceIndex, ordinal, "advanceVector");
   const next = new Map(vector);
   const current = next.get(sourceIndex);
   if (current === undefined || ordinal > current) {
