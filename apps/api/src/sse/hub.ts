@@ -275,6 +275,30 @@ export class SseHub {
     internal.phase = "LIVE";
     for (const item of buffered) {
       if (item.kind === "event") {
+        // CORRECTNESS-REVIEW ROUND 2, DEFECT "pre-snapshot handoff window":
+        // a buffered item can be a DUPLICATE of something `replaySourceToTarget`
+        // already delivered directly via `sendEvent` (which mutates
+        // `internal.vector` as it goes - see that function's own call site in
+        // route.ts). That happens whenever the poller broadcasts a row for a
+        // source BEFORE route.ts snapshots that source's replay target
+        // watermark: the row lands in this buffer (registration already put
+        // the connection into REPLAYING), but the SAME row is then also
+        // fetched by `replaySourceToTarget` once the snapshot finally
+        // happens, because the snapshot is taken from the durable cursor
+        // table, which the poller had already advanced past that row by
+        // then. `internal.vector` is exactly the source of truth for "how far
+        // has this connection ACTUALLY been delivered for this source so
+        // far" (both `sendEvent` and this same loop maintain it), so a
+        // buffered item whose ordinal is <= the connection's current
+        // position for that source has, by definition, already reached the
+        // client - skip it rather than re-emitting the same durable row a
+        // second time (apps/api/test/sse-stream.test.ts's "pre-snapshot
+        // replay/bridge duplication" test proves this for both sides of the
+        // snapshot boundary).
+        const alreadyDelivered = internal.vector.get(item.sourceIndex);
+        if (alreadyDelivered !== undefined && item.ordinal <= alreadyDelivered) {
+          continue;
+        }
         internal.vector = advanceVector(internal.vector, item.sourceIndex, item.ordinal);
         internal.writer.write(
           formatSseFrame({ event: item.eventType, id: encodeSseEventId(internal.vector), data: item.data }),
@@ -283,6 +307,36 @@ export class SseHub {
         internal.writer.write(formatSseFrame({ event: item.eventType, data: item.data }));
       }
     }
+  }
+
+  /**
+   * Clears one source's component from a still-registered connection's
+   * resume vector (correctness-review round 2, CURSOR_AHEAD poisoning).
+   * `advanceVector` is monotonic-max by design (never regresses), so an
+   * untrustworthy, artificially-high initial position for one source (a
+   * client's Last-Event-ID claiming progress AHEAD of the server's own
+   * durable watermark - route.ts's `replayOrResync` detects this and calls
+   * this method before completing) would otherwise NEVER be overwritten by
+   * any real future ordinal the server actually produces for that source -
+   * every genuine ordinal a fresh/rebuilt source will produce for a long time
+   * is far below an arbitrary "ahead" claim, so the poisoned value would
+   * silently persist in every subsequent `id:` this connection ever emits.
+   * Removing the entry entirely (rather than clamping it down to the current
+   * watermark) makes the source look exactly like one this connection has
+   * never seen before - the same safe state `sendEvent`'s
+   * undefined-baseline path in `advanceVector` already handles correctly, so
+   * the very next real event for that source establishes a fresh, trustworthy
+   * position. A no-op if the connection is already gone or never had that
+   * entry (idempotent, safe to call unconditionally from route.ts).
+   */
+  resetSourceVector(connectionId: string, sourceIndex: number): void {
+    const internal = this.connections.get(connectionId);
+    if (!internal || !internal.vector.has(sourceIndex)) {
+      return;
+    }
+    const next = new Map(internal.vector);
+    next.delete(sourceIndex);
+    internal.vector = next;
   }
 
   private bufferOrOverflow(internal: InternalConnection, item: BufferedBroadcast): void {

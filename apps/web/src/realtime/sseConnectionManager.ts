@@ -202,6 +202,23 @@ export class SseConnectionManager {
       return;
     }
     if (eventType === RESYNC_REQUIRED_EVENT_TYPE) {
+      // Correctness-review round 2 (CURSOR_AHEAD/resync recovery): whatever
+      // this manager was remembering as its own resume position can no
+      // longer be trusted once the server has explicitly said so - clear it
+      // so that any FUTURE reconnect THIS LAYER itself initiates (case B -
+      // `buildConnectUrl`, e.g. after a fatal retry) starts fresh rather than
+      // resending a cursor the server has already rejected once. This does
+      // NOT touch the current, still-open connection or force a reconnect:
+      // the native browser reconnect (case A) tracks its OWN internal
+      // last-event-id from real received frames on THIS EventSource object,
+      // which can never include a rejected value either, because
+      // apps/api/src/sse/route.ts's `replayOrResync` already resets the
+      // connection's server-side vector for the affected source (via
+      // `SseHub.resetSourceVector`) BEFORE this frame - or any frame after
+      // it - is ever sent. So the current connection self-heals without any
+      // client action, and this line only prevents a STALE app-level memory
+      // from re-poisoning a later, separate reconnect.
+      this.lastKnownEventId = null;
       this.opts.onResyncRequired?.(data);
       return;
     }

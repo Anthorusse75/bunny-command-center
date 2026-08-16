@@ -281,6 +281,37 @@ describe("SseConnectionManager (fake EventSource, fake timers)", () => {
     manager.destroy();
   });
 
+  it("a real received id is remembered and sent as a ?lastEventId= bootstrap on the NEXT reconnect this layer initiates (sanity check that the mechanism works at all)", () => {
+    const manager = new SseConnectionManager({ url: "/api/stream", eventSourceFactory: fakeFactory() });
+    const es = FakeEventSource.instances[0]!;
+    es.simulateOpen();
+    es.simulateEvent("heartbeat", {}, "1:42");
+
+    es.simulateFatalError();
+    vi.advanceTimersByTime(1000); // fatalRetryBaseMs default
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances[1]!.url).toContain("lastEventId=1%3A42");
+    manager.destroy();
+  });
+
+  it("resync_required clears the remembered resume cursor so a FUTURE reconnect this layer initiates never resends a position the server has already rejected (correctness-review round 2, CURSOR_AHEAD poisoning)", () => {
+    const manager = new SseConnectionManager({ url: "/api/stream", eventSourceFactory: fakeFactory() });
+    const es = FakeEventSource.instances[0]!;
+    es.simulateOpen();
+    // A previously-legitimate high position, remembered from a real frame.
+    es.simulateEvent("heartbeat", {}, "1:999999");
+
+    es.simulateEvent("resync_required", { scope: "test", reason: "CURSOR_AHEAD" });
+
+    // Force a brand-new EventSource (case B) - e.g. a fatal retry after this
+    // same connection later goes bad for an unrelated reason.
+    es.simulateFatalError();
+    vi.advanceTimersByTime(1000);
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances[1]!.url).not.toContain("lastEventId");
+    manager.destroy();
+  });
+
   it("ensureEventTypeSubscribed attaches a native listener, including after a reconnect creates a fresh EventSource", () => {
     const manager = new SseConnectionManager({ url: "/api/stream", eventSourceFactory: fakeFactory() });
     manager.ensureEventTypeSubscribed("dashboard.sse_test_probe_changed");

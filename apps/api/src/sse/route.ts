@@ -205,6 +205,22 @@ export function buildSseRoutePlugin(params: {
  * responsibility for anything beyond its own snapshotted target, leaving
  * everything past it to that buffered live path instead.
  */
+/**
+ * Explicit completion contract (correctness-review round 2, defect "replay
+ * must prove it actually reached its target"): the caller must never infer
+ * completeness merely from this function returning without throwing. A short
+ * or empty page before `targetOrdinalInclusive` is reached is a REAL,
+ * observable incompleteness (the adapter had less history available than the
+ * snapshotted target implied - e.g. concurrent retention pruning) and must be
+ * reported as such via `reachedTarget: false`, not silently treated as "the
+ * source happened to be caught up".
+ */
+interface ReplayToTargetResult {
+  readonly replayedCount: number;
+  readonly finalOrdinal: number;
+  readonly reachedTarget: boolean;
+}
+
 async function replaySourceToTarget(params: {
   handle: SseConnectionHandle;
   adapter: SourceAdapter;
@@ -213,16 +229,19 @@ async function replaySourceToTarget(params: {
   pageSize: number;
   scopes: SseChannelScope[];
   logger: FastifyBaseLogger;
-}): Promise<number> {
+}): Promise<ReplayToTargetResult> {
   let cursor = params.fromOrdinalExclusive;
   let totalReplayed = 0;
   while (cursor < params.targetOrdinalInclusive) {
     const rows = await params.adapter.fetchSince(cursor, params.pageSize);
     if (rows.length === 0) {
+      // Exhausted before reaching the snapshotted target - `reachedTarget`
+      // below will correctly be false.
       break;
     }
     const pageWasShort = rows.length < params.pageSize;
     let sawBeyondTarget = false;
+    let advancedThisPage = false;
     for (const row of rows) {
       if (row.ordinal > params.targetOrdinalInclusive) {
         // This row (and everything after it in this ascending-order page)
@@ -243,19 +262,33 @@ async function replaySourceToTarget(params: {
       }
       if (row.ordinal > cursor) {
         cursor = row.ordinal;
+        advancedThisPage = true;
       }
     }
     if (sawBeyondTarget) {
       // `break` here exits the outer `while` unconditionally (this function
       // returns right after), so no further read of `cursor` ever happens -
-      // termination doesn't depend on advancing it further.
+      // termination doesn't depend on advancing it further. Everything from
+      // this row onward belongs to the poller's own live broadcast path
+      // instead (see this function's own top-of-file doc comment).
+      break;
+    }
+    if (!advancedThisPage) {
+      // A page came back non-empty but made no forward progress at all -
+      // correctness-review round 2: an adapter contract violation (rows
+      // that don't actually advance past `cursor`) must fail safe rather
+      // than spin this loop forever re-fetching the exact same window.
       break;
     }
     if (pageWasShort) {
       break;
     }
   }
-  return totalReplayed;
+  return {
+    replayedCount: totalReplayed,
+    finalOrdinal: cursor,
+    reachedTarget: cursor >= params.targetOrdinalInclusive,
+  };
 }
 
 async function replayOrResync(params: {
@@ -305,6 +338,18 @@ async function replayOrResync(params: {
         // stale (server data was reset/rebuilt) or outright forged. The
         // only safe response is the same one used for any other
         // untrustworthy cursor: a full resync.
+        //
+        // ROUND 2 FIX: `resetSourceVector` clears the poisoned position from
+        // THIS connection's own resume vector (hub.ts's own doc comment has
+        // the full invariant). Without this, `advanceVector`'s monotonic-max
+        // semantics would let the untrustworthy value silently survive in
+        // every subsequent `id:` this connection emits (no real future
+        // ordinal will exceed an arbitrary "ahead" claim for a long time),
+        // permanently poisoning this connection's replay position - the
+        // resync signal alone tells the CLIENT to refetch, but does nothing
+        // about the SERVER's own now-corrupt in-memory state for this
+        // connection unless this is called too.
+        params.hub.resetSourceVector(params.handle.connectionId, adapter.sourceIndex);
         for (const scope of params.scopes) {
           sendResync(params.handle, scope, "CURSOR_AHEAD");
         }
@@ -324,7 +369,7 @@ async function replayOrResync(params: {
         continue;
       }
 
-      const replayedCount = await replaySourceToTarget({
+      const replayResult = await replaySourceToTarget({
         handle: params.handle,
         adapter,
         fromOrdinalExclusive: knownOrdinal,
@@ -333,8 +378,23 @@ async function replayOrResync(params: {
         scopes: params.scopes,
         logger: params.logger,
       });
-      if (replayedCount > 0) {
-        sseMetrics.eventsReplayed(replayedCount);
+      if (replayResult.replayedCount > 0) {
+        sseMetrics.eventsReplayed(replayResult.replayedCount);
+      }
+      if (!replayResult.reachedTarget) {
+        // Correctness-review round 2: the caller must not trust replay
+        // completion merely because `replaySourceToTarget` returned without
+        // throwing - a short/empty page arriving before the snapshotted
+        // target (or an adapter making no forward progress) means this
+        // source's replay stopped short of `currentWatermark`. Treat it
+        // exactly like the pre-existing retention-gap case: the client
+        // cannot be allowed to transition to LIVE believing it is fully
+        // caught up while actually missing data between
+        // `replayResult.finalOrdinal` and `currentWatermark`.
+        sseMetrics.replayGap();
+        for (const scope of params.scopes) {
+          sendResync(params.handle, scope, "REPLAY_GAP");
+        }
       }
     } catch (err) {
       // Correctness-review defect 4: a replay failure for one source must

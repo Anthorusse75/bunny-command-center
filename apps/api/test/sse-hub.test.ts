@@ -285,6 +285,100 @@ describe("SseHub", () => {
       expect(() => hub.completeReplay(handle.connectionId)).not.toThrow();
     });
 
+    it("completeReplay() dedups a buffered item already covered by direct sendEvent delivery (correctness-review round 2: pre-snapshot handoff window)", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 10,
+        retryMs: 1000,
+      });
+
+      // Simulates replaySourceToTarget's OWN direct delivery (route.ts) -
+      // this is what a resuming connection's own replay call does, distinct
+      // from the poller's cross-connection `broadcast()` below.
+      handle.sendEvent(1, 5, "a", { n: 5 });
+      // The SAME row also arrives via the poller's broadcast while this
+      // connection is still REPLAYING (the pre-snapshot race window) -
+      // buffered, not delivered directly.
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 5, "a", { n: 5 });
+      // A genuinely NEW row above what was already delivered - must still
+      // be delivered normally.
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 6, "a", { n: 6 });
+
+      hub.completeReplay(handle.connectionId);
+
+      // Exactly 2 writes total: the direct sendEvent for ordinal 5, and the
+      // flush for ordinal 6 - the buffered duplicate of ordinal 5 was
+      // skipped, never delivered a second time.
+      expect(res.written).toHaveLength(2);
+      expect(res.written[0]).toContain("id: 1:5");
+      expect(res.written[1]).toContain("id: 1:6");
+    });
+
+    it("completeReplay() dedups multiple buffered duplicates of the same already-delivered ordinal, not just one", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 10,
+        retryMs: 1000,
+      });
+
+      handle.sendEvent(1, 5, "a", { n: 5 });
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 3, "a", { n: 3 }); // below already-delivered position
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 5, "a", { n: 5 }); // exact duplicate
+      hub.completeReplay(handle.connectionId);
+
+      expect(res.written).toHaveLength(1); // only the direct sendEvent for ordinal 5
+    });
+  });
+
+  describe("resetSourceVector (correctness-review round 2: CURSOR_AHEAD poisoning)", () => {
+    it("removes one source's component from a connection's resume vector - the next real event for that source starts fresh instead of being clamped by advanceVector's monotonic max", () => {
+      const hub = new SseHub();
+      const res = new FakeResponse();
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map([[1, 999_999_999]]), // an untrustworthy "ahead" position
+        res: res as never,
+        maxQueuedFrames: 10,
+        retryMs: 1000,
+      });
+      hub.completeReplay(handle.connectionId);
+
+      hub.resetSourceVector(handle.connectionId, 1);
+
+      // Without the reset, advanceVector's monotonic max would keep
+      // 999999999 forever - a real, much lower ordinal must now be accepted
+      // and reflected verbatim.
+      hub.broadcast(STEP_03_TEST_SCOPE, 1, 101, "a", { n: 101 });
+      expect(res.written).toHaveLength(1);
+      expect(res.written[0]).toContain("id: 1:101");
+      expect(res.written[0]).not.toContain("999999999");
+    });
+
+    it("is a safe no-op for an unknown connectionId or a source the connection never had", () => {
+      const hub = new SseHub();
+      expect(() => hub.resetSourceVector("nonexistent", 1)).not.toThrow();
+
+      const res = new FakeResponse();
+      const handle = hub.register({
+        scopes: [STEP_03_TEST_SCOPE],
+        initialVector: new Map(),
+        res: res as never,
+        maxQueuedFrames: 10,
+        retryMs: 1000,
+      });
+      expect(() => hub.resetSourceVector(handle.connectionId, 7)).not.toThrow();
+    });
+  });
+
+  describe("broadcastControl phase behavior", () => {
     it("broadcastControl also respects the REPLAYING phase and is included in the flush, in the same relative order as the events around it", () => {
       const hub = new SseHub();
       const res = new FakeResponse();
