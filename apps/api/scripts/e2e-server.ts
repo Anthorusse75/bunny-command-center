@@ -28,6 +28,11 @@ import type { AppConfig } from "../src/config.js";
 import { runUp } from "../migrations/runner.js";
 import type { MigratorDbConfig } from "../migrations/config.js";
 import { registerEventType, registerSourceAdapter } from "../src/sse/registry.js";
+import { createKyselyClient } from "../src/db/kysely.js";
+import { upsertDashboardUser } from "../src/auth/userRepo.js";
+import { createSession } from "../src/auth/sessionRepo.js";
+import { encryptSecret } from "../src/auth/tokenCrypto.js";
+import { generateSessionToken } from "../src/auth/sessionToken.js";
 
 // apps/api/test/helpers is allowed to be imported from scripts/ (only src/ is restricted).
 import {
@@ -36,6 +41,7 @@ import {
   createTestSourceSchema,
   testEventDataSchema,
 } from "../test/helpers/sseTestSource.js";
+import { testDiscordConfig, testSessionConfig } from "../test/helpers/testAuthConfig.js";
 
 const REAL_MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -99,9 +105,60 @@ async function main(): Promise<void> {
       maxQueuedFramesPerConnection: 200,
       maxRowsPerSourcePerTick: 500,
     },
+    // The Step-03 realtime E2E suite (apps/web/e2e/realtime.spec.ts) never
+    // exercises the OAuth/session flow itself - these are the same
+    // deliberately-fake, non-secret placeholders test/helpers/testAuthConfig.ts
+    // uses, reused here rather than duplicated.
+    discord: testDiscordConfig(),
+    session: testSessionConfig(),
   };
 
   const fastify = await buildServer(config);
+
+  // TEST-ONLY, this file only (mission §35's "test-only event injection may
+  // exist behind test-only dependency wiring, but not a publicly shippable
+  // debug API" - never registered by src/server.ts/buildServer(), only by
+  // this dedicated E2E-harness script). Step 04's browser suite needs a way
+  // to reach the AUTHENTICATED app surface without driving a real Discord
+  // consent screen (31_TEST_STRATEGY.md: a controlled test double is
+  // acceptable for protocol testing; the Step-01/02/03 regression specs this
+  // route exists for don't test OAuth AT ALL, they test the design
+  // system/realtime transport, which now sits behind Step 04's auth gate).
+  // Reuses the REAL session-creation code path (createSession/
+  // upsertDashboardUser/encryptSecret - the exact functions
+  // apps/api/src/auth/routes.ts's real callback handler calls), skipping
+  // only the Discord round-trip itself, and sets the cookie with the same
+  // attributes production login sets. `apps/web/e2e/auth.setup.ts` is the
+  // only consumer, once, to seed Playwright's shared `storageState` - it is
+  // never called from `apps/web/src/` runtime code.
+  const testOnlyDb = createKyselyClient(dbConfig);
+  fastify.get("/api/__test__/login", async (_request, reply) => {
+    const user = await upsertDashboardUser(testOnlyDb, {
+      discordUserId: "900000000001",
+      username: "E2ETestUser",
+      avatarHash: null,
+      encryptedAccessToken: encryptSecret("e2e-fake-access-token", config.session.tokenEncryptionKey),
+      encryptedRefreshToken: encryptSecret("e2e-fake-refresh-token", config.session.tokenEncryptionKey),
+      tokenExpiresAt: new Date(Date.now() + 3600_000),
+    });
+    const rawToken = generateSessionToken();
+    await createSession(testOnlyDb, rawToken, {
+      userId: user.id,
+      deviceLabel: null,
+      userAgent: null,
+      ipHash: null,
+      slidingTtlMs: config.session.slidingTtlMs,
+      absoluteTtlMs: config.session.absoluteTtlMs,
+    });
+    reply.setCookie(config.session.cookieName, rawToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: Math.floor(config.session.slidingTtlMs / 1000),
+    });
+    return { data: { success: true } };
+  });
   await fastify.listen({ port: config.port, host: "127.0.0.1" });
   console.log(`[e2e-server] listening on http://127.0.0.1:${config.port}`);
 

@@ -1,13 +1,17 @@
-import type { FastifyBaseLogger, FastifyPluginAsync } from "fastify";
+import type { FastifyBaseLogger, FastifyPluginAsync, FastifyRequest } from "fastify";
+import type { Kysely } from "kysely";
 import {
   decodeSseEventId,
   resyncRequiredDataSchema,
   RESYNC_REQUIRED_EVENT_TYPE,
   STEP_03_TEST_SCOPE,
+  userScope,
   type SseChannelScope,
   type SseCursorVector,
 } from "@bunny-command-center/shared";
 import type { AppConfig } from "../config.js";
+import type { DB } from "../db/codegen-types.js";
+import { resolveAuthenticatedUser } from "../auth/index.js";
 import { SseHub, type SseConnectionHandle } from "./hub.js";
 import { startHeartbeat } from "./heartbeat.js";
 import { validateSourceRow } from "./validate.js";
@@ -27,22 +31,42 @@ import { SSE_HUB_CURSOR_KEY, type SourceAdapter } from "./types.js";
 const SSE_RETRY_MS = 3000;
 
 /**
- * STEP 04/05 EXTENSION POINT (apps/api/src/sse/route.ts:44).
+ * STEP 04/05 EXTENSION POINT (`resolveSubscriptionScopes` below).
  * 03_realtime_infrastructure.md §SECURITY & RBAC: "The real per-channel
  * authorization ... is finished in Step 05/06 once RBAC exists - this step's
  * placeholder identity must be clearly marked as temporary and the real
  * subscription-authorization hook point must be an explicit, obvious
  * extension point (not something Step 05 has to reverse-engineer)."
  *
- * Every Step-03 connection is subscribed to exactly the synthetic test scope
- * - never a real `guild:`/`user:`/`admin:`/`platform` channel, since no
- * session/authorization exists yet to justify one. Step 04/05 replaces this
- * function's body with real session-derived scopes (own `userScope`,
- * favorited guilds -> `guildScope`, Guild Admin resolution -> `adminScope`,
- * Superadmin -> `platform`); the route handler's call site
- * (`buildSseRoutePlugin` below) does not need to change.
+ * STEP 04 UPDATE (IMPLEMENTATION/04_discord_oauth_sessions.md's "ÉTAT ATTENDU
+ * APRÈS": "Real SSE identity now flows from the actual session (replaces
+ * Step 03's placeholder) for the `user:{userId}` channel specifically — full
+ * per-guild channel authorization still waits on Step 05/06."): a connection
+ * presenting a VALID `bcc_session` cookie is now subscribed to its own real
+ * `user:{userId}` scope instead of the synthetic one. A connection with no
+ * session (or an invalid/expired one) still gets exactly
+ * `[STEP_03_TEST_SCOPE]`, unchanged from Step 03 — deliberately NOT rejected
+ * with 401 here: `/api/stream` is not yet gated behind `requireAuth`
+ * (24_API_CONTRACTS.md lists it as min-tier USER, but enforcing that is a
+ * larger change than this narrow identity-flow requirement calls for, and
+ * Step 03's own regression suite connects without any session at all — see
+ * this step's HANDOVER "Step 03 compatibility" deviation note for why full
+ * route-level auth enforcement here is deliberately deferred, not silently
+ * dropped). `guild:`/`admin:`/`platform` scopes remain exclusively Step
+ * 05/06's responsibility, per this same extension-point contract.
  */
-function resolveSubscriptionScopes(): SseChannelScope[] {
+async function resolveSubscriptionScopes(
+  db: Kysely<DB>,
+  config: AppConfig,
+  request: FastifyRequest,
+): Promise<SseChannelScope[]> {
+  const authResult = await resolveAuthenticatedUser(db, config, request).catch((err: unknown) => {
+    request.log.warn({ err }, "sse: session resolution failed while opening a stream connection");
+    return undefined;
+  });
+  if (authResult) {
+    return [userScope(String(authResult.user.id))];
+  }
   return [STEP_03_TEST_SCOPE];
 }
 
@@ -50,11 +74,12 @@ export function buildSseRoutePlugin(params: {
   hub: SseHub;
   cursorRepo: SseCursorRepo;
   config: AppConfig;
+  db: Kysely<DB>;
 }): FastifyPluginAsync {
   // eslint-disable-next-line @typescript-eslint/require-await -- FastifyPluginAsync's contract
   return async (fastify) => {
-    fastify.get("/api/stream", (request, reply) => {
-      const scopes = resolveSubscriptionScopes();
+    fastify.get("/api/stream", async (request, reply) => {
+      const scopes = await resolveSubscriptionScopes(params.db, params.config, request);
 
       // ==================================================================
       // Last-Event-ID resolution — TWO DISTINCT RECONNECT CASES, one

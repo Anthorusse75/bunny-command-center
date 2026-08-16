@@ -30,6 +30,7 @@ import {
   testEventDataSchema,
 } from "./helpers/sseTestSource.js";
 import { SseTestClient, type ParsedSseFrame } from "./helpers/sseClient.js";
+import { testDiscordConfig, testSessionConfig } from "./helpers/testAuthConfig.js";
 
 const ROOT_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -74,6 +75,8 @@ function testConfig(dbConfig: MigratorDbConfig, overrides: Partial<AppConfig["ss
       maxRowsPerSourcePerTick: 500,
       ...overrides,
     },
+    discord: testDiscordConfig(),
+    session: testSessionConfig(),
   };
 }
 

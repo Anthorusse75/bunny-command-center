@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach } from "vitest";
 import { installMatchMediaMock, resetMatchMediaMock } from "./matchMedia.js";
 import { installInertEventSourceStub } from "./eventSourceMock.js";
+import { installFetchMock } from "./fetchMock.js";
 
 // Every test starts from the same media state and the same empty storage, so a test that
 // stores a theme preference cannot leak into the next one's "first visit" assertions.
@@ -9,6 +10,10 @@ beforeEach(() => {
   resetMatchMediaMock();
   installMatchMediaMock();
   installInertEventSourceStub();
+  // Step 04: fresh, default (unauthenticated) fetch stub per test — a test
+  // needing the authenticated app surface opts in via
+  // `mockAuthenticatedSession()` (fetchMock.js) before rendering.
+  installFetchMock();
   window.localStorage.clear();
   document.documentElement.removeAttribute("data-bcc-theme");
   document.documentElement.removeAttribute("data-bcc-color-scheme");

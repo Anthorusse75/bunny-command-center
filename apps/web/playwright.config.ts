@@ -12,6 +12,7 @@
 // plugin.
 
 import { defineConfig, devices } from "@playwright/test";
+import { STORAGE_STATE_PATH } from "./e2e/helpers.js";
 
 const PORT = 4317;
 
@@ -52,15 +53,66 @@ export default defineConfig({
   },
   projects: [
     {
+      // Step 04: authenticates once via the E2E-only test login route and
+      // saves the session cookie other projects reuse (see auth.setup.ts's
+      // own doc comment for the full rationale). Runs before any project
+      // that declares it as a dependency.
+      name: "setup",
+      testMatch: /auth\.setup\.ts/,
+    },
+    {
       // Desktop: >= 960px, so the sidebar layout.
       name: "desktop-chromium",
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1280, height: 900 },
+        storageState: STORAGE_STATE_PATH,
+      },
+      dependencies: ["setup"],
+      // Two files deliberately excluded from the pre-authenticated session:
+      // auth.spec.ts tests the UNAUTHENTICATED surface on purpose (a clean,
+      // cookie-less context, run by its own `auth-flow-chromium` project
+      // below); realtime.spec.ts's whole proof depends on connecting
+      // WITHOUT a session so /api/stream falls back to STEP_03_TEST_SCOPE
+      // (apps/api/src/sse/route.ts's resolveSubscriptionScopes) — the exact
+      // synthetic scope its test source adapter publishes to. An
+      // authenticated connection would instead get the real `user:{id}`
+      // scope and never see those events, which is correct Step-04 behavior
+      // but not what this Step-03 regression suite is proving (see its own
+      // `realtime-chromium` project below, unchanged from Step 03).
+      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts/,
     },
     {
       // Mobile: a real device profile (touch, DPR, UA), so the bottom-nav layout and the
       // tap-only tooltip path are exercised the way 31_TEST_STRATEGY.md's "Mobile" row asks.
       name: "mobile-chromium",
+      use: { ...devices["Pixel 7"], storageState: STORAGE_STATE_PATH },
+      dependencies: ["setup"],
+      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts/,
+    },
+    {
+      // Step 04: the real (unauthenticated) Login/OAuth-error/logout flows,
+      // in a real browser, with NO pre-seeded session — this is the project
+      // that actually proves SCREENS/AUTH.md's states, not just that the
+      // rest of the app still works behind them.
+      name: "auth-flow-chromium",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+      testMatch: /auth\.spec\.ts/,
+    },
+    {
+      // Step 03's realtime regression suite, UNCHANGED from before Step 04:
+      // no pre-seeded session, so every connection gets STEP_03_TEST_SCOPE
+      // exactly as it always has (see the desktop/mobile-chromium comment
+      // above for why this must stay separate rather than folded into
+      // those two projects now that they carry an authenticated session).
+      name: "realtime-chromium",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+      testMatch: /realtime\.spec\.ts/,
+    },
+    {
+      name: "realtime-mobile-chromium",
       use: { ...devices["Pixel 7"] },
+      testMatch: /realtime\.spec\.ts/,
     },
   ],
   webServer: [
