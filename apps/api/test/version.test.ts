@@ -7,6 +7,12 @@ const CONFIG: AppConfig = {
   logLevel: "silent",
   appVersion: "0.1.0-scaffold-test",
   db: { host: "unused-in-this-test", port: 3306, user: "x", password: "x", database: "x" },
+  sse: {
+    heartbeatSeconds: 15,
+    pollIntervalMs: 3000,
+    maxQueuedFramesPerConnection: 200,
+    maxRowsPerSourcePerTick: 500,
+  },
 };
 
 describe("/api/version", () => {

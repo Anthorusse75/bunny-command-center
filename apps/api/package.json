@@ -11,7 +11,9 @@
     "test": "vitest run",
     "migrate": "tsx migrations/cli.ts",
     "codegen": "tsx scripts/codegen.ts",
-    "codegen:check": "tsx scripts/check-codegen-freshness.ts"
+    "codegen:check": "tsx scripts/check-codegen-freshness.ts",
+    "e2e-db-setup": "tsx scripts/e2e-db-setup.ts",
+    "e2e-server": "tsx scripts/e2e-server.ts"
   },
   "dependencies": {
     "@bunny-command-center/shared": "0.1.0-scaffold",

@@ -47,7 +47,8 @@
     "state": {
       "loading": "Loading…",
       "empty": "Nothing here yet",
-      "offline": "You're offline — changes will sync when reconnected"
+      "offline": "You're offline — changes will sync when reconnected",
+      "reconnecting": "Live updates are temporarily delayed — we're checking for changes periodically instead"
     },
     "screenshotCount_one": "{{count}} screenshot",
     "screenshotCount_other": "{{count}} screenshots",

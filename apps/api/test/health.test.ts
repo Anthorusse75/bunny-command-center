@@ -25,6 +25,12 @@ const BASE_CONFIG: AppConfig = {
   logLevel: "silent",
   appVersion: "0.1.0-scaffold-test",
   db: REACHABLE_DB_CONFIG,
+  sse: {
+    heartbeatSeconds: 15,
+    pollIntervalMs: 3000,
+    maxQueuedFramesPerConnection: 200,
+    maxRowsPerSourcePerTick: 500,
+  },
 };
 
 async function freshDatabase(): Promise<void> {

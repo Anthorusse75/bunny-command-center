@@ -24,16 +24,20 @@ in every environment (`ADR-011`).
 - No `DROP`/`MODIFY`/`CHANGE COLUMN` — additive-only, enforced by the same
   static test.
 
-## As of Step 01
+## Ledger
 
-This directory intentionally contains **zero** `.sql` files. No
-Dashboard-owned table exists yet — the mechanism itself (apply / idempotent
-reapply / checksum-mismatch rejection) is proven by
-`apps/api/test/migrations-runner.test.ts` against an isolated fixture
-directory (`apps/api/test/fixtures/migrations/`), and was additionally
-proven manually end-to-end against a real MySQL instance using a temporary
-`_scaffold_probe` migration that was removed again before this step was
-finalized (see the Step 01 HANDOVER for the transcript).
+| Version                            | Table                  | Step                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0001_create_dashboard_sse_cursor` | `dashboard_sse_cursor` | 03 (`03_realtime_infrastructure.md`) — durable per-(source_table, cursor_key) watermark backing the SSE poller's Last-Event-ID resume. See the migration file's own header comment for the full rationale. `26_REALTIME_SSE_AND_SYNC.md` was never modified; `25_DATA_MODEL.md`'s one-line summary for this table WAS corrected (2026-08-16, reviewer-authorized erratum — it directly contradicted `26`'s own operative description; see the migration header). |
+
+As of Step 01, this directory intentionally contained **zero** `.sql`
+files — the mechanism itself (apply / idempotent reapply / checksum-mismatch
+rejection) was proven by `apps/api/test/migrations-runner.test.ts` against an
+isolated fixture directory (`apps/api/test/fixtures/migrations/`), and
+additionally proven manually end-to-end against a real MySQL instance using a
+temporary `_scaffold_probe` migration that was removed again before that step
+was finalized (see the Step 01 HANDOVER for the transcript). Step 03 added
+the first real entry above.
 
 ## Usage
 

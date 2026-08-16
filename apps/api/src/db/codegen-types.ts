@@ -334,6 +334,14 @@ export interface DashboardSchemaMigrations {
   version: string;
 }
 
+export interface DashboardSseCursor {
+  created_at: Generated<Date>;
+  cursor_key: string;
+  last_sequence: Generated<number>;
+  source_table: string;
+  updated_at: Generated<Date>;
+}
+
 export interface DiscordIngestionCursors {
   channel_id: number;
   created_at: Generated<Date>;
@@ -1519,6 +1527,7 @@ export interface DB {
   contributors: Contributors;
   dashboard_role_assignments: DashboardRoleAssignments;
   dashboard_schema_migrations: DashboardSchemaMigrations;
+  dashboard_sse_cursor: DashboardSseCursor;
   discord_ingestion_cursors: DiscordIngestionCursors;
   discord_message_cleanup_jobs: DiscordMessageCleanupJobs;
   discord_submissions: DiscordSubmissions;
