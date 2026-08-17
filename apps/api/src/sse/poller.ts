@@ -47,6 +47,34 @@ export function startSsePoller(params: {
         }
         let maxOrdinal = since;
         for (const row of rows) {
+          if (row.ordinal > maxOrdinal) {
+            maxOrdinal = row.ordinal;
+          }
+        }
+        // Durable watermark advances BEFORE any broadcast for this tick's
+        // rows reaches subscribers (correctness fix, D.RESUME CI
+        // investigation - see apps/api/test/sse-stream.test.ts's
+        // "broadcast-before-durable-advance window" test, which reproduces
+        // the bug deterministically against the OLD advance-after-broadcast
+        // order). Previously, `broadcast()` fired first and `advance()`
+        // (a real DB write) followed - a client reconnecting in that gap
+        // registered too late to catch the live broadcast (hub.ts's
+        // REPLAYING bridge buffer only captures broadcasts from the moment
+        // of registration onward) AND read a stale watermark for its own
+        // replay-target snapshot (`route.ts`'s `replayOrResync`, which reads
+        // straight from this same durable cursor), missing the row via
+        // BOTH paths - a genuine, permanent loss, not a duplicate. Ordering
+        // the durable write first closes that gap: any connection
+        // registering between the two steps now either (a) registered
+        // before this line, so still catches the row live via the buffer,
+        // or (b) reads a watermark that ALREADY covers this tick's rows and
+        // gets them via replay instead - a possible duplicate delivery in
+        // that second case, but that side of the boundary was already
+        // proven safe by the existing "pre-snapshot replay/bridge
+        // duplication window" test (`completeReplay`'s `internal.vector`
+        // dedup in hub.ts).
+        await params.cursorRepo.advance(adapter.sourceTable, SSE_HUB_CURSOR_KEY, maxOrdinal);
+        for (const row of rows) {
           const validated = validateSourceRow(row, adapter.sourceTable, params.logger);
           if (validated) {
             params.hub.broadcast(
@@ -57,11 +85,7 @@ export function startSsePoller(params: {
               validated.data,
             );
           }
-          if (row.ordinal > maxOrdinal) {
-            maxOrdinal = row.ordinal;
-          }
         }
-        await params.cursorRepo.advance(adapter.sourceTable, SSE_HUB_CURSOR_KEY, maxOrdinal);
       } catch (err) {
         params.onPollError?.(adapter.sourceTable);
         params.logger.error(

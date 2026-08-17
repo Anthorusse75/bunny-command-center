@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildServer } from "../src/server.js";
 import type { AppConfig } from "../src/config.js";
+import { testDiscordConfig, testSessionConfig } from "./helpers/testAuthConfig.js";
 
 const CONFIG: AppConfig = {
   port: 0,
@@ -13,6 +14,8 @@ const CONFIG: AppConfig = {
     maxQueuedFramesPerConnection: 200,
     maxRowsPerSourcePerTick: 500,
   },
+  discord: testDiscordConfig(),
+  session: testSessionConfig(),
 };
 
 describe("/api/version", () => {

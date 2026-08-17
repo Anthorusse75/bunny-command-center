@@ -334,12 +334,39 @@ export interface DashboardSchemaMigrations {
   version: string;
 }
 
+export interface DashboardSessions {
+  absolute_expires_at: Date;
+  created_at: Generated<Date>;
+  device_label: string | null;
+  expires_at: Date;
+  id: string;
+  ip_hash: string | null;
+  last_seen_at: Date;
+  user_agent: string | null;
+  user_id: number;
+}
+
 export interface DashboardSseCursor {
   created_at: Generated<Date>;
   cursor_key: string;
   last_sequence: Generated<number>;
   source_table: string;
   updated_at: Generated<Date>;
+}
+
+export interface DashboardUsers {
+  avatar_hash: string | null;
+  created_at: Generated<Date>;
+  discord_access_token_enc: Buffer | null;
+  discord_refresh_token_enc: Buffer | null;
+  discord_token_expires_at: Date | null;
+  discord_user_id: string;
+  id: Generated<number>;
+  locale: Generated<string>;
+  theme_mode: Generated<string>;
+  theme_name: Generated<string>;
+  updated_at: Generated<Date>;
+  username: string;
 }
 
 export interface DiscordIngestionCursors {
@@ -1527,7 +1554,9 @@ export interface DB {
   contributors: Contributors;
   dashboard_role_assignments: DashboardRoleAssignments;
   dashboard_schema_migrations: DashboardSchemaMigrations;
+  dashboard_sessions: DashboardSessions;
   dashboard_sse_cursor: DashboardSseCursor;
+  dashboard_users: DashboardUsers;
   discord_ingestion_cursors: DiscordIngestionCursors;
   discord_message_cleanup_jobs: DiscordMessageCleanupJobs;
   discord_submissions: DiscordSubmissions;

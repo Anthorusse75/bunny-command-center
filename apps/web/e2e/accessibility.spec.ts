@@ -60,6 +60,12 @@ test.describe("axe-core", () => {
 test.describe("keyboard-only operation", () => {
   test("reaches the skip link first, then every appearance control", async ({ page }) => {
     await page.goto("/");
+    // STEP 04: the app shell now renders only after the async
+    // GET /api/auth/session bootstrap resolves (AuthProvider) — waiting for
+    // it here (matching every other test in this file) avoids a race where
+    // Tab is pressed while the loading state is still shown and nothing is
+    // focusable yet. The assertion this test makes is unchanged.
+    await expect(page.getByTestId("app-shell")).toBeVisible();
 
     await page.keyboard.press("Tab");
     await expect(page.getByTestId("skip-link")).toBeFocused();

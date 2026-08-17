@@ -78,6 +78,11 @@
     "validation": "Vérifiez les champs signalés puis réessayez.",
     "upload": {
       "fileTooLarge": "Ce fichier dépasse la limite de {{maxMb}} Mo."
+    },
+    "auth": {
+      "unauthenticated": "Vous devez vous connecter pour continuer.",
+      "csrfHeaderMissing": "Cette requête n'a pas pu être vérifiée. Merci de recharger la page et de réessayer.",
+      "sessionNotFound": "Cette session n'existe plus."
     }
   },
   "a11y": {
@@ -137,7 +142,25 @@
       "level": "Surface niveau {{level}}"
     }
   },
-  "auth": {},
+  "auth": {
+    "login": {
+      "title": "Bunny Command Center",
+      "tagline": "Envoyez vos captures d'écran, suivez le PremiumPlus et faites progresser votre guilde.",
+      "cta": "Continuer avec Discord"
+    },
+    "redirecting": "Redirection vers Discord…",
+    "error": {
+      "heading": "Impossible de vous connecter.",
+      "denied": "Vous avez refusé la demande d'autorisation Discord. Vous pouvez réessayer quand vous le souhaitez.",
+      "stateMismatch": "Votre demande de connexion n'a pas pu être vérifiée. Cela peut arriver si elle a expiré ou a été ouverte dans un autre onglet — merci de réessayer.",
+      "tokenExchangeFailed": "La connexion avec Discord n'a pas pu être finalisée. Merci de réessayer dans un instant.",
+      "tryAgain": "Réessayer"
+    },
+    "sessionExpired": {
+      "message": "Votre session a expiré.",
+      "loginAgain": "Se reconnecter"
+    }
+  },
   "home": {},
   "upload": {},
   "guild": {},

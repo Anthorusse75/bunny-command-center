@@ -6,17 +6,20 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/server.js",
+    "start": "node --conditions=bcc-compiled-runtime dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "migrate": "tsx migrations/cli.ts",
     "codegen": "tsx scripts/codegen.ts",
     "codegen:check": "tsx scripts/check-codegen-freshness.ts",
     "e2e-db-setup": "tsx scripts/e2e-db-setup.ts",
-    "e2e-server": "tsx scripts/e2e-server.ts"
+    "e2e-server": "tsx scripts/e2e-server.ts",
+    "smoke-test-compiled": "node scripts/smoke-test-compiled-server.mjs"
   },
   "dependencies": {
     "@bunny-command-center/shared": "0.1.0-scaffold",
+    "@fastify/cookie": "11.1.2",
+    "@fastify/rate-limit": "11.2.0",
     "fastify": "5.11.3",
     "kysely": "0.29.5",
     "mysql2": "3.23.3",

@@ -1,5 +1,7 @@
 import { pathToFileURL } from "node:url";
 import Fastify, { LogController } from "fastify";
+import fastifyCookie from "@fastify/cookie";
+import fastifyRateLimit from "@fastify/rate-limit";
 import { loadAppConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { healthRoutes } from "./routes/health.js";
@@ -13,6 +15,15 @@ import {
   type SseCursorRepo,
   type SsePollerHandle,
 } from "./sse/index.js";
+import {
+  buildAuthRoutes,
+  createSessionCookieRenewalHook,
+  OAuthTransactionRegistry,
+  startOAuthTransactionSweep,
+  startSessionSweep,
+  type OAuthTransactionSweepHandle,
+  type SessionSweepHandle,
+} from "./auth/index.js";
 
 /**
  * In-process-only test seam (never an HTTP-reachable route - mission §35:
@@ -27,9 +38,17 @@ export interface SseTestHooks {
   poller: SsePollerHandle;
 }
 
+/** Same in-process-only test seam convention as SseTestHooks above, for Step 04's session-sweep timer and OAuth transaction registry sweep. */
+export interface AuthTestHooks {
+  sessionSweep: SessionSweepHandle;
+  oauthTransactionRegistry: OAuthTransactionRegistry;
+  oauthTransactionSweep: OAuthTransactionSweepHandle;
+}
+
 declare module "fastify" {
   interface FastifyInstance {
     sseTestHooks?: SseTestHooks;
+    authTestHooks?: AuthTestHooks;
   }
 }
 
@@ -52,6 +71,25 @@ export async function buildServer(config = loadAppConfig()) {
     }),
   });
 
+  // Cookie parsing/serialization (Step 04: session + pre-auth OAuth
+  // transaction cookies). No `secret` option here - this repo signs the one
+  // cookie that needs tamper-detection (the pre-auth transaction cookie)
+  // itself, with its own dedicated HMAC key (auth/transactionCookie.ts),
+  // rather than relying on this plugin's generic cookie-signing feature for
+  // every cookie in the app.
+  await fastify.register(fastifyCookie);
+  // Sliding session-cookie renewal (Step 04 correction pass, ADR-020: "30-day
+  // sliding window refreshed on any authenticated request") — registered
+  // once, globally on the root instance, so it covers every current AND
+  // future route gated by `requireAuth`, not just today's `/api/auth/*` set.
+  // See requireAuth.ts's `createSessionCookieRenewalHook` doc comment for why
+  // this lives in an `onSend` hook rather than inside `requireAuth` itself.
+  fastify.addHook("onSend", createSessionCookieRenewalHook(config));
+  // Rate limiting (27_SECURITY.md: "/api/auth/login, /api/auth/callback:
+  // tight rate limit per IP"). Global default is generous; the login/callback
+  // routes set their own tighter `config.rateLimit` (auth/routes.ts).
+  await fastify.register(fastifyRateLimit, { global: false });
+
   await fastify.register(healthRoutes(config));
   await fastify.register(versionRoutes(config));
 
@@ -61,7 +99,9 @@ export async function buildServer(config = loadAppConfig()) {
   // pool - see its own comment) and is closed via the onClose hook below,
   // alongside the poller and every open SSE connection, so a graceful
   // shutdown (32_DEPLOYMENT_AND_OPERATIONS.md §Graceful shutdown) never
-  // leaves a dangling pool, timer, or socket.
+  // leaves a dangling pool, timer, or socket. Step 04 reuses this SAME pool
+  // for dashboard_users/dashboard_sessions access - one runtime connection
+  // pool for the whole process, per ADR-022.
   const db = createKyselyClient(config.db);
   const cursorRepo = createSseCursorRepo(db);
   const hub = new SseHub();
@@ -73,7 +113,18 @@ export async function buildServer(config = loadAppConfig()) {
     maxRowsPerTick: config.sse.maxRowsPerSourcePerTick,
   });
 
-  await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config }));
+  // Owned here (not inside buildAuthRoutes/routes.ts) specifically so its
+  // documented periodic sweep can actually be started and stopped alongside
+  // the SSE poller and session sweep below — a registry the route module
+  // created and kept entirely to itself would be unreachable from both
+  // (Copilot review, Step 04 review pass).
+  const oauthTransactionRegistry = new OAuthTransactionRegistry();
+  const oauthTransactionSweep = startOAuthTransactionSweep({ registry: oauthTransactionRegistry, logger });
+  await fastify.register(buildAuthRoutes(db, config, oauthTransactionRegistry));
+  const sessionSweep = startSessionSweep({ db, logger, intervalMs: config.session.sweepIntervalMs });
+  fastify.decorate("authTestHooks", { sessionSweep, oauthTransactionRegistry, oauthTransactionSweep });
+
+  await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db }));
   fastify.decorate("sseTestHooks", { hub, cursorRepo, poller });
 
   // `preClose`, not `onClose`: Fastify's OWN internal "stop the HTTP server"
@@ -88,6 +139,8 @@ export async function buildServer(config = loadAppConfig()) {
   // empirically; see the Step-03 HANDOVER's Deviations/lessons section).
   fastify.addHook("preClose", async () => {
     poller.stop();
+    sessionSweep.stop();
+    oauthTransactionSweep.stop();
     hub.closeAll("server_shutting_down");
     await db.destroy();
   });

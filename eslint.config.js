@@ -50,6 +50,16 @@ export default tseslint.config(
     },
   },
   {
+    // Step 04 correction 2's compiled-runtime smoke test is deliberately
+    // plain Node.js (`.mjs`, no TS/tsx anywhere in its own execution) - the
+    // TS-file block above doesn't cover it, and `js.configs.recommended`
+    // alone has no notion of Node's runtime globals.
+    files: ["**/*.mjs"],
+    languageOptions: {
+      globals: { process: "readonly", console: "readonly", fetch: "readonly", setTimeout: "readonly" },
+    },
+  },
+  {
     // ---------------------------------------------------------------------
     // No hardcoded visible strings (D-019, 19_I18N_FR_EN_DE.md §Enforcement 3)
     // ---------------------------------------------------------------------

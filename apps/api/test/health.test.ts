@@ -11,6 +11,7 @@ import { buildServer } from "../src/server.js";
 import type { AppConfig } from "../src/config.js";
 import { runUp } from "../migrations/runner.js";
 import type { MigratorDbConfig } from "../migrations/config.js";
+import { testDiscordConfig, testSessionConfig } from "./helpers/testAuthConfig.js";
 
 const REACHABLE_DB_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -31,6 +32,8 @@ const BASE_CONFIG: AppConfig = {
     maxQueuedFramesPerConnection: 200,
     maxRowsPerSourcePerTick: 500,
   },
+  discord: testDiscordConfig(),
+  session: testSessionConfig(),
 };
 
 async function freshDatabase(): Promise<void> {

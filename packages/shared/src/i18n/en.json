@@ -77,6 +77,11 @@
     "validation": "Please check the highlighted fields and try again.",
     "upload": {
       "fileTooLarge": "This file is larger than the {{maxMb}} MB limit."
+    },
+    "auth": {
+      "unauthenticated": "You need to sign in to continue.",
+      "csrfHeaderMissing": "This request could not be verified. Please reload the page and try again.",
+      "sessionNotFound": "That session no longer exists."
     }
   },
   "a11y": {
@@ -136,7 +141,25 @@
       "level": "Surface level {{level}}"
     }
   },
-  "auth": {},
+  "auth": {
+    "login": {
+      "title": "Bunny Command Center",
+      "tagline": "Upload screenshots, track PremiumPlus, and compete with your guild.",
+      "cta": "Continue with Discord"
+    },
+    "redirecting": "Redirecting to Discord…",
+    "error": {
+      "heading": "We couldn't sign you in.",
+      "denied": "You declined the Discord authorization request. You can try again whenever you're ready.",
+      "stateMismatch": "Your sign-in request could not be verified. This can happen if it expired or was opened in another tab — please try again.",
+      "tokenExchangeFailed": "We couldn't complete sign-in with Discord. Please try again in a moment.",
+      "tryAgain": "Try again"
+    },
+    "sessionExpired": {
+      "message": "Your session expired.",
+      "loginAgain": "Log in again"
+    }
+  },
   "home": {},
   "upload": {},
   "guild": {},

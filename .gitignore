@@ -27,3 +27,7 @@ apps/web/.vite/
 apps/web/test-results/
 apps/web/playwright-report/
 apps/web/.playwright/
+# Playwright storage state (Step 04 auth.setup.ts) - a real, if throwaway/E2E-only,
+# session cookie; never committed even though the account behind it is a synthetic
+# test-only identity, not a real Discord user.
+apps/web/e2e/.auth/

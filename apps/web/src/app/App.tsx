@@ -26,7 +26,17 @@ import { AppShell } from "../shell/AppShell.js";
 import { DesignSystemShowcase } from "../showcase/DesignSystemShowcase.js";
 import { SseProvider, createBccQueryClient } from "../realtime/index.js";
 import { RealtimeTestProbe, realtimeTestProbeEnabled } from "../realtime/RealtimeTestProbe.js";
+import { AuthProvider, AuthGate } from "../features/auth/index.js";
 
+// STEP 04 UPDATE (04_discord_oauth_sessions.md): `AuthProvider` sits inside
+// `QueryClientProvider`/`BccI18nProvider` (its Login/error screens are
+// translated) but OUTSIDE `SseProvider` — `/api/stream` does not require
+// authentication yet (see apps/api/src/sse/route.ts's own HANDOVER-deviation
+// comment), so the realtime transport connects regardless of auth status,
+// exactly as it did in Step 03. `AuthGate` is the single place that decides
+// whether the authenticated app content (today: the Step 02 showcase; Step
+// 06 replaces this with real routes) or one of SCREENS/AUTH.md's pre-auth
+// states renders.
 export function App(): React.JSX.Element {
   const [queryClient] = useState(createBccQueryClient);
 
@@ -34,14 +44,18 @@ export function App(): React.JSX.Element {
     <BccThemeProvider>
       <BccI18nProvider>
         <QueryClientProvider client={queryClient}>
-          <SseProvider>
-            <ToastProvider>
-              <AppShell>
-                <DesignSystemShowcase />
-              </AppShell>
-              {realtimeTestProbeEnabled() ? <RealtimeTestProbe /> : null}
-            </ToastProvider>
-          </SseProvider>
+          <AuthProvider>
+            <SseProvider>
+              <ToastProvider>
+                <AuthGate>
+                  <AppShell>
+                    <DesignSystemShowcase />
+                  </AppShell>
+                </AuthGate>
+                {realtimeTestProbeEnabled() ? <RealtimeTestProbe /> : null}
+              </ToastProvider>
+            </SseProvider>
+          </AuthProvider>
         </QueryClientProvider>
       </BccI18nProvider>
     </BccThemeProvider>

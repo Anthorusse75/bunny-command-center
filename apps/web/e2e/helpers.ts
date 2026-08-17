@@ -21,6 +21,13 @@ const CATALOG_DIR = path.join(
   "i18n",
 );
 
+/** Shared Playwright `storageState` file `auth.setup.ts` writes and `playwright.config.ts` applies to every project that needs an authenticated session (Step 04). */
+export const STORAGE_STATE_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  ".auth",
+  "session.json",
+);
+
 export function loadCatalog(locale: string): Catalog {
   return JSON.parse(readFileSync(path.join(CATALOG_DIR, `${locale}.json`), "utf-8")) as Catalog;
 }

@@ -17,12 +17,42 @@ export interface SseConfig {
   maxRowsPerSourcePerTick: number;
 }
 
+export interface DiscordOAuthConfig {
+  /** Bunny OCR Discord APPLICATION client ID (07_DISCORD_OAUTH.md) — never the bot token. */
+  clientId: string;
+  /** Server-only secret, never sent to the browser, never logged. */
+  clientSecret: string;
+  /** Registered per-environment on the Discord Developer Portal (07_DISCORD_OAUTH.md). Trusted-value only, never client-supplied. */
+  redirectUri: string;
+  /** ADR-004 (corrected 2026-08-11, second pass): `identify guilds guilds.members.read` — see HANDOVER for the scope-contradiction resolution. */
+  scope: string;
+  /** Overridable so integration tests can point at a local controlled Discord test double instead of the real discord.com hosts. */
+  authorizeBaseUrl: string;
+  tokenUrl: string;
+  apiBaseUrl: string;
+}
+
+export interface SessionConfig {
+  cookieName: string;
+  /** Pre-auth OAuth transaction cookie name — distinct purpose from the post-auth session cookie (27_SECURITY.md: session fixation prevention). */
+  transactionCookieName: string;
+  /** HMAC key (raw bytes) signing the pre-auth transaction cookie so its state/PKCE/redirect payload can't be tampered with. */
+  transactionSigningKey: Buffer;
+  /** AES-256-GCM key (32 raw bytes) encrypting Discord access/refresh tokens at rest (ADR-020). */
+  tokenEncryptionKey: Buffer;
+  slidingTtlMs: number;
+  absoluteTtlMs: number;
+  sweepIntervalMs: number;
+}
+
 export interface AppConfig {
   port: number;
   logLevel: string;
   db: DbConfig;
   appVersion: string;
   sse: SseConfig;
+  discord: DiscordOAuthConfig;
+  session: SessionConfig;
 }
 
 /**
@@ -77,6 +107,29 @@ export function positiveIntEnv(env: EnvSource, name: string, defaultValue: numbe
  * this default and passes nothing); tests pass an explicit plain object so
  * config validation can be exercised without mutating global process state.
  */
+/**
+ * Decodes a required env var expected to hold N raw bytes, encoded as hex or
+ * base64 (hex preferred/documented in .env.example; base64 accepted too since
+ * it's a common secret-manager convention). Fails fast and loudly on a
+ * missing/malformed/wrong-length value — a silently-truncated or
+ * silently-zero encryption/signing key is exactly the kind of defect this
+ * step's security invariants forbid (27_SECURITY.md: never weaken security
+ * to make startup "just work").
+ */
+function requiredKeyBytes(env: EnvSource, name: string, expectedLength: number): Buffer {
+  const raw = required(env, name);
+  const buf =
+    /^[0-9a-fA-F]+$/.test(raw) && raw.length === expectedLength * 2
+      ? Buffer.from(raw, "hex")
+      : Buffer.from(raw, "base64");
+  if (buf.length !== expectedLength) {
+    throw new Error(
+      `Invalid ${name}: expected ${expectedLength} raw bytes (hex or base64 encoded), got ${buf.length} bytes.`,
+    );
+  }
+  return buf;
+}
+
 export function loadAppConfig(env: EnvSource = process.env): AppConfig {
   return {
     port: Number(env.PORT ?? 8080),
@@ -94,6 +147,25 @@ export function loadAppConfig(env: EnvSource = process.env): AppConfig {
       pollIntervalMs: positiveIntEnv(env, "SSE_POLL_INTERVAL_MS", 3000),
       maxQueuedFramesPerConnection: positiveIntEnv(env, "SSE_MAX_QUEUED_FRAMES", 200),
       maxRowsPerSourcePerTick: positiveIntEnv(env, "SSE_MAX_ROWS_PER_SOURCE_PER_TICK", 500),
+    },
+    discord: {
+      clientId: required(env, "DISCORD_CLIENT_ID"),
+      clientSecret: required(env, "DISCORD_CLIENT_SECRET"),
+      redirectUri: required(env, "DISCORD_REDIRECT_URI"),
+      // ADR-004 (corrected 2026-08-11, second pass) / 07_DISCORD_OAUTH.md: `identify guilds guilds.members.read`.
+      scope: env.DISCORD_OAUTH_SCOPE ?? "identify guilds guilds.members.read",
+      authorizeBaseUrl: env.DISCORD_AUTHORIZE_BASE_URL ?? "https://discord.com/oauth2/authorize",
+      tokenUrl: env.DISCORD_TOKEN_URL ?? "https://discord.com/api/oauth2/token",
+      apiBaseUrl: env.DISCORD_API_BASE_URL ?? "https://discord.com/api",
+    },
+    session: {
+      cookieName: env.DASHBOARD_SESSION_COOKIE_NAME ?? "bcc_session",
+      transactionCookieName: env.DASHBOARD_OAUTH_TRANSACTION_COOKIE_NAME ?? "bcc_oauth_txn",
+      transactionSigningKey: requiredKeyBytes(env, "DASHBOARD_OAUTH_TRANSACTION_SIGNING_KEY", 32),
+      tokenEncryptionKey: requiredKeyBytes(env, "DASHBOARD_TOKEN_ENCRYPTION_KEY", 32),
+      slidingTtlMs: positiveIntEnv(env, "DASHBOARD_SESSION_SLIDING_TTL_DAYS", 30) * 24 * 60 * 60 * 1000,
+      absoluteTtlMs: positiveIntEnv(env, "DASHBOARD_SESSION_ABSOLUTE_TTL_DAYS", 90) * 24 * 60 * 60 * 1000,
+      sweepIntervalMs: positiveIntEnv(env, "DASHBOARD_SESSION_SWEEP_INTERVAL_MINUTES", 60) * 60 * 1000,
     },
   };
 }

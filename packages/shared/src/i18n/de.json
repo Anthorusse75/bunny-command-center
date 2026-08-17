@@ -77,6 +77,11 @@
     "validation": "Bitte prüfen Sie die markierten Felder und versuchen Sie es erneut.",
     "upload": {
       "fileTooLarge": "Diese Datei überschreitet das Limit von {{maxMb}} MB."
+    },
+    "auth": {
+      "unauthenticated": "Du musst dich anmelden, um fortzufahren.",
+      "csrfHeaderMissing": "Diese Anfrage konnte nicht überprüft werden. Bitte lade die Seite neu und versuche es erneut.",
+      "sessionNotFound": "Diese Sitzung existiert nicht mehr."
     }
   },
   "a11y": {
@@ -136,7 +141,25 @@
       "level": "Oberfläche Ebene {{level}}"
     }
   },
-  "auth": {},
+  "auth": {
+    "login": {
+      "title": "Bunny Command Center",
+      "tagline": "Lade Screenshots hoch, verfolge PremiumPlus und tritt für deine Gilde an.",
+      "cta": "Mit Discord fortfahren"
+    },
+    "redirecting": "Weiterleitung zu Discord…",
+    "error": {
+      "heading": "Anmeldung nicht möglich.",
+      "denied": "Du hast die Discord-Autorisierungsanfrage abgelehnt. Du kannst es jederzeit erneut versuchen.",
+      "stateMismatch": "Deine Anmeldeanfrage konnte nicht überprüft werden. Das kann passieren, wenn sie abgelaufen ist oder in einem anderen Tab geöffnet wurde — bitte versuche es erneut.",
+      "tokenExchangeFailed": "Die Anmeldung bei Discord konnte nicht abgeschlossen werden. Bitte versuche es gleich noch einmal.",
+      "tryAgain": "Erneut versuchen"
+    },
+    "sessionExpired": {
+      "message": "Deine Sitzung ist abgelaufen.",
+      "loginAgain": "Erneut anmelden"
+    }
+  },
   "home": {},
   "upload": {},
   "guild": {},

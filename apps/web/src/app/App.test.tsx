@@ -16,6 +16,18 @@ import i18next from "../i18n/index.js";
 import { App } from "./App.js";
 import { COLOR_SCHEME_ATTRIBUTE, THEME_ATTRIBUTE } from "../theme/mode.js";
 import { clickLocaleOptionAndSettle } from "../test/i18nTestUtils.js";
+import { mockAuthenticatedSession } from "../test/fetchMock.js";
+
+// STEP 04 NOTE (disclosed deviation, not a silent regression — see this
+// step's HANDOVER "Step 01/02/03 regression result" section): every test
+// below that asserts on the Step 02 showcase/shell now first calls
+// `mockAuthenticatedSession()`, since `<App>` is gated behind
+// `<AuthGate>` (apps/web/src/features/auth/AuthGate.tsx) as of this step —
+// an unauthenticated mount now correctly shows the Login screen instead.
+// Every original claim these tests made (i18n pipeline wired, theme engine
+// mounts, toast region present, shell present, zero console errors) is
+// still asserted, now from behind the explicit "authenticated" fixture a
+// security-gated app legitimately requires.
 
 describe("App", () => {
   // i18next is a module singleton, so a language switched inside one test would otherwise
@@ -40,15 +52,20 @@ describe("App", () => {
     });
   });
 
-  it("renders translated copy from the catalogs (the i18n pipeline is wired end to end)", () => {
+  it("renders translated copy from the catalogs (the i18n pipeline is wired end to end)", async () => {
+    mockAuthenticatedSession();
     render(<App />);
     // Not a literal: the same key, resolved through i18next, is what the DOM must contain.
-    expect(screen.getByRole("heading", { level: 1, name: i18next.t("showcase.title") })).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { level: 1, name: i18next.t("showcase.title") })).toBeVisible();
+    });
   });
 
   it("re-renders that copy in French when the language changes, with no reload", async () => {
+    mockAuthenticatedSession();
     const user = userEvent.setup();
     render(<App />);
+    await screen.findByRole("heading", { level: 1, name: i18next.t("showcase.title") });
     await clickLocaleOptionAndSettle(user, "locale-option-fr");
     expect(document.documentElement.getAttribute("lang")).toBe("fr");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
@@ -56,20 +73,26 @@ describe("App", () => {
     );
   });
 
-  it("mounts the theme engine, the toast region and the responsive shell together", () => {
+  it("mounts the theme engine, the toast region and the responsive shell together", async () => {
+    mockAuthenticatedSession();
     render(<App />);
     expect(document.documentElement.getAttribute(THEME_ATTRIBUTE)).toBe("fusion");
     expect(document.documentElement.getAttribute(COLOR_SCHEME_ATTRIBUTE)).toBe("light");
-    expect(screen.getByTestId("app-shell")).toBeInTheDocument();
+    // toast-region is mounted unconditionally (outside the Step-04 auth gate) —
+    // no waitFor needed for it specifically.
     expect(screen.getByTestId("toast-region")).toBeInTheDocument();
-    expect(screen.getByTestId("main-content")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("app-shell")).toBeInTheDocument();
+      expect(screen.getByTestId("main-content")).toBeInTheDocument();
+    });
   });
 
-  it("renders without a single console error across the whole mount", () => {
+  it("renders without a single console error across the whole mount (authenticated)", async () => {
     // 02_design_system_i18n.md §ACCEPTANCE CRITERIA: "All 9 theme x mode combinations render
     // without console errors". This covers the default combination at the integration level;
     // the other eight are covered per-combination in ../theme/__tests__ and in the browser
     // suite.
+    mockAuthenticatedSession();
     const errors: unknown[][] = [];
     const original = console.error;
     console.error = (...args: unknown[]) => {
@@ -77,9 +100,48 @@ describe("App", () => {
     };
     try {
       render(<App />);
+      await screen.findByTestId("app-shell");
     } finally {
       console.error = original;
     }
     expect(errors).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------
+  // Step 04: the auth gate itself.
+  // -------------------------------------------------------------------
+  it("shows the Login screen (not the authenticated app) when there is no session — the default, honest state", async () => {
+    render(<App />);
+    expect(await screen.findByTestId("login-screen")).toBeVisible();
+    expect(screen.queryByTestId("app-shell")).not.toBeInTheDocument();
+  });
+
+  it("renders without a single console error while unauthenticated (Login screen)", async () => {
+    const errors: unknown[][] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      render(<App />);
+      await screen.findByTestId("login-screen");
+    } finally {
+      console.error = original;
+    }
+    expect(errors).toEqual([]);
+  });
+
+  it("shows the OAuth error screen when the URL carries a known ?error= reason, never the authenticated app", async () => {
+    const originalLocation = window.location.href;
+    window.history.replaceState(null, "", "/login?error=state_mismatch");
+    try {
+      render(<App />);
+      expect(await screen.findByTestId("oauth-error-screen")).toBeVisible();
+      expect(screen.getByTestId("oauth-error-detail")).toHaveTextContent(
+        i18next.t("auth.error.stateMismatch"),
+      );
+    } finally {
+      window.history.replaceState(null, "", originalLocation);
+    }
   });
 });

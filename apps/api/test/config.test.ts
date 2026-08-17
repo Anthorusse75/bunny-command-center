@@ -16,6 +16,16 @@ const REQUIRED_DB_ENV: EnvSource = {
   DB_USER: "u",
   DB_PASSWORD: "p",
   DB_NAME: "n",
+  // Step 04: OAuth/session config is also required for loadAppConfig() to
+  // succeed — deliberately-fake, non-secret placeholder values (see
+  // test/helpers/testAuthConfig.ts for the equivalent used by other suites;
+  // this file constructs its own inline since it exercises loadAppConfig's
+  // ENV-STRING parsing specifically, not a pre-built AppConfig object).
+  DISCORD_CLIENT_ID: "test-client-id",
+  DISCORD_CLIENT_SECRET: "test-client-secret",
+  DISCORD_REDIRECT_URI: "http://127.0.0.1/api/auth/callback",
+  DASHBOARD_OAUTH_TRANSACTION_SIGNING_KEY: "11".repeat(32),
+  DASHBOARD_TOKEN_ENCRYPTION_KEY: "22".repeat(32),
 };
 
 describe("apps/api config: SSE numeric env validation (correctness-review defect 7)", () => {

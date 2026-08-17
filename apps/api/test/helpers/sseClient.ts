@@ -41,7 +41,10 @@ export class SseTestClient {
   private waiters: { predicate: (f: ParsedSseFrame) => boolean; resolve: (f: ParsedSseFrame) => void }[] = [];
   private closed = false;
 
-  constructor(port: number, opts: { lastEventId?: string; path?: string } = {}) {
+  constructor(
+    port: number,
+    opts: { lastEventId?: string; path?: string; cookies?: Record<string, string> } = {},
+  ) {
     let resolveHeaders!: (h: http.IncomingHttpHeaders) => void;
     let resolveStatus!: (s: number | undefined) => void;
     this.headers = new Promise((resolve) => (resolveHeaders = resolve));
@@ -50,6 +53,11 @@ export class SseTestClient {
     const headers: Record<string, string> = {};
     if (opts.lastEventId !== undefined) {
       headers["Last-Event-ID"] = opts.lastEventId;
+    }
+    if (opts.cookies) {
+      headers["Cookie"] = Object.entries(opts.cookies)
+        .map(([name, value]) => `${name}=${value}`)
+        .join("; ");
     }
 
     this.req = http.request(

@@ -13,9 +13,15 @@ import mysql from "mysql2/promise";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { STEP_03_TEST_SCOPE } from "@bunny-command-center/shared";
+import { STEP_03_TEST_SCOPE, userScope } from "@bunny-command-center/shared";
+import type { Kysely } from "kysely";
 import { buildServer } from "../src/server.js";
 import type { AppConfig } from "../src/config.js";
+import type { DB } from "../src/db/codegen-types.js";
+import { createKyselyClient } from "../src/db/kysely.js";
+import { upsertDashboardUser } from "../src/auth/userRepo.js";
+import { createSession, findValidSessionByRawToken } from "../src/auth/sessionRepo.js";
+import { encryptSecret } from "../src/auth/tokenCrypto.js";
 import { runUp } from "../migrations/runner.js";
 import type { MigratorDbConfig } from "../migrations/config.js";
 import { registerEventType, registerSourceAdapter, resetRegistryForTests } from "../src/sse/registry.js";
@@ -30,6 +36,7 @@ import {
   testEventDataSchema,
 } from "./helpers/sseTestSource.js";
 import { SseTestClient, type ParsedSseFrame } from "./helpers/sseClient.js";
+import { testDiscordConfig, testSessionConfig } from "./helpers/testAuthConfig.js";
 
 const ROOT_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -74,6 +81,8 @@ function testConfig(dbConfig: MigratorDbConfig, overrides: Partial<AppConfig["ss
       maxRowsPerSourcePerTick: 500,
       ...overrides,
     },
+    discord: testDiscordConfig(),
+    session: testSessionConfig(),
   };
 }
 
@@ -809,6 +818,83 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
     });
   });
 
+  describe("broadcast-before-durable-advance window (reconnect race, D.RESUME CI investigation)", () => {
+    it("a row broadcast by the poller BEFORE a reconnecting client registers, whose durable watermark advance is still in flight when that client snapshots its replay target, is still delivered exactly once - never permanently lost", async () => {
+      // Root-caused from a real, reproducible CI flake on
+      // apps/web/e2e/realtime.spec.ts's "D. RESUME" test: two rows inserted
+      // back-to-back while disconnected, only the SECOND one ever arrived.
+      // poller.ts's tick body calls `hub.broadcast()` for each row (which
+      // only reaches connections ALREADY registered) and only AFTERWARD
+      // durably records `dashboard_sse_cursor` via `cursorRepo.advance()`.
+      // A client reconnecting in the gap between those two steps registers
+      // too late for that tick's broadcast AND reads a replay-target
+      // watermark that doesn't include the row yet either - a genuine loss,
+      // not a duplicate (the already-tested "pre-snapshot" race above is the
+      // mirror-image, later-arriving side of this exact same boundary).
+      //
+      // `advance` is patched (not `getLastSequence`, unlike the dup test
+      // above) to artificially widen this specific gap: firing the tick
+      // WITHOUT awaiting it reaches the synchronous `broadcast()` calls
+      // (after `fetchSince` resolves) and then blocks inside the now-slow
+      // `advance()` - reconnecting client2 during that block reproduces the
+      // exact real-world interleaving deterministically instead of hoping a
+      // real ~ms-scale race lines up.
+      const { app, port } = await startTestServer(dbConfig, {
+        pollIntervalMs: 999_999,
+        heartbeatSeconds: 999_999,
+      });
+      try {
+        const hooks = app.sseTestHooks;
+        if (!hooks) throw new Error("sseTestHooks not decorated");
+
+        const client1 = new SseTestClient(port);
+        await client1.statusCode;
+        await insertTestRow(rawPool, "anchor");
+        await hooks.poller.runOnceForTests();
+        const anchorFrame = await client1.waitForFrame(businessFrame);
+        const lastEventId = anchorFrame.id!;
+        client1.destroy();
+        await sleep(50);
+
+        const originalAdvance = hooks.cursorRepo.advance.bind(hooks.cursorRepo);
+        hooks.cursorRepo.advance = async (sourceTable: string, cursorKey: string, newSequence: number) => {
+          await sleep(300);
+          return originalAdvance(sourceTable, cursorKey, newSequence);
+        };
+
+        const gapRowId = await insertTestRow(rawPool, "gap-row");
+        // Fire-and-forget: broadcasts "gap-row" synchronously once
+        // `fetchSince` resolves, then blocks inside the patched `advance`.
+        void hooks.poller.runOnceForTests();
+        // Long enough to be well past the synchronous broadcast, well short
+        // of the 300ms `advance` delay - client2 registers and takes its
+        // own replay-target snapshot squarely inside the gap.
+        await sleep(50);
+
+        const client2 = new SseTestClient(port, { lastEventId });
+        await client2.statusCode;
+
+        const delivered = await client2.waitForFrame(
+          (f) => businessFrame(f) && f.data?.includes("gap-row") === true,
+          3000,
+        );
+
+        const matching = client2.frames.filter((f) => businessFrame(f) && f.data?.includes("gap-row"));
+        expect(matching).toHaveLength(1); // exactly once - never lost, never duplicated
+
+        const businessComponent = delivered
+          .id!.split(",")
+          .find((entry) => entry.startsWith(`${TEST_SOURCE_INDEX}:`));
+        expect(businessComponent).toBe(`${TEST_SOURCE_INDEX}:${gapRowId}`);
+
+        hooks.cursorRepo.advance = originalAdvance;
+        client2.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
   it("disconnect cleans up server resources: activeConnectionCount returns to 0", async () => {
     const { app, port } = await startTestServer(dbConfig);
     try {
@@ -1113,6 +1199,158 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
         await sleep(300);
         expect(client.frames.some((f) => f.event === "resync_required")).toBe(false);
         expect(client.frames.filter(businessFrame)).toHaveLength(0);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // Copilot review finding 5 (Step 04 review pass): the SSE route's
+  // identity resolution must be a PURE read — no `touchSession` DB write,
+  // no browser-cookie renewal expectation — precisely because /api/stream
+  // uses reply.hijack() + a manual writeHead(), so the normal onSend
+  // cookie-renewal hook never runs for it. Before the fix, an authenticated
+  // SSE connect/reconnect still slid dashboard_sessions.expires_at forward
+  // (an unnecessary DB write on every connect) while the browser cookie
+  // could never actually be renewed to match, reintroducing the exact
+  // browser/DB divergence the sliding-cookie correction pass closed
+  // everywhere else.
+  // -------------------------------------------------------------------
+  describe("SSE identity resolution is a pure read (no sliding-TTL side effect)", () => {
+    let authDb: Kysely<DB>;
+    const TOKEN_KEY = Buffer.alloc(32, 0x22); // matches testSessionConfig()'s tokenEncryptionKey
+
+    beforeAll(() => {
+      authDb = createKyselyClient(dbConfig);
+    });
+
+    afterAll(async () => {
+      await authDb.destroy();
+    });
+
+    async function makeAuthenticatedSession(
+      discordUserId: string,
+    ): Promise<{ rawToken: string; userId: number }> {
+      const user = await upsertDashboardUser(authDb, {
+        discordUserId,
+        username: `sse-user-${discordUserId}`,
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("fake-access", TOKEN_KEY),
+        encryptedRefreshToken: encryptSecret("fake-refresh", TOKEN_KEY),
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      });
+      const rawToken = `sse-session-token-${discordUserId}-${Math.random()}`;
+      await createSession(authDb, rawToken, {
+        userId: user.id,
+        deviceLabel: null,
+        userAgent: null,
+        ipHash: null,
+        slidingTtlMs: 30 * 24 * 60 * 60 * 1000,
+        absoluteTtlMs: 90 * 24 * 60 * 60 * 1000,
+      });
+      return { rawToken, userId: user.id };
+    }
+
+    it("A. an authenticated SSE connection resolves the exact real user:{id} scope, not the Step-03 placeholder", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { rawToken, userId } = await makeAuthenticatedSession("910000000000001");
+        await insertTestRow(rawPool, "authenticated-scope-event", userScope(String(userId)));
+
+        const client = new SseTestClient(port, { cookies: { bcc_session: rawToken } });
+        await client.statusCode;
+        const frame = await client.waitForFrame(businessFrame);
+        expect(JSON.parse(frame.data!)).toEqual({ label: "authenticated-scope-event" });
+
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("B. opening AND reconnecting an authenticated SSE connection does NOT mutate dashboard_sessions.expires_at", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { rawToken } = await makeAuthenticatedSession("910000000000002");
+        const before = await findValidSessionByRawToken(authDb, rawToken);
+        expect(before).toBeDefined();
+        const expiresAtBefore = before!.expires_at.getTime();
+
+        const client1 = new SseTestClient(port, { cookies: { bcc_session: rawToken } });
+        await client1.statusCode;
+        await sleep(100);
+        client1.destroy();
+
+        // A second, independent connection (simulating a reconnect) with the
+        // SAME session cookie.
+        const client2 = new SseTestClient(port, { cookies: { bcc_session: rawToken } });
+        await client2.statusCode;
+        await sleep(100);
+        client2.destroy();
+
+        const after = await findValidSessionByRawToken(authDb, rawToken);
+        expect(after).toBeDefined();
+        expect(after!.expires_at.getTime()).toBe(expiresAtBefore); // untouched by either connect
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("C. an authenticated SSE connection's response never carries a Set-Cookie — no browser-cookie renewal is attempted for a hijacked stream response", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { rawToken } = await makeAuthenticatedSession("910000000000003");
+        const client = new SseTestClient(port, { cookies: { bcc_session: rawToken } });
+        const headers = await client.headers;
+        expect(headers["set-cookie"]).toBeUndefined();
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("E. an expired session cookie on SSE still falls back to the exact Step-03 compatibility scope (never a 401, never treated as authenticated)", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const expiredUser = await upsertDashboardUser(authDb, {
+          discordUserId: "910000000000004",
+          username: "expired-sse-user",
+          avatarHash: null,
+          encryptedAccessToken: encryptSecret("fake-access", TOKEN_KEY),
+          encryptedRefreshToken: encryptSecret("fake-refresh", TOKEN_KEY),
+          tokenExpiresAt: new Date(Date.now() + 3600_000),
+        });
+        const expiredToken = `sse-expired-token-${Math.random()}`;
+        await createSession(authDb, expiredToken, {
+          userId: expiredUser.id,
+          deviceLabel: null,
+          userAgent: null,
+          ipHash: null,
+          slidingTtlMs: -1000, // already expired at creation
+          absoluteTtlMs: 60 * 60 * 1000,
+        });
+
+        await insertTestRow(rawPool, "fallback-scope-event", STEP_03_TEST_SCOPE);
+        const client = new SseTestClient(port, { cookies: { bcc_session: expiredToken } });
+        await client.statusCode; // SSE never gates behind requireAuth - always 200
+        const frame = await client.waitForFrame(businessFrame);
+        expect(JSON.parse(frame.data!)).toEqual({ label: "fallback-scope-event" });
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("E2. a garbage/forged session cookie on SSE also falls back to Step-03 compatibility scope (never a 401)", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        await insertTestRow(rawPool, "garbage-cookie-fallback-event", STEP_03_TEST_SCOPE);
+        const client = new SseTestClient(port, { cookies: { bcc_session: "not-a-real-token-at-all" } });
+        await client.statusCode;
+        const frame = await client.waitForFrame(businessFrame);
+        expect(JSON.parse(frame.data!)).toEqual({ label: "garbage-cookie-fallback-event" });
         client.destroy();
       } finally {
         await app.close();
