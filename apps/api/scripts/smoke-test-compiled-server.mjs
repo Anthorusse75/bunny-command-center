@@ -75,6 +75,12 @@ async function main() {
     "DISCORD_REDIRECT_URI",
     "DASHBOARD_OAUTH_TRANSACTION_SIGNING_KEY",
     "DASHBOARD_TOKEN_ENCRYPTION_KEY",
+    // Step 05 (ADR-008): loadAppConfig() now also requires this
+    // unconditionally -- without it, the spawned server below would crash
+    // at startup and this script would only ever report a vague 20s
+    // /healthz timeout, not the real cause. Pre-checked here for the same
+    // fail-fast-and-loudly reason as every other entry in this list.
+    "PLATFORM_SUPERADMIN_DISCORD_ID",
   ]) {
     requiredEnv(name);
   }

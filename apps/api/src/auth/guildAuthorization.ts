@@ -42,6 +42,32 @@ import { getAdminOverride } from "./adminOverrideRepo.js";
 
 export type GuildTier = "USER" | "GUILD_ADMIN" | "SUPERADMIN";
 
+/**
+ * 08_AUTHORIZATION_AND_RBAC.md §Permission freshness (D-070, mission §70):
+ * "Every **sensitive mutation** ... re-resolves the caller's tier **at
+ * request time**, never from a value cached in the session or trusted from
+ * the client. Every **read** of admin-gated data also re-resolves, subject
+ * only to the 60s micro-cache already described."
+ *
+ * `"READ"` (the default -- every existing call site's prior, unparameterized
+ * behavior is unchanged) may be served from the 60s `GuildAuthCache` within
+ * its TTL. `"SENSITIVE_MUTATION"` NEVER reads a cached decision -- it always
+ * performs a live Discord fetch (still governed by `DiscordTokenService`'s
+ * refresh lifecycle) before resolving. The fresh result is still WRITTEN
+ * back into the cache afterward (a mutation's fresh read is exactly as valid
+ * as any other fresh read for the next 60s) -- only the READ side of the
+ * cache is ever skipped, never the write side, so a mutation never makes the
+ * cache less accurate for a subsequent read.
+ *
+ * This is the ONE sanctioned freshness control for the RBAC path -- Steps
+ * 10/12's sensitive-mutation routes (guild config write, pause/resume,
+ * approval decision, admin role policy change, override toggle, any
+ * `operator_commands` enqueue) MUST pass `freshness: "SENSITIVE_MUTATION"`
+ * to `requireTier`'s guild-scoped form (`tier.ts`) rather than inventing
+ * route-specific cache-clearing logic.
+ */
+export type AuthorizationFreshness = "READ" | "SENSITIVE_MUTATION";
+
 /** Numeric rank for `requireTier`'s `>=` comparisons -- never re-derived ad hoc elsewhere. */
 export const GUILD_TIER_RANK: Record<GuildTier, number> = {
   USER: 0,
@@ -87,15 +113,23 @@ export function createGuildAuthDeps(
 async function getCallerGuilds(
   deps: GuildAuthDeps,
   caller: AuthorizedCaller,
+  freshness: AuthorizationFreshness,
 ): Promise<DiscordGuildSummary[]> {
   const key = guildsListCacheKey(caller.discordUserId);
-  const cached = deps.cache.get<DiscordGuildSummary[]>(key);
-  if (cached) {
-    return cached;
+  // SENSITIVE_MUTATION never reads the cache (D-070) -- it falls straight
+  // through to a live fetch below, every time, regardless of TTL.
+  if (freshness === "READ") {
+    const cached = deps.cache.get<DiscordGuildSummary[]>(key);
+    if (cached) {
+      return cached;
+    }
   }
   const guilds = await deps.tokenService.withFreshAccessToken(caller.id, (accessToken) =>
     fetchUserGuilds(deps.config.discord, accessToken),
   );
+  // The fresh result is written back regardless of `freshness` -- a
+  // mutation's live read is exactly as cache-worthy as any other fresh
+  // read; only the READ SIDE of the cache is ever skipped above.
   deps.cache.set(key, guilds);
   return guilds;
 }
@@ -104,11 +138,14 @@ async function getCallerGuildMemberRoles(
   deps: GuildAuthDeps,
   caller: AuthorizedCaller,
   guildId: string,
+  freshness: AuthorizationFreshness,
 ): Promise<string[]> {
   const key = guildMemberCacheKey(caller.discordUserId, guildId);
-  const cached = deps.cache.get<string[]>(key);
-  if (cached) {
-    return cached;
+  if (freshness === "READ") {
+    const cached = deps.cache.get<string[]>(key);
+    if (cached) {
+      return cached;
+    }
   }
   const member = await deps.tokenService.withFreshAccessToken(caller.id, (accessToken) =>
     fetchGuildMember(deps.config.discord, accessToken, guildId),
@@ -125,16 +162,21 @@ async function getCallerGuildMemberRoles(
  * caller must have `guildId` present in their own LIVE guild list. Returns
  * `false` (never throws) for "not a member" -- the caller (`tier.ts`) is
  * responsible for turning that into the documented 404.
+ *
+ * `freshness` defaults to `"READ"` (unchanged behavior for every existing
+ * call site) -- pass `"SENSITIVE_MUTATION"` to force a live re-check,
+ * bypassing the 60s micro-cache entirely (D-070, see `AuthorizationFreshness`).
  */
 export async function assertGuildMembership(
   deps: GuildAuthDeps,
   caller: AuthorizedCaller,
   guildId: string,
+  freshness: AuthorizationFreshness = "READ",
 ): Promise<boolean> {
   if (isSuperadmin(caller.discordUserId, deps.config)) {
     return true;
   }
-  const guilds = await getCallerGuilds(deps, caller);
+  const guilds = await getCallerGuilds(deps, caller, freshness);
   return guilds.some((g) => g.id === guildId);
 }
 
@@ -147,11 +189,20 @@ export async function assertGuildMembership(
  * fail-closed-to-USER fallback if it's ever called for a guild the caller
  * turns out not to belong to (keeps this function safe to unit-test in
  * isolation without ever becoming promotion-capable on its own).
+ *
+ * `freshness` defaults to `"READ"` (unchanged behavior for every existing
+ * call site) -- pass `"SENSITIVE_MUTATION"` to force every underlying
+ * Discord fetch this resolution needs to bypass the 60s micro-cache
+ * entirely (D-070, see `AuthorizationFreshness`). The `dashboard_guild_policy`/
+ * `dashboard_admin_overrides` DB reads below are ALWAYS live (never cached
+ * in the first place, by design) -- `freshness` only affects the two
+ * Discord-sourced inputs (`getCallerGuilds`/`getCallerGuildMemberRoles`).
  */
 export async function resolveGuildAuthorization(
   deps: GuildAuthDeps,
   caller: AuthorizedCaller,
   guildId: string,
+  freshness: AuthorizationFreshness = "READ",
 ): Promise<GuildTier> {
   // Platform Superadmin: GUILD_ADMIN-or-higher everywhere, by design
   // (08_AUTHORIZATION_AND_RBAC.md: "Platform Superadmin: GUILD ADMIN for
@@ -164,7 +215,7 @@ export async function resolveGuildAuthorization(
     return "SUPERADMIN";
   }
 
-  const guilds = await getCallerGuilds(deps, caller);
+  const guilds = await getCallerGuilds(deps, caller, freshness);
   const summary = guilds.find((g) => g.id === guildId);
   if (!summary) {
     // Defensive fail-closed fallback only -- the real request path always
@@ -190,7 +241,7 @@ export async function resolveGuildAuthorization(
 
   const policy = await getGuildPolicy(deps.db, guildId);
   if (policy?.adminRoleDiscordId) {
-    const roles = await getCallerGuildMemberRoles(deps, caller, guildId);
+    const roles = await getCallerGuildMemberRoles(deps, caller, guildId, freshness);
     // Fail-closed either way (role genuinely not held, OR the configured
     // role no longer exists in the guild at all) -- see this module's
     // header comment for why this deliberately never distinguishes the two

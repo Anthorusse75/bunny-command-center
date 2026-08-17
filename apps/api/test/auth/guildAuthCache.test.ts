@@ -5,6 +5,9 @@
  * users; never share a decision between guilds; expiration must be
  * explicit; provide explicit invalidation."
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { GuildAuthCache, guildsListCacheKey, guildMemberCacheKey } from "../../src/auth/guildAuthCache.js";
 
@@ -75,5 +78,32 @@ describe("GuildAuthCache", () => {
     expect(cache.get(guildMemberCacheKey("userA", "guild1"))).toBeUndefined();
     expect(cache.get(guildsListCacheKey("userB"))).toBe("list-B");
     expect(cache.get(guildMemberCacheKey("userB", "guild1"))).toBe("member-B-1");
+  });
+
+  it("the U+0000 key separator prevents a cross-component collision a plain join without a separator could otherwise produce", () => {
+    const cache = new GuildAuthCache(60_000, () => 0);
+    // Without ANY separator, discordUserId="12"+guildId="34" would
+    // concatenate to the exact same raw string as discordUserId="1"+
+    // guildId="234" ("1234" either way) -- two genuinely different callers
+    // colliding onto one cached authorization decision. The real key
+    // function must keep these fully distinct.
+    cache.set(guildMemberCacheKey("12", "34"), "decision-for-user-12-guild-34");
+    cache.set(guildMemberCacheKey("1", "234"), "decision-for-user-1-guild-234");
+
+    expect(cache.get(guildMemberCacheKey("12", "34"))).toBe("decision-for-user-12-guild-34");
+    expect(cache.get(guildMemberCacheKey("1", "234"))).toBe("decision-for-user-1-guild-234");
+  });
+
+  it("source hygiene regression: guildAuthCache.ts's own source file contains no literal NUL (0x00) byte, so Git always treats it as a normal text file", () => {
+    const filePath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "src",
+      "auth",
+      "guildAuthCache.ts",
+    );
+    const raw = readFileSync(filePath);
+    expect(raw.includes(0x00)).toBe(false);
   });
 });

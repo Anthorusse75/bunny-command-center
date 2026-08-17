@@ -254,4 +254,141 @@ describe("guildAuthorization: assertGuildMembership + resolveGuildAuthorization 
     discord.state.guildsForcedStatus = 500;
     await expect(resolveGuildAuthorization(sharedDeps, caller, GUILD_A)).resolves.toBe("GUILD_ADMIN");
   });
+
+  // --- AuthorizationFreshness: SENSITIVE_MUTATION bypasses the cache
+  //     (08_AUTHORIZATION_AND_RBAC.md §Permission freshness, D-070) --------
+
+  describe("AuthorizationFreshness: READ may serve a cached decision, SENSITIVE_MUTATION never does", () => {
+    it("A-D: cached GUILD_ADMIN survives an ordinary READ after revocation, but a SENSITIVE_MUTATION immediately afterward bypasses the cache and denies", async () => {
+      const caller = await makeCaller("600000000000000030");
+      const sharedDeps = deps();
+      // Deterministic regardless of prior tests' leftover DB state -- this
+      // scenario exercises the Owner/no-configured-role/no-Administrator
+      // path specifically, not the configured-role branch.
+      await setGuildAdminRole(db, GUILD_A, null);
+
+      // A. Caller is initially the guild Owner (GUILD_ADMIN) -- resolved and
+      //    cached under the default "READ" freshness.
+      discord.state.guilds = [{ id: GUILD_A, owner: true, permissions: "0" }];
+      await expect(resolveGuildAuthorization(sharedDeps, caller, GUILD_A)).resolves.toBe("GUILD_ADMIN");
+
+      // B. The underlying Discord authorization input is revoked (ownership
+      //    transferred away, no Administrator permission either) -- but the
+      //    cache still holds the pre-revocation decision.
+      discord.state.guilds = [{ id: GUILD_A, owner: false, permissions: "0" }];
+
+      // C. An ordinary READ resolution, still within the 60s TTL, is
+      //    PERMITTED to observe the stale cached decision -- this is the
+      //    documented contract (60s micro-cache), not a bug. Proven here by
+      //    forcing the underlying Discord fetch to hard-fail: if READ ever
+      //    bypassed the cache, this assertion would throw instead of
+      //    resolving.
+      discord.state.guildsForcedStatus = 500;
+      await expect(resolveGuildAuthorization(sharedDeps, caller, GUILD_A)).resolves.toBe("GUILD_ADMIN");
+      discord.state.guildsForcedStatus = undefined;
+
+      // D. A SENSITIVE MUTATION authorization performed immediately
+      //    afterward -- same cache instance, same TTL window, same
+      //    unrevoked-looking cache entry -- MUST bypass the cache entirely,
+      //    perform a fresh authoritative Discord resolution, and correctly
+      //    DENY the now-revoked caller.
+      await expect(
+        resolveGuildAuthorization(sharedDeps, caller, GUILD_A, "SENSITIVE_MUTATION"),
+      ).resolves.toBe("USER");
+
+      // Immediately after that, the cache is fresh again (SENSITIVE_MUTATION
+      // still WRITES its fresh result back) -- confirmed by a plain READ
+      // that would blow up if it had to hit Discord again.
+      discord.state.guildsForcedStatus = 500;
+      await expect(resolveGuildAuthorization(sharedDeps, caller, GUILD_A)).resolves.toBe("USER");
+    });
+
+    it("A-D, assertGuildMembership: a cached membership survives READ after a kick, but SENSITIVE_MUTATION bypasses and correctly denies", async () => {
+      const caller = await makeCaller("600000000000000031");
+      const sharedDeps = deps();
+
+      discord.state.guilds = [{ id: GUILD_A, owner: false, permissions: "0" }];
+      await expect(assertGuildMembership(sharedDeps, caller, GUILD_A)).resolves.toBe(true);
+
+      // Kicked from the guild -- the guild list no longer contains it.
+      discord.state.guilds = [];
+
+      // Ordinary READ still observes the (now stale) cached membership.
+      discord.state.guildsForcedStatus = 500;
+      await expect(assertGuildMembership(sharedDeps, caller, GUILD_A)).resolves.toBe(true);
+      discord.state.guildsForcedStatus = undefined;
+
+      // SENSITIVE_MUTATION bypasses the cache and correctly sees the kick.
+      await expect(assertGuildMembership(sharedDeps, caller, GUILD_A, "SENSITIVE_MUTATION")).resolves.toBe(
+        false,
+      );
+    });
+
+    it("E (cross-user): a SENSITIVE_MUTATION bypass/re-fetch for user X never touches user Y's independently-cached decision for the SAME guild", async () => {
+      const callerX = await makeCaller("600000000000000032");
+      const callerY = await makeCaller("600000000000000033");
+      const sharedDeps = deps();
+      await setGuildAdminRole(db, GUILD_A, null);
+
+      // Both X and Y are (independently) Owner of the same guild A.
+      discord.state.guilds = [{ id: GUILD_A, owner: true, permissions: "0" }];
+      await expect(resolveGuildAuthorization(sharedDeps, callerX, GUILD_A)).resolves.toBe("GUILD_ADMIN");
+      await expect(resolveGuildAuthorization(sharedDeps, callerY, GUILD_A)).resolves.toBe("GUILD_ADMIN");
+
+      // Revoke X's ownership only (the test double's fixture is shared, but
+      // each caller's own guild-list cache entry -- keyed by discordUserId --
+      // is what's actually under test here, not the fixture itself).
+      discord.state.guilds = [{ id: GUILD_A, owner: false, permissions: "0" }];
+      await expect(
+        resolveGuildAuthorization(sharedDeps, callerX, GUILD_A, "SENSITIVE_MUTATION"),
+      ).resolves.toBe("USER");
+
+      // User Y's cached decision for the SAME guild A is completely
+      // unaffected by user X's mutation-triggered bypass/re-fetch -- a
+      // DIFFERENT user's guild-list cache entry (distinct key), never
+      // touched. Proven by forcing a hard Discord failure: if Y's entry had
+      // been invalidated/overwritten by X's bypass, this READ would have to
+      // hit Discord and throw instead of resolving from its own cache.
+      discord.state.guildsForcedStatus = 500;
+      await expect(resolveGuildAuthorization(sharedDeps, callerY, GUILD_A)).resolves.toBe("GUILD_ADMIN");
+    });
+
+    it("E (cross-guild, member-roles source): a SENSITIVE_MUTATION bypass/re-fetch for guild A's configured-role check never touches the SAME user's still-cached decision for guild B", async () => {
+      const caller = await makeCaller("600000000000000034");
+      const sharedDeps = deps();
+      const roleA = "444444444444444444";
+      const roleB = "555555555555555555";
+
+      // Guild A and guild B each have their OWN configured admin role, and
+      // the caller currently holds both -- this is the one branch that
+      // populates the genuinely per-(user,guild) `guild-member` cache
+      // source (guildAuthCache.ts's doc comment), unlike the guild-list
+      // source above, which is intentionally one shared per-user entry.
+      discord.state.guilds = [
+        { id: GUILD_A, owner: false, permissions: "0" },
+        { id: GUILD_B, owner: false, permissions: "0" },
+      ];
+      await setGuildAdminRole(db, GUILD_A, roleA);
+      await setGuildAdminRole(db, GUILD_B, roleB);
+      discord.state.memberRolesByGuild.set(GUILD_A, [roleA]);
+      discord.state.memberRolesByGuild.set(GUILD_B, [roleB]);
+
+      await expect(resolveGuildAuthorization(sharedDeps, caller, GUILD_A)).resolves.toBe("GUILD_ADMIN");
+      await expect(resolveGuildAuthorization(sharedDeps, caller, GUILD_B)).resolves.toBe("GUILD_ADMIN");
+
+      // The caller's role in guild A is revoked.
+      discord.state.memberRolesByGuild.set(GUILD_A, []);
+      await expect(
+        resolveGuildAuthorization(sharedDeps, caller, GUILD_A, "SENSITIVE_MUTATION"),
+      ).resolves.toBe("USER");
+
+      // Guild B's still-cached member-roles decision for the SAME user is
+      // completely unaffected -- proven by forcing a hard Discord failure
+      // on the member endpoint specifically: if B's per-guild cache entry
+      // had been touched by A's bypass, this READ would have to hit Discord
+      // and throw instead of resolving from its own, still-valid entry.
+      discord.state.memberForcedStatus = 500;
+      await expect(resolveGuildAuthorization(sharedDeps, caller, GUILD_B)).resolves.toBe("GUILD_ADMIN");
+    });
+  });
 });

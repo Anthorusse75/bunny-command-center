@@ -42,5 +42,6 @@ export {
   type GuildTier,
   type GuildAuthDeps,
   type AuthorizedCaller,
+  type AuthorizationFreshness,
 } from "./guildAuthorization.js";
-export { buildRequireTier, type ResolvedGuildAuthorization } from "./tier.js";
+export { buildRequireTier, type ResolvedGuildAuthorization, type RequireTierOptions } from "./tier.js";
