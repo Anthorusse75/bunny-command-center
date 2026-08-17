@@ -14,7 +14,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Kysely } from "kysely";
 import type { DB } from "../db/codegen-types.js";
 import type { AppConfig } from "../config.js";
-import { findValidSessionByRawToken, touchSession } from "./sessionRepo.js";
+import { findValidSessionByRawToken, touchSession, type DashboardSessionRow } from "./sessionRepo.js";
 import { findDashboardUserById } from "./userRepo.js";
 import { setSessionCookie } from "./sessionCookie.js";
 
@@ -45,19 +45,33 @@ declare module "fastify" {
 }
 
 /**
- * Non-throwing resolution used both by the mandatory `requireAuth` gate below
- * AND by the SSE route's optional identity upgrade
- * (apps/api/src/sse/route.ts) — a connection without a valid session simply
- * gets `undefined` back, never an error, since /api/stream does not yet
- * require authentication (see this step's HANDOVER "Step 03 compatibility"
- * deviation note).
+ * PURE, read-only session lookup — validates the raw token, loads the
+ * session, checks sliding + absolute expiry, and loads the exact user
+ * identity. Deliberately performs NO write of any kind: no `touchSession`,
+ * no cookie-renewal side effect. Used both by the mandatory `requireAuth`
+ * gate below (which layers its OWN sliding-renewal step on top — see
+ * `touchSessionAndPrepareRenewal`) AND by the SSE route's optional identity
+ * upgrade (apps/api/src/sse/route.ts) for scope resolution only.
+ *
+ * This split exists specifically because `/api/stream` uses
+ * `reply.hijack()` + a manual `writeHead()`, so Fastify's ordinary `onSend`
+ * cookie-renewal hook never runs for it — before this split, calling the
+ * combined lookup+touch+renew function from the SSE route still slid
+ * `dashboard_sessions.expires_at` forward (and cost a DB write) on every
+ * authenticated stream connect/reconnect, while the browser cookie could
+ * never actually be renewed to match, silently reintroducing exactly the
+ * browser/DB divergence the sliding-cookie correction pass closed
+ * everywhere else (Copilot review, Step 04 review pass). A connection
+ * without a valid session simply gets `undefined` back here, never an
+ * error, since `/api/stream` does not yet require authentication (see this
+ * step's HANDOVER "Step 03 compatibility" deviation note).
  */
 export async function resolveAuthenticatedUser(
   db: Kysely<DB>,
   config: AppConfig,
   request: FastifyRequest,
 ): Promise<
-  { user: AuthenticatedUser; sessionId: string; renewal: PendingSessionRenewal | undefined } | undefined
+  { user: AuthenticatedUser; sessionId: string; session: DashboardSessionRow; rawToken: string } | undefined
 > {
   const rawToken = request.cookies?.[config.session.cookieName];
   if (!rawToken) {
@@ -71,36 +85,10 @@ export async function resolveAuthenticatedUser(
   if (!userRow) {
     return undefined;
   }
-  // Sliding TTL renewal (ADR-020). The DB-side write and the browser-cookie
-  // renewal it enables are treated as ONE unit, not two independent
-  // best-effort steps: if `touchSession` fails, `renewal` stays undefined so
-  // the onSend hook (createSessionCookieRenewalHook) never re-issues
-  // `bcc_session` this request — re-emitting a cookie whose Max-Age implies
-  // a DB-side renewal that never actually happened would let the browser
-  // and DB sliding expiries silently diverge, defeating the entire point of
-  // this correction pass. The lookup above already succeeded, so the
-  // request remains authenticated and completes normally either way — a
-  // transient renewal-write failure must never become a login outage
-  // (correction-pass review finding: "narrow this, don't turn it into a
-  // full outage").
-  const now = new Date();
-  const candidateExpiry = new Date(now.getTime() + config.session.slidingTtlMs);
-  const renewedExpiresAt =
-    session.absolute_expires_at < candidateExpiry ? session.absolute_expires_at : candidateExpiry;
-  let renewal: PendingSessionRenewal | undefined;
-  try {
-    await touchSession(db, session.id, config.session.slidingTtlMs, now);
-    renewal = { rawToken, maxAgeMs: renewedExpiresAt.getTime() - now.getTime() };
-  } catch (err) {
-    request.log.warn(
-      { err },
-      "auth: failed to renew session sliding expiry - browser cookie will not be refreshed this request",
-    );
-  }
-
   return {
     sessionId: session.id,
-    renewal,
+    session,
+    rawToken,
     user: {
       id: userRow.id,
       // Already the exact string Discord returned / the DB stored (VARCHAR,
@@ -117,10 +105,48 @@ export async function resolveAuthenticatedUser(
   };
 }
 
+/**
+ * The ONLY place `touchSession` (a real DB write) is called — deliberately
+ * NOT inside `resolveAuthenticatedUser` (see that function's own doc
+ * comment for why). The DB-side write and the browser-cookie renewal it
+ * enables are treated as ONE unit, not two independent best-effort steps:
+ * if `touchSession` fails, this returns `undefined` so the onSend hook
+ * (`createSessionCookieRenewalHook`) never re-issues `bcc_session` this
+ * request — re-emitting a cookie whose Max-Age implies a DB-side renewal
+ * that never actually happened would let the browser and DB sliding
+ * expiries silently diverge. The caller's own session lookup already
+ * succeeded, so the request remains authenticated and completes normally
+ * either way — a transient renewal-write failure must never become a login
+ * outage.
+ */
+async function touchSessionAndPrepareRenewal(
+  db: Kysely<DB>,
+  config: AppConfig,
+  resolved: { session: DashboardSessionRow; rawToken: string },
+  request: FastifyRequest,
+): Promise<PendingSessionRenewal | undefined> {
+  const now = new Date();
+  const candidateExpiry = new Date(now.getTime() + config.session.slidingTtlMs);
+  const renewedExpiresAt =
+    resolved.session.absolute_expires_at < candidateExpiry
+      ? resolved.session.absolute_expires_at
+      : candidateExpiry;
+  try {
+    await touchSession(db, resolved.session.id, config.session.slidingTtlMs, now);
+    return { rawToken: resolved.rawToken, maxAgeMs: renewedExpiresAt.getTime() - now.getTime() };
+  } catch (err) {
+    request.log.warn(
+      { err },
+      "auth: failed to renew session sliding expiry - browser cookie will not be refreshed this request",
+    );
+    return undefined;
+  }
+}
+
 export function buildRequireAuth(db: Kysely<DB>, config: AppConfig) {
   return async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const result = await resolveAuthenticatedUser(db, config, request);
-    if (!result) {
+    const resolved = await resolveAuthenticatedUser(db, config, request);
+    if (!resolved) {
       await reply.code(401).send({
         error_code: "UNAUTHENTICATED",
         message_key: "errors.auth.unauthenticated",
@@ -128,9 +154,9 @@ export function buildRequireAuth(db: Kysely<DB>, config: AppConfig) {
       });
       return;
     }
-    request.authUser = result.user;
-    request.authSessionId = result.sessionId;
-    request.pendingSessionRenewal = result.renewal;
+    request.authUser = resolved.user;
+    request.authSessionId = resolved.sessionId;
+    request.pendingSessionRenewal = await touchSessionAndPrepareRenewal(db, config, resolved, request);
   };
 }
 

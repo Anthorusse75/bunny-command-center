@@ -50,6 +50,24 @@ export class DiscordIdentityFetchError extends Error {
   }
 }
 
+/**
+ * Deliberately omits `prompt` (Copilot review, Step 04 review pass):
+ * Discord's own docs (docs.discord.com/developers/topics/oauth2) document
+ * `prompt=consent` as forcing the user to REAPPROVE every single login, even
+ * one that already granted the exact same scopes — directly contradicting
+ * this PR's own stated rationale for granting `guilds`/`guilds.members.read`
+ * now ("so the OAuth consent screen is only shown once"). No project
+ * document (`07_DISCORD_OAUTH.md`, `ADR-004`, the Step-04 implementation
+ * file) specifies a `prompt` value at all — the original unconditional
+ * `prompt=consent` was an undocumented implementation choice, not something
+ * the canonical architecture required. Omitting the parameter entirely lets
+ * Discord apply its own documented default: a returning user who already
+ * granted the current scope set skips the consent screen; anyone who
+ * hasn't (or whose grant no longer covers the requested scopes) still sees
+ * it. Not replaced with `prompt=none` either — that would suppress consent
+ * even for a genuinely first-time authorization, which no project document
+ * calls for.
+ */
 export function buildAuthorizeUrl(
   config: DiscordOAuthConfig,
   params: { state: string; codeChallenge: string },
@@ -62,7 +80,6 @@ export function buildAuthorizeUrl(
   url.searchParams.set("state", params.state);
   url.searchParams.set("code_challenge", params.codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
-  url.searchParams.set("prompt", "consent");
   return url.toString();
 }
 

@@ -27,15 +27,35 @@ async function renderLogin(): Promise<ReturnType<typeof render>> {
   return result;
 }
 
+// Captured before ANY test ever stubs `window.location` — the one stable
+// reference a later regression test can compare against to prove real
+// restoration happened, not just that `afterEach` ran without throwing.
+// Never CALLED, only compared by reference, so the usual "this" concern
+// `unbound-method` warns about doesn't apply here.
+// eslint-disable-next-line @typescript-eslint/unbound-method -- reference equality only, never invoked
+const ORIGINAL_LOCATION_ASSIGN = window.location.assign;
+
 /**
  * jsdom's `window.location.assign` is non-configurable in this repo's
  * installed jsdom version (`vi.spyOn` throws "Cannot redefine property"), so
  * the whole `location` object is swapped for a plain, writable stand-in for
  * the duration of one test — mirrors the standard jsdom-navigation testing
- * workaround, restored in `afterEach` so no other test observes it.
+ * workaround.
+ *
+ * Copilot review finding 2 (Step 04 review pass): correctly caught that this
+ * `Object.defineProperty` replacement was NOT actually being restored —
+ * `afterEach`'s `vi.unstubAllGlobals()` only reverts Vitest's OWN
+ * `vi.stubGlobal`-tracked stubs, never a direct `defineProperty` call like
+ * this one, so `window.location` stayed permanently replaced by the plain
+ * stand-in for every test that ran after the first one to call this
+ * function. Fixed by capturing the real property descriptor before
+ * replacing it and restoring that EXACT descriptor in `afterEach` below.
  */
+let originalLocationDescriptor: PropertyDescriptor | undefined;
+
 function stubLocationAssign(): ReturnType<typeof vi.fn> {
   const assignSpy = vi.fn();
+  originalLocationDescriptor = Object.getOwnPropertyDescriptor(window, "location");
   const original = window.location;
   Object.defineProperty(window, "location", {
     configurable: true,
@@ -47,6 +67,10 @@ function stubLocationAssign(): ReturnType<typeof vi.fn> {
 describe("LoginScreen (SCREENS/AUTH.md §Login)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    if (originalLocationDescriptor) {
+      Object.defineProperty(window, "location", originalLocationDescriptor);
+      originalLocationDescriptor = undefined;
+    }
   });
 
   it("renders the translated title, tagline and CTA — never a hardcoded string", async () => {
@@ -88,5 +112,15 @@ describe("LoginScreen (SCREENS/AUTH.md §Login)", () => {
     expect(screen.getByTestId("locale-selector")).toBeInTheDocument();
     expect(screen.getByTestId("locale-option-fr")).toBeInTheDocument();
     expect(screen.getByTestId("locale-option-de")).toBeInTheDocument();
+  });
+
+  // Placed AFTER the two `stubLocationAssign()` tests above so it only
+  // proves something if their own `afterEach` genuinely restored the real
+  // `window.location` — asserts against the ORIGINAL function reference
+  // captured at module load time, before any test ever stubbed it, not
+  // merely that `window.location.assign` is "some function" again.
+  it("window.location.assign is genuinely restored to the real jsdom implementation after a test that stubbed it — never left as the stand-in spy", () => {
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- reference equality only, never invoked
+    expect(window.location.assign).toBe(ORIGINAL_LOCATION_ASSIGN);
   });
 });

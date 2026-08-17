@@ -74,4 +74,39 @@ describe("AuthProvider", () => {
     expect(() => render(<Probe />)).toThrow(/useAuth must be used inside/);
     spy.mockRestore();
   });
+
+  // Copilot review finding 1 (Step 04 review pass): flagged the
+  // `useEffect(() => onSessionExpired(...), [])` at AuthProvider.tsx as
+  // missing a cleanup return. It is NOT missing one — the arrow function's
+  // implicit return already forwards `onSessionExpired`'s own unsubscribe
+  // function to React as the effect's cleanup. This test proves the
+  // observable consequence directly: after unmount, a later 401 must never
+  // reach the unmounted component's `setState` (which React would otherwise
+  // report as a console.error "Can't perform a React state update on an
+  // unmounted component" warning) — false positive, confirmed by behavior,
+  // not just by reading the implicit-return syntax.
+  it("unmounting stops the session-expired listener — a later 401 after unmount never touches the unmounted component's state", async () => {
+    mockAuthenticatedSession();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { unmount } = render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
+
+    unmount();
+
+    setFetchHandler(() => new Response(JSON.stringify({ error_code: "UNAUTHENTICATED" }), { status: 401 }));
+    await act(async () => {
+      await apiFetch("/api/some/other/protected/route");
+    });
+
+    expect(
+      consoleError.mock.calls.some((call) =>
+        String(call[0]).includes("Can't perform a React state update on an unmounted component"),
+      ),
+    ).toBe(false);
+    consoleError.mockRestore();
+  });
 });

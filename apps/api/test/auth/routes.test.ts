@@ -193,6 +193,12 @@ describe("/api/auth/* (real MySQL + local Discord test double)", () => {
       expect(location.searchParams.get("code_challenge_method")).toBe("S256");
       expect(location.searchParams.get("state")).toBeTruthy();
       expect(location.searchParams.get("code_challenge")).toBeTruthy();
+      // Copilot review finding 4 (Step 04 review pass): `prompt=consent` was
+      // removed — it unconditionally forced re-consent on every login,
+      // contradicting this project's own "consent shown only once" design
+      // intent (see discordClient.ts's own doc comment). No `prompt` value
+      // is sent at all, letting Discord apply its documented default.
+      expect(location.searchParams.has("prompt")).toBe(false);
 
       const cookies = parseSetCookieHeaders(response.headers["set-cookie"]);
       const txnCookie = findCookie(cookies, "bcc_oauth_txn");

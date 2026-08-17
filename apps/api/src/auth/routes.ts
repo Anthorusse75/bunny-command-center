@@ -18,7 +18,7 @@ import {
   serializeTransactionCookie,
   type OAuthTransaction,
 } from "./transactionCookie.js";
-import { OAuthTransactionRegistry } from "./oauthTransactionRegistry.js";
+import type { OAuthTransactionRegistry } from "./oauthTransactionRegistry.js";
 import { DEFAULT_POST_LOGIN_PATH, isSafeInternalRedirectPath } from "./redirectSafety.js";
 import {
   buildAuthorizeUrl,
@@ -53,9 +53,20 @@ function redirectToLoginError(
   reply.redirect(`/login?error=${reason}`);
 }
 
-export function buildAuthRoutes(db: Kysely<DB>, config: AppConfig): FastifyPluginAsync {
-  const transactionRegistry = new OAuthTransactionRegistry();
-
+/**
+ * `transactionRegistry` is owned and swept by the CALLER (server.ts,
+ * alongside the session sweep and SSE poller's own `preClose`-managed
+ * lifecycle) rather than created here — a registry this route module
+ * instantiated itself would be unreachable from `server.ts`'s shutdown hook
+ * and from `startOAuthTransactionSweep`, exactly the gap that let its own
+ * documented periodic sweep go unwired in the first place (Copilot review,
+ * Step 04 review pass).
+ */
+export function buildAuthRoutes(
+  db: Kysely<DB>,
+  config: AppConfig,
+  transactionRegistry: OAuthTransactionRegistry,
+): FastifyPluginAsync {
   // eslint-disable-next-line @typescript-eslint/require-await -- FastifyPluginAsync's contract
   return async (fastify) => {
     const requireAuth = buildRequireAuth(db, config);

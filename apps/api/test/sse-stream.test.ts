@@ -13,9 +13,15 @@ import mysql from "mysql2/promise";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { STEP_03_TEST_SCOPE } from "@bunny-command-center/shared";
+import { STEP_03_TEST_SCOPE, userScope } from "@bunny-command-center/shared";
+import type { Kysely } from "kysely";
 import { buildServer } from "../src/server.js";
 import type { AppConfig } from "../src/config.js";
+import type { DB } from "../src/db/codegen-types.js";
+import { createKyselyClient } from "../src/db/kysely.js";
+import { upsertDashboardUser } from "../src/auth/userRepo.js";
+import { createSession, findValidSessionByRawToken } from "../src/auth/sessionRepo.js";
+import { encryptSecret } from "../src/auth/tokenCrypto.js";
 import { runUp } from "../migrations/runner.js";
 import type { MigratorDbConfig } from "../migrations/config.js";
 import { registerEventType, registerSourceAdapter, resetRegistryForTests } from "../src/sse/registry.js";
@@ -1193,6 +1199,158 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
         await sleep(300);
         expect(client.frames.some((f) => f.event === "resync_required")).toBe(false);
         expect(client.frames.filter(businessFrame)).toHaveLength(0);
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // Copilot review finding 5 (Step 04 review pass): the SSE route's
+  // identity resolution must be a PURE read — no `touchSession` DB write,
+  // no browser-cookie renewal expectation — precisely because /api/stream
+  // uses reply.hijack() + a manual writeHead(), so the normal onSend
+  // cookie-renewal hook never runs for it. Before the fix, an authenticated
+  // SSE connect/reconnect still slid dashboard_sessions.expires_at forward
+  // (an unnecessary DB write on every connect) while the browser cookie
+  // could never actually be renewed to match, reintroducing the exact
+  // browser/DB divergence the sliding-cookie correction pass closed
+  // everywhere else.
+  // -------------------------------------------------------------------
+  describe("SSE identity resolution is a pure read (no sliding-TTL side effect)", () => {
+    let authDb: Kysely<DB>;
+    const TOKEN_KEY = Buffer.alloc(32, 0x22); // matches testSessionConfig()'s tokenEncryptionKey
+
+    beforeAll(() => {
+      authDb = createKyselyClient(dbConfig);
+    });
+
+    afterAll(async () => {
+      await authDb.destroy();
+    });
+
+    async function makeAuthenticatedSession(
+      discordUserId: string,
+    ): Promise<{ rawToken: string; userId: number }> {
+      const user = await upsertDashboardUser(authDb, {
+        discordUserId,
+        username: `sse-user-${discordUserId}`,
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret("fake-access", TOKEN_KEY),
+        encryptedRefreshToken: encryptSecret("fake-refresh", TOKEN_KEY),
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      });
+      const rawToken = `sse-session-token-${discordUserId}-${Math.random()}`;
+      await createSession(authDb, rawToken, {
+        userId: user.id,
+        deviceLabel: null,
+        userAgent: null,
+        ipHash: null,
+        slidingTtlMs: 30 * 24 * 60 * 60 * 1000,
+        absoluteTtlMs: 90 * 24 * 60 * 60 * 1000,
+      });
+      return { rawToken, userId: user.id };
+    }
+
+    it("A. an authenticated SSE connection resolves the exact real user:{id} scope, not the Step-03 placeholder", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { rawToken, userId } = await makeAuthenticatedSession("910000000000001");
+        await insertTestRow(rawPool, "authenticated-scope-event", userScope(String(userId)));
+
+        const client = new SseTestClient(port, { cookies: { bcc_session: rawToken } });
+        await client.statusCode;
+        const frame = await client.waitForFrame(businessFrame);
+        expect(JSON.parse(frame.data!)).toEqual({ label: "authenticated-scope-event" });
+
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("B. opening AND reconnecting an authenticated SSE connection does NOT mutate dashboard_sessions.expires_at", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { rawToken } = await makeAuthenticatedSession("910000000000002");
+        const before = await findValidSessionByRawToken(authDb, rawToken);
+        expect(before).toBeDefined();
+        const expiresAtBefore = before!.expires_at.getTime();
+
+        const client1 = new SseTestClient(port, { cookies: { bcc_session: rawToken } });
+        await client1.statusCode;
+        await sleep(100);
+        client1.destroy();
+
+        // A second, independent connection (simulating a reconnect) with the
+        // SAME session cookie.
+        const client2 = new SseTestClient(port, { cookies: { bcc_session: rawToken } });
+        await client2.statusCode;
+        await sleep(100);
+        client2.destroy();
+
+        const after = await findValidSessionByRawToken(authDb, rawToken);
+        expect(after).toBeDefined();
+        expect(after!.expires_at.getTime()).toBe(expiresAtBefore); // untouched by either connect
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("C. an authenticated SSE connection's response never carries a Set-Cookie — no browser-cookie renewal is attempted for a hijacked stream response", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const { rawToken } = await makeAuthenticatedSession("910000000000003");
+        const client = new SseTestClient(port, { cookies: { bcc_session: rawToken } });
+        const headers = await client.headers;
+        expect(headers["set-cookie"]).toBeUndefined();
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("E. an expired session cookie on SSE still falls back to the exact Step-03 compatibility scope (never a 401, never treated as authenticated)", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        const expiredUser = await upsertDashboardUser(authDb, {
+          discordUserId: "910000000000004",
+          username: "expired-sse-user",
+          avatarHash: null,
+          encryptedAccessToken: encryptSecret("fake-access", TOKEN_KEY),
+          encryptedRefreshToken: encryptSecret("fake-refresh", TOKEN_KEY),
+          tokenExpiresAt: new Date(Date.now() + 3600_000),
+        });
+        const expiredToken = `sse-expired-token-${Math.random()}`;
+        await createSession(authDb, expiredToken, {
+          userId: expiredUser.id,
+          deviceLabel: null,
+          userAgent: null,
+          ipHash: null,
+          slidingTtlMs: -1000, // already expired at creation
+          absoluteTtlMs: 60 * 60 * 1000,
+        });
+
+        await insertTestRow(rawPool, "fallback-scope-event", STEP_03_TEST_SCOPE);
+        const client = new SseTestClient(port, { cookies: { bcc_session: expiredToken } });
+        await client.statusCode; // SSE never gates behind requireAuth - always 200
+        const frame = await client.waitForFrame(businessFrame);
+        expect(JSON.parse(frame.data!)).toEqual({ label: "fallback-scope-event" });
+        client.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("E2. a garbage/forged session cookie on SSE also falls back to Step-03 compatibility scope (never a 401)", async () => {
+      const { app, port } = await startTestServer(dbConfig);
+      try {
+        await insertTestRow(rawPool, "garbage-cookie-fallback-event", STEP_03_TEST_SCOPE);
+        const client = new SseTestClient(port, { cookies: { bcc_session: "not-a-real-token-at-all" } });
+        await client.statusCode;
+        const frame = await client.waitForFrame(businessFrame);
+        expect(JSON.parse(frame.data!)).toEqual({ label: "garbage-cookie-fallback-event" });
         client.destroy();
       } finally {
         await app.close();

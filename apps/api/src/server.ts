@@ -18,7 +18,10 @@ import {
 import {
   buildAuthRoutes,
   createSessionCookieRenewalHook,
+  OAuthTransactionRegistry,
+  startOAuthTransactionSweep,
   startSessionSweep,
+  type OAuthTransactionSweepHandle,
   type SessionSweepHandle,
 } from "./auth/index.js";
 
@@ -35,9 +38,11 @@ export interface SseTestHooks {
   poller: SsePollerHandle;
 }
 
-/** Same in-process-only test seam convention as SseTestHooks above, for Step 04's session-sweep timer. */
+/** Same in-process-only test seam convention as SseTestHooks above, for Step 04's session-sweep timer and OAuth transaction registry sweep. */
 export interface AuthTestHooks {
   sessionSweep: SessionSweepHandle;
+  oauthTransactionRegistry: OAuthTransactionRegistry;
+  oauthTransactionSweep: OAuthTransactionSweepHandle;
 }
 
 declare module "fastify" {
@@ -108,9 +113,16 @@ export async function buildServer(config = loadAppConfig()) {
     maxRowsPerTick: config.sse.maxRowsPerSourcePerTick,
   });
 
-  await fastify.register(buildAuthRoutes(db, config));
+  // Owned here (not inside buildAuthRoutes/routes.ts) specifically so its
+  // documented periodic sweep can actually be started and stopped alongside
+  // the SSE poller and session sweep below — a registry the route module
+  // created and kept entirely to itself would be unreachable from both
+  // (Copilot review, Step 04 review pass).
+  const oauthTransactionRegistry = new OAuthTransactionRegistry();
+  const oauthTransactionSweep = startOAuthTransactionSweep({ registry: oauthTransactionRegistry, logger });
+  await fastify.register(buildAuthRoutes(db, config, oauthTransactionRegistry));
   const sessionSweep = startSessionSweep({ db, logger, intervalMs: config.session.sweepIntervalMs });
-  fastify.decorate("authTestHooks", { sessionSweep });
+  fastify.decorate("authTestHooks", { sessionSweep, oauthTransactionRegistry, oauthTransactionSweep });
 
   await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db }));
   fastify.decorate("sseTestHooks", { hub, cursorRepo, poller });
@@ -128,6 +140,7 @@ export async function buildServer(config = loadAppConfig()) {
   fastify.addHook("preClose", async () => {
     poller.stop();
     sessionSweep.stop();
+    oauthTransactionSweep.stop();
     hub.closeAll("server_shutting_down");
     await db.destroy();
   });
