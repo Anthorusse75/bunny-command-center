@@ -17,7 +17,11 @@ import type { AppConfig } from "../../src/config.js";
 import { createKyselyClient } from "../../src/db/kysely.js";
 import { runUp } from "../../migrations/runner.js";
 import type { MigratorDbConfig } from "../../migrations/config.js";
-import { upsertDashboardUser, findDashboardUserById } from "../../src/auth/userRepo.js";
+import {
+  upsertDashboardUser,
+  findDashboardUserById,
+  updateDashboardUserTokens,
+} from "../../src/auth/userRepo.js";
 import { encryptSecret, decryptSecret } from "../../src/auth/tokenCrypto.js";
 import { DiscordTokenService, DiscordReauthRequiredError } from "../../src/auth/discordTokenService.js";
 import { fetchUserGuilds, isDiscordUnauthorized } from "../../src/auth/discordGuildClient.js";
@@ -243,6 +247,165 @@ describe("DiscordTokenService: full refresh lifecycle (real MySQL + local Discor
     const row = await findDashboardUserById(db, userId);
     const key = config.session.tokenEncryptionKey;
     expect(decryptSecret(row!.discord_refresh_token_enc!, key)).toBe("rotated-refresh-7");
+  });
+
+  // --- External-review Finding 1: delayed-401 refresh-rotation race -------
+
+  it("delayed-401 race (Finding 1): B's stale 401, released only AFTER A's entire refresh cycle has already completed, does NOT trigger a second refresh — B reuses A's already-persisted token", async () => {
+    const staleAccessToken = "shared-stale-access-v1";
+    const userId = await makeUser("500000000000000009", staleAccessToken, "refresh-v1");
+    discord.state.guilds = [{ id: "700000000000000009", owner: false, permissions: "0" }];
+    discord.state.nextRefreshAccessToken = "access-v2";
+    discord.state.nextRefreshRefreshToken = "refresh-v2";
+
+    // B's underlying Discord call is deliberately held open (simulating "B's
+    // request is still in flight") until explicitly released, well AFTER A's
+    // entire withFreshAccessToken call (401 -> refresh -> persist -> retry
+    // -> success) has finished end to end — this is the exact interleaving
+    // the original design's single-flight map could not protect against,
+    // NOT the already-covered "everyone 401s at once" simultaneous case.
+    let releaseB: () => void;
+    const bGate = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+    let bCallCount = 0;
+    const callB = async (accessToken: string) => {
+      bCallCount += 1;
+      if (bCallCount === 1) {
+        await bGate; // B's "in-flight" first attempt, held open on purpose
+        // Only NOW (after being released) does B's request actually reach
+        // the double — by this point A has already rotated the double's
+        // currentAccessToken to v2, so this genuinely, naturally 401s (a
+        // real DiscordGuildFetchError from fetchUserGuilds itself, not a
+        // hand-constructed stand-in) exactly like a real delayed response
+        // would once the token it was sent with is no longer current.
+        return fetchUserGuilds(config.discord, staleAccessToken);
+      }
+      // B's retry, using whatever token the synchronization section handed back.
+      return fetchUserGuilds(config.discord, accessToken);
+    };
+
+    // Start B — it reads access-v1 (same as A, nothing has changed yet) and
+    // immediately blocks on bGate inside its first call attempt.
+    const bPromise = service.withFreshAccessToken(userId, callB);
+
+    // Let A run to COMPLETE end-to-end first: 401 -> enters the exclusive
+    // section (queue is empty, since B is blocked before ever throwing/
+    // entering it) -> refreshes with refresh-v1 -> persists v2 -> retries
+    // -> succeeds. Awaited fully before B's stale 401 is ever released.
+    const resultA = await service.withFreshAccessToken(userId, callGuilds);
+    expect(resultA).toEqual([{ id: "700000000000000009", owner: false, permissions: "0" }]);
+    expect(discord.state.receivedRefreshRequests).toEqual([{ refreshToken: "refresh-v1" }]);
+
+    // ONLY THEN release B's already-in-flight stale request.
+    releaseB!();
+    const resultB = await bPromise;
+
+    expect(resultB).toEqual([{ id: "700000000000000009", owner: false, permissions: "0" }]);
+    // Exactly ONE real Discord refresh call total (A's) — B's delayed 401
+    // must NOT trigger a second one.
+    expect(discord.state.receivedRefreshRequests).toEqual([{ refreshToken: "refresh-v1" }]);
+    // refresh-v2 remains the durable DB refresh token — B never overwrote it
+    // with a stale-refresh-token-derived attempt.
+    const row = await findDashboardUserById(db, userId);
+    const key = config.session.tokenEncryptionKey;
+    expect(decryptSecret(row!.discord_refresh_token_enc!, key)).toBe("refresh-v2");
+    expect(decryptSecret(row!.discord_access_token_enc!, key)).toBe("access-v2");
+  });
+
+  it("a genuinely LATER 401 against the CURRENT (already-refreshed) access token still triggers a real new refresh", async () => {
+    const userId = await makeUser("500000000000000010", "access-gen1", "refresh-gen1");
+    discord.state.guilds = [{ id: "700000000000000010", owner: false, permissions: "0" }];
+    discord.state.nextRefreshAccessToken = "access-gen2";
+    discord.state.nextRefreshRefreshToken = "refresh-gen2";
+
+    await service.withFreshAccessToken(userId, callGuilds);
+    expect(discord.state.receivedRefreshRequests).toEqual([{ refreshToken: "refresh-gen1" }]);
+
+    // access-gen2 (the CURRENT persisted token) has now itself gone stale —
+    // force the guilds endpoint to reject it too, then let the retry succeed
+    // once the SECOND refresh has happened.
+    discord.state.nextRefreshAccessToken = "access-gen3";
+    discord.state.nextRefreshRefreshToken = "refresh-gen3";
+    discord.state.guildsForcedStatus = 401;
+    let callCount = 0;
+    const trackedCall = async (accessToken: string) => {
+      callCount += 1;
+      if (callCount === 2) {
+        discord.state.guildsForcedStatus = undefined;
+      }
+      return fetchUserGuilds(config.discord, accessToken);
+    };
+
+    await service.withFreshAccessToken(userId, trackedCall);
+
+    // A genuinely SECOND real refresh happened, using the CURRENT (gen2)
+    // refresh token, not a stale one.
+    expect(discord.state.receivedRefreshRequests).toEqual([
+      { refreshToken: "refresh-gen1" },
+      { refreshToken: "refresh-gen2" },
+    ]);
+  });
+
+  it("per-user isolation holds under the corrected synchronization: user A's refresh never blocks or consumes user B's credentials", async () => {
+    const staleTokenA = "stale-access-userA";
+    const staleTokenB = "stale-access-userB";
+    const userIdA = await makeUser("500000000000000011", staleTokenA, "refresh-userA");
+    const userIdB = await makeUser("500000000000000012", staleTokenB, "refresh-userB");
+    discord.state.guilds = [{ id: "700000000000000011", owner: false, permissions: "0" }];
+    discord.state.nextRefreshAccessToken = "access-after-refresh-shared-double";
+    discord.state.nextRefreshRefreshToken = "rotated-refresh-shared-double";
+
+    const [resultA, resultB] = await Promise.all([
+      service.withFreshAccessToken(userIdA, callGuilds),
+      service.withFreshAccessToken(userIdB, callGuilds),
+    ]);
+
+    expect(resultA).toEqual([{ id: "700000000000000011", owner: false, permissions: "0" }]);
+    expect(resultB).toEqual([{ id: "700000000000000011", owner: false, permissions: "0" }]);
+    // Two INDEPENDENT users, each genuinely stale -- two real refresh calls,
+    // one per user, never merged/blocked across the user boundary.
+    expect(discord.state.receivedRefreshRequests).toHaveLength(2);
+    expect(discord.state.receivedRefreshRequests.map((r) => r.refreshToken).sort()).toEqual(
+      ["refresh-userA", "refresh-userB"].sort(),
+    );
+
+    const rowA = await findDashboardUserById(db, userIdA);
+    const rowB = await findDashboardUserById(db, userIdB);
+    const key = config.session.tokenEncryptionKey;
+    expect(decryptSecret(rowA!.discord_refresh_token_enc!, key)).toBe("rotated-refresh-shared-double");
+    expect(decryptSecret(rowB!.discord_refresh_token_enc!, key)).toBe("rotated-refresh-shared-double");
+  });
+
+  it("a failed refresh does not leave a poisoned permanent lock — a SUBSEQUENT request for the same user can still succeed", async () => {
+    const userId = await makeUser("500000000000000013", "stale-token-13", "refresh-token-13-will-fail");
+    discord.state.refreshExchangeStatus = 400; // first attempt: refresh itself fails
+
+    await expect(service.withFreshAccessToken(userId, callGuilds)).rejects.toBeInstanceOf(
+      DiscordReauthRequiredError,
+    );
+
+    // Simulate a fresh login (new token material persisted) after the
+    // failed refresh -- the point under test is that the PER-USER queue
+    // itself isn't left permanently stuck/poisoned by the earlier failure.
+    discord.state.refreshExchangeStatus = undefined;
+    discord.state.refreshExchangeBody = undefined;
+    const key = config.session.tokenEncryptionKey;
+    await updateDashboardUserTokens(db, userId, {
+      encryptedAccessToken: encryptSecret("stale-token-13b", key),
+      encryptedRefreshToken: encryptSecret("refresh-token-13-will-succeed", key),
+      tokenExpiresAt: new Date(Date.now() + 3600_000),
+    });
+    discord.state.guilds = [{ id: "700000000000000013", owner: false, permissions: "0" }];
+    discord.state.nextRefreshAccessToken = "access-13-after-second-attempt";
+    discord.state.nextRefreshRefreshToken = "refresh-13-after-second-attempt";
+
+    const result = await service.withFreshAccessToken(userId, callGuilds);
+    expect(result).toEqual([{ id: "700000000000000013", owner: false, permissions: "0" }]);
+    expect(discord.state.receivedRefreshRequests.map((r) => r.refreshToken)).toEqual([
+      "refresh-token-13-will-fail",
+      "refresh-token-13-will-succeed",
+    ]);
   });
 
   it("no token value ever appears in a thrown error's message", async () => {

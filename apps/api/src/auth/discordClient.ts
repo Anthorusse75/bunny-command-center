@@ -194,7 +194,7 @@ export async function refreshDiscordToken(
   config: DiscordOAuthConfig,
   refreshToken: string,
 ): Promise<DiscordTokenResponse> {
-  const body = new URLSearchParams({
+  const requestBody = new URLSearchParams({
     client_id: config.clientId,
     client_secret: config.clientSecret,
     grant_type: "refresh_token",
@@ -206,7 +206,7 @@ export async function refreshDiscordToken(
     response = await fetch(config.tokenUrl, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
+      body: requestBody.toString(),
     });
   } catch (err) {
     throw new DiscordTokenExchangeError(`Discord token refresh unreachable: ${(err as Error).message}`, 0);
@@ -218,15 +218,55 @@ export async function refreshDiscordToken(
     );
   }
   const json: unknown = await response.json().catch(() => null);
-  if (
-    typeof json !== "object" ||
-    json === null ||
-    typeof (json as DiscordTokenResponse).access_token !== "string"
-  ) {
+  if (typeof json !== "object" || json === null) {
     throw new DiscordTokenExchangeError(
       "Discord token refresh returned a malformed response body.",
       response.status,
     );
   }
-  return json as DiscordTokenResponse;
+  const body = json as Record<string, unknown>;
+
+  // External-review Finding 2: `expires_in` is LOAD-BEARING downstream --
+  // `DiscordTokenService.doRefresh` computes `tokenExpiresAt` directly from
+  // it. A malformed HTTP 200 (e.g. `{ access_token: "foo" }` with no
+  // `expires_in`) must be rejected HERE, not allowed through to become a
+  // NaN/Invalid Date at the persistence boundary.
+  if (typeof body.access_token !== "string" || body.access_token.length === 0) {
+    throw new DiscordTokenExchangeError(
+      "Discord token refresh response is missing a valid access_token.",
+      response.status,
+    );
+  }
+  if (typeof body.expires_in !== "number" || !Number.isFinite(body.expires_in) || body.expires_in <= 0) {
+    throw new DiscordTokenExchangeError(
+      "Discord token refresh response is missing a valid expires_in.",
+      response.status,
+    );
+  }
+  // Discord does not always rotate the refresh token on a given refresh
+  // call -- ABSENCE of `refresh_token` is a legitimate, expected response
+  // shape (DiscordTokenService.doRefresh's own "retain the current token"
+  // fallback depends on this staying legal, never a manufactured
+  // requirement that Discord always rotates it). A PRESENT-but-malformed
+  // value, though, is rejected rather than silently coerced/passed through.
+  if (
+    body.refresh_token !== undefined &&
+    (typeof body.refresh_token !== "string" || body.refresh_token.length === 0)
+  ) {
+    throw new DiscordTokenExchangeError(
+      "Discord token refresh response has a malformed refresh_token.",
+      response.status,
+    );
+  }
+
+  return {
+    access_token: body.access_token,
+    // Empty string is intentionally treated as "not rotated" by
+    // DiscordTokenService.doRefresh's `tokenResponse.refresh_token ||
+    // currentRefreshToken` fallback -- equivalent to genuine absence.
+    refresh_token: typeof body.refresh_token === "string" ? body.refresh_token : "",
+    expires_in: body.expires_in,
+    token_type: typeof body.token_type === "string" ? body.token_type : "Bearer",
+    scope: typeof body.scope === "string" ? body.scope : "",
+  };
 }

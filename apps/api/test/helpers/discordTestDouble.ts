@@ -61,6 +61,18 @@ export interface DiscordTestDoubleState {
   /** When set, `/oauth2/token` (refresh_token grant) responds with this HTTP status/body instead of a success payload — the refresh-failure path. */
   refreshExchangeStatus: number | undefined;
   refreshExchangeBody: unknown;
+  /**
+   * When set, a refresh grant responds with HTTP 200 but THIS exact
+   * (possibly malformed) body, verbatim — for Finding 2's "malformed 200"
+   * regression coverage (e.g. `{ access_token: "foo" }` with no
+   * `expires_in`). Distinct from `refreshExchangeStatus`/`refreshExchangeBody`,
+   * which force a non-200 status; this simulates Discord itself returning a
+   * genuinely malformed 200. `currentAccessToken` is deliberately NOT
+   * updated when this is used -- the response is intentionally invalid and
+   * must never be treated as a real successful rotation by the double
+   * itself either.
+   */
+  refreshSuccessBodyOverride: Record<string, unknown> | undefined;
   /** The access_token a SUCCESSFUL refresh returns; also becomes the new `currentAccessToken`. */
   nextRefreshAccessToken: string;
   /** The refresh_token a successful refresh returns — `null` omits the field entirely (simulates Discord NOT rotating it, per 07_DISCORD_OAUTH.md's "if Discord rotates the refresh token" being conditional). */
@@ -99,6 +111,7 @@ export async function startDiscordTestDouble(): Promise<DiscordTestDouble> {
 
     refreshExchangeStatus: undefined,
     refreshExchangeBody: undefined,
+    refreshSuccessBodyOverride: undefined,
     nextRefreshAccessToken: "fake-refreshed-access-token-value",
     nextRefreshRefreshToken: "fake-rotated-refresh-token-value",
     receivedRefreshRequests: [],
@@ -131,6 +144,14 @@ export async function startDiscordTestDouble(): Promise<DiscordTestDouble> {
           if (state.refreshExchangeStatus !== undefined) {
             res.writeHead(state.refreshExchangeStatus, { "Content-Type": "application/json" });
             res.end(JSON.stringify(state.refreshExchangeBody ?? { error: "forced_refresh_failure" }));
+            return;
+          }
+          if (state.refreshSuccessBodyOverride !== undefined) {
+            // Finding 2: a genuinely malformed HTTP 200 -- deliberately
+            // NOT updating currentAccessToken, since this response must
+            // never be treated as a real successful rotation.
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(state.refreshSuccessBodyOverride));
             return;
           }
           state.currentAccessToken = state.nextRefreshAccessToken;
