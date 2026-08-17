@@ -812,6 +812,83 @@ describe("GET /api/stream (real Fastify server, real HTTP streaming)", () => {
     });
   });
 
+  describe("broadcast-before-durable-advance window (reconnect race, D.RESUME CI investigation)", () => {
+    it("a row broadcast by the poller BEFORE a reconnecting client registers, whose durable watermark advance is still in flight when that client snapshots its replay target, is still delivered exactly once - never permanently lost", async () => {
+      // Root-caused from a real, reproducible CI flake on
+      // apps/web/e2e/realtime.spec.ts's "D. RESUME" test: two rows inserted
+      // back-to-back while disconnected, only the SECOND one ever arrived.
+      // poller.ts's tick body calls `hub.broadcast()` for each row (which
+      // only reaches connections ALREADY registered) and only AFTERWARD
+      // durably records `dashboard_sse_cursor` via `cursorRepo.advance()`.
+      // A client reconnecting in the gap between those two steps registers
+      // too late for that tick's broadcast AND reads a replay-target
+      // watermark that doesn't include the row yet either - a genuine loss,
+      // not a duplicate (the already-tested "pre-snapshot" race above is the
+      // mirror-image, later-arriving side of this exact same boundary).
+      //
+      // `advance` is patched (not `getLastSequence`, unlike the dup test
+      // above) to artificially widen this specific gap: firing the tick
+      // WITHOUT awaiting it reaches the synchronous `broadcast()` calls
+      // (after `fetchSince` resolves) and then blocks inside the now-slow
+      // `advance()` - reconnecting client2 during that block reproduces the
+      // exact real-world interleaving deterministically instead of hoping a
+      // real ~ms-scale race lines up.
+      const { app, port } = await startTestServer(dbConfig, {
+        pollIntervalMs: 999_999,
+        heartbeatSeconds: 999_999,
+      });
+      try {
+        const hooks = app.sseTestHooks;
+        if (!hooks) throw new Error("sseTestHooks not decorated");
+
+        const client1 = new SseTestClient(port);
+        await client1.statusCode;
+        await insertTestRow(rawPool, "anchor");
+        await hooks.poller.runOnceForTests();
+        const anchorFrame = await client1.waitForFrame(businessFrame);
+        const lastEventId = anchorFrame.id!;
+        client1.destroy();
+        await sleep(50);
+
+        const originalAdvance = hooks.cursorRepo.advance.bind(hooks.cursorRepo);
+        hooks.cursorRepo.advance = async (sourceTable: string, cursorKey: string, newSequence: number) => {
+          await sleep(300);
+          return originalAdvance(sourceTable, cursorKey, newSequence);
+        };
+
+        const gapRowId = await insertTestRow(rawPool, "gap-row");
+        // Fire-and-forget: broadcasts "gap-row" synchronously once
+        // `fetchSince` resolves, then blocks inside the patched `advance`.
+        void hooks.poller.runOnceForTests();
+        // Long enough to be well past the synchronous broadcast, well short
+        // of the 300ms `advance` delay - client2 registers and takes its
+        // own replay-target snapshot squarely inside the gap.
+        await sleep(50);
+
+        const client2 = new SseTestClient(port, { lastEventId });
+        await client2.statusCode;
+
+        const delivered = await client2.waitForFrame(
+          (f) => businessFrame(f) && f.data?.includes("gap-row") === true,
+          3000,
+        );
+
+        const matching = client2.frames.filter((f) => businessFrame(f) && f.data?.includes("gap-row"));
+        expect(matching).toHaveLength(1); // exactly once - never lost, never duplicated
+
+        const businessComponent = delivered
+          .id!.split(",")
+          .find((entry) => entry.startsWith(`${TEST_SOURCE_INDEX}:`));
+        expect(businessComponent).toBe(`${TEST_SOURCE_INDEX}:${gapRowId}`);
+
+        hooks.cursorRepo.advance = originalAdvance;
+        client2.destroy();
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
   it("disconnect cleans up server resources: activeConnectionCount returns to 0", async () => {
     const { app, port } = await startTestServer(dbConfig);
     try {

@@ -56,7 +56,9 @@ export async function resolveAuthenticatedUser(
   db: Kysely<DB>,
   config: AppConfig,
   request: FastifyRequest,
-): Promise<{ user: AuthenticatedUser; sessionId: string; renewal: PendingSessionRenewal } | undefined> {
+): Promise<
+  { user: AuthenticatedUser; sessionId: string; renewal: PendingSessionRenewal | undefined } | undefined
+> {
   const rawToken = request.cookies?.[config.session.cookieName];
   if (!rawToken) {
     return undefined;
@@ -69,25 +71,36 @@ export async function resolveAuthenticatedUser(
   if (!userRow) {
     return undefined;
   }
-  // Sliding TTL renewal (ADR-020) — best-effort; a failure here must never
-  // block the request that's already been authenticated. Computed with the
-  // SAME `now` and the SAME clamp-to-absolute-cap formula `touchSession`
-  // applies server-side in SQL, so the browser cookie's Max-Age and the
-  // DB row's `expires_at` always converge on the identical value — this is
-  // what makes the sliding session genuinely end-to-end rather than only
-  // sliding in the database while the browser cookie silently keeps its
-  // original, un-renewed login-time expiry (correction-pass review finding).
+  // Sliding TTL renewal (ADR-020). The DB-side write and the browser-cookie
+  // renewal it enables are treated as ONE unit, not two independent
+  // best-effort steps: if `touchSession` fails, `renewal` stays undefined so
+  // the onSend hook (createSessionCookieRenewalHook) never re-issues
+  // `bcc_session` this request — re-emitting a cookie whose Max-Age implies
+  // a DB-side renewal that never actually happened would let the browser
+  // and DB sliding expiries silently diverge, defeating the entire point of
+  // this correction pass. The lookup above already succeeded, so the
+  // request remains authenticated and completes normally either way — a
+  // transient renewal-write failure must never become a login outage
+  // (correction-pass review finding: "narrow this, don't turn it into a
+  // full outage").
   const now = new Date();
   const candidateExpiry = new Date(now.getTime() + config.session.slidingTtlMs);
   const renewedExpiresAt =
     session.absolute_expires_at < candidateExpiry ? session.absolute_expires_at : candidateExpiry;
-  await touchSession(db, session.id, config.session.slidingTtlMs, now).catch((err: unknown) => {
-    request.log.warn({ err }, "auth: failed to renew session sliding expiry");
-  });
+  let renewal: PendingSessionRenewal | undefined;
+  try {
+    await touchSession(db, session.id, config.session.slidingTtlMs, now);
+    renewal = { rawToken, maxAgeMs: renewedExpiresAt.getTime() - now.getTime() };
+  } catch (err) {
+    request.log.warn(
+      { err },
+      "auth: failed to renew session sliding expiry - browser cookie will not be refreshed this request",
+    );
+  }
 
   return {
     sessionId: session.id,
-    renewal: { rawToken, maxAgeMs: renewedExpiresAt.getTime() - now.getTime() },
+    renewal,
     user: {
       id: userRow.id,
       // Already the exact string Discord returned / the DB stored (VARCHAR,
