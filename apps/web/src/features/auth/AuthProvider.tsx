@@ -32,11 +32,15 @@ export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
 interface SessionResponse {
   user: AuthUser;
   sessionId: string;
+  /** Step 06 addition (apps/api/src/auth/routes.ts) — display-only navigation input, never an authorization source (see that route's own doc comment). */
+  isSuperadmin: boolean;
 }
 
 interface AuthContextValue {
   status: AuthStatus;
   user: AuthUser | null;
+  /** Step 06 addition — see `SessionResponse.isSuperadmin`'s doc comment. `false` while `status !== "authenticated"`. */
+  isSuperadmin: boolean;
   /** True once an authenticated request has come back 401 (session revoked/expired mid-use). */
   sessionExpired: boolean;
   /** Begins the OAuth flow (07_DISCORD_OAUTH.md: "GET /api/auth/login (navigation, not XHR)"). `redirectPath` is validated server-side too (`isSafeInternalRedirectPath`) — this is not the security boundary, just UX convenience. */
@@ -49,6 +53,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children?: React.ReactNode }): React.JSX.Element {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -59,12 +64,14 @@ export function AuthProvider({ children }: { children?: React.ReactNode }): Reac
       .then((session) => {
         if (cancelled) return;
         setUser(session.user);
+        setIsSuperadmin(session.isSuperadmin);
         setStatus("authenticated");
         setSessionExpired(false);
       })
       .catch(() => {
         if (cancelled) return;
         setUser(null);
+        setIsSuperadmin(false);
         setStatus("unauthenticated");
       });
     return () => {
@@ -84,8 +91,8 @@ export function AuthProvider({ children }: { children?: React.ReactNode }): Reac
   const refresh = useCallback(() => setRefreshToken((n) => n + 1), []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, user, sessionExpired, login, refresh }),
-    [status, user, sessionExpired, login, refresh],
+    () => ({ status, user, isSuperadmin, sessionExpired, login, refresh }),
+    [status, user, isSuperadmin, sessionExpired, login, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -63,6 +63,26 @@
       "guildAdmin": "Administrateur de guilde",
       "superadmin": "Superadministrateur",
       "premiumPlus": "PremiumPlus"
+    },
+    "nav": {
+      "home": "Accueil",
+      "upload": "Envoi",
+      "guild": "Guilde",
+      "contributions": "Contributions",
+      "leaderboard": "Classement",
+      "notifications": "Notifications",
+      "onboarding": "Intégration",
+      "guildAdmin": "Administration de guilde",
+      "technical": "Technique",
+      "superadmin": "Superadmin",
+      "heroDiscovery": "Découverte de héros",
+      "profile": "Profil",
+      "more": "Plus"
+    },
+    "inviteBunny": {
+      "ctaCount_one": "Inviter Bunny sur un autre serveur ({{count}})",
+      "ctaCount_many": "Inviter Bunny sur un autre serveur ({{count}})",
+      "ctaCount_other": "Inviter Bunny sur un autre serveur ({{count}})"
     }
   },
   "errors": {
@@ -89,6 +109,21 @@
     },
     "guilds": {
       "notFound": "Nous n'avons pas trouvé ce serveur pour votre compte."
+    },
+    "notFoundPage": {
+      "title": "Cette page n'existe pas",
+      "body": "Le lien est peut-être obsolète, ou l'adresse mal saisie.",
+      "cta": "Aller à l'accueil"
+    },
+    "guildNotAccessible": {
+      "title": "Ce serveur n'est plus accessible",
+      "body": "Vous en avez peut-être été retiré, ou le serveur a peut-être retiré Bunny. Si cela vous semble anormal, demandez à l'administrateur de la guilde de vérifier.",
+      "cta": "Aller à l'accueil"
+    },
+    "forbiddenGuild": {
+      "title": "Vous n'avez plus accès à cet élément",
+      "body": "Votre rôle sur ce serveur a changé, ou cette section nécessite un accès Administrateur de guilde.",
+      "cta": "Aller à l'accueil"
     }
   },
   "a11y": {
@@ -105,7 +140,17 @@
     "notificationRegion": "Notifications",
     "moreInformation": "Plus d'informations",
     "closeNotification": "Masquer cette notification",
-    "statusLabel": "Statut : {{status}}"
+    "statusLabel": "Statut : {{status}}",
+    "breadcrumbs": "Fil d'Ariane",
+    "nav": {
+      "guildSwitcher": "Changer de guilde",
+      "guildSwitcherSearch": "Filtrer les guildes par nom",
+      "favoriteOn": "Retirer {{guildName}} des favoris",
+      "favoriteOff": "Ajouter {{guildName}} aux favoris",
+      "inviteBunny": "Inviter Bunny sur un serveur que vous administrez",
+      "moreMenu": "Autres destinations de navigation",
+      "notificationsBadge": "{{count}} notifications non lues"
+    }
   },
   "showcase": {
     "title": "Système de design",
@@ -167,16 +212,104 @@
       "loginAgain": "Se reconnecter"
     }
   },
-  "home": {},
-  "upload": {},
-  "guild": {},
+  "home": {
+    "zeroGuild": {
+      "title": "Bienvenue sur Bunny Command Center",
+      "tagline": "Tout ce dont votre guilde a besoin pour suivre les captures Hero Wars, le PremiumPlus et le classement — au même endroit.",
+      "features": {
+        "upload": "Envoi de captures en masse en quelques secondes",
+        "ocr": "L'OCR automatique lit vos statistiques pour vous",
+        "premiumplus": "Suivi du quota PremiumPlus",
+        "stock": "Stock d'une saison à l'autre",
+        "leaderboards": "Classements de guilde",
+        "notifications": "Des notifications au bon moment",
+        "forecasts": "Prévisions et tendances"
+      },
+      "inviteCta": "Inviter Bunny sur votre serveur",
+      "cannotInvite": "Demandez à l'administrateur de votre guilde d'inviter Bunny",
+      "cannotInviteBody": "Bunny n'est encore présent sur aucun de vos serveurs Discord. Une fois que l'administrateur de votre guilde l'aura ajouté, cette page se remplira automatiquement."
+    },
+    "placeholder": {
+      "title": "Accueil",
+      "body": "Votre tableau de bord personnalisé arrive bientôt — les widgets PremiumPlus, contributions et classement seront ajoutés dans une prochaine mise à jour."
+    }
+  },
+  "upload": {
+    "placeholder": {
+      "title": "Envoi en masse",
+      "body": "L'outil d'envoi en masse de captures n'est pas encore construit — ceci est un espace réservé pour la route et sa navigation."
+    }
+  },
+  "guild": {
+    "switcher": {
+      "title": "Vos guildes",
+      "searchPlaceholder": "Filtrer les guildes…",
+      "favoritesHeading": "Favoris",
+      "allHeading": "Toutes les guildes",
+      "empty": "Aucune guilde ne correspond à votre recherche.",
+      "favoritedToast": "{{guildName}} ajoutée aux favoris",
+      "unfavoritedToast": "{{guildName}} retirée des favoris"
+    },
+    "overview": {
+      "title": "{{guildName}}",
+      "titleFallback": "Aperçu de la guilde",
+      "placeholderBody": "Le contenu détaillé PremiumPlus, stock et prévisions pour cette guilde arrive dans une prochaine mise à jour.",
+      "botNotPresent": "Bunny n'a pas encore été ajouté à ce serveur."
+    }
+  },
   "premiumplus": {},
-  "contributions": {},
-  "leaderboard": {},
-  "notifications": {},
-  "onboarding": {},
-  "adminGuild": {},
-  "superadmin": {},
-  "technical": {},
-  "profile": {}
+  "contributions": {
+    "placeholder": {
+      "title": "Contributions",
+      "body": "Votre historique de contributions et le détail des lots ne sont pas encore construits — ceci est un espace réservé pour la route et sa navigation."
+    }
+  },
+  "leaderboard": {
+    "placeholder": {
+      "title": "Classement",
+      "body": "Le classement de cette guilde n'est pas encore construit — ceci est un espace réservé pour la route et sa navigation."
+    }
+  },
+  "notifications": {
+    "placeholder": {
+      "title": "Notifications",
+      "body": "Votre centre de notifications n'est pas encore construit — ceci est un espace réservé pour la route et sa navigation."
+    }
+  },
+  "onboarding": {
+    "placeholder": {
+      "title": "Intégration de la guilde",
+      "body": "L'assistant d'intégration n'est pas encore construit — ceci est un espace réservé pour la route et sa navigation."
+    }
+  },
+  "adminGuild": {
+    "placeholder": {
+      "title": "Administration de guilde",
+      "body": "La configuration de la guilde n'est pas encore construite — ceci est un espace réservé pour la route et sa navigation."
+    }
+  },
+  "superadmin": {
+    "placeholder": {
+      "title": "Console de la plateforme",
+      "body": "La console plateforme Superadmin n'est pas encore construite — ceci est un espace réservé pour la route et sa navigation."
+    },
+    "heroDiscovery": {
+      "placeholder": {
+        "title": "Découverte de héros",
+        "body": "Les candidats de reconnaissance et le catalogue de référence ne sont pas encore construits — ceci est un espace réservé pour la route et sa navigation."
+      }
+    }
+  },
+  "technical": {
+    "placeholder": {
+      "title": "Technique",
+      "body": "L'état de santé, les runs et les commandes opérateur de cette guilde ne sont pas encore construits — ceci est un espace réservé pour la route et sa navigation."
+    }
+  },
+  "profile": {
+    "placeholder": {
+      "title": "Profil",
+      "body": "Les réglages de langue, de thème et de préférences de guilde arrivent dans une prochaine mise à jour."
+    }
+  }
 }

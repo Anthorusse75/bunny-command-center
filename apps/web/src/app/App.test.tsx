@@ -11,11 +11,9 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import i18next from "../i18n/index.js";
 import { App } from "./App.js";
 import { COLOR_SCHEME_ATTRIBUTE, THEME_ATTRIBUTE } from "../theme/mode.js";
-import { clickLocaleOptionAndSettle } from "../test/i18nTestUtils.js";
 import { mockAuthenticatedSession } from "../test/fetchMock.js";
 
 // STEP 04 NOTE (disclosed deviation, not a silent regression — see this
@@ -53,23 +51,41 @@ describe("App", () => {
   });
 
   it("renders translated copy from the catalogs (the i18n pipeline is wired end to end)", async () => {
+    // Step 06 UPDATE: the Step 02 showcase route is gone from the live app
+    // (App.test.tsx's own header comment) — the authenticated default
+    // route is now Home, which with the default (empty) mocked guild list
+    // renders the real zero-guild marketing state
+    // (SCREENS/HOME.md §"No guild at all").
     mockAuthenticatedSession();
     render(<App />);
-    // Not a literal: the same key, resolved through i18next, is what the DOM must contain.
     await waitFor(() => {
-      expect(screen.getByRole("heading", { level: 1, name: i18next.t("showcase.title") })).toBeVisible();
+      expect(
+        screen.getByRole("heading", { level: 1, name: i18next.t("home.zeroGuild.title") }),
+      ).toBeVisible();
     });
   });
 
   it("re-renders that copy in French when the language changes, with no reload", async () => {
+    // Step 06 UPDATE: the UI locale selector (`locale-option-fr`) previously
+    // lived only in the Step 02 showcase route, which the real router
+    // replaces — Profile stays an intentional placeholder in this step
+    // (`profile.placeholder.*`), so it doesn't wire the selector into the
+    // live app yet either. This test's actual claim (i18next's runtime
+    // language switch propagates through the mounted tree with no reload)
+    // is proven directly against i18next itself instead, same as
+    // `i18n/__tests__/i18n.test.tsx` already does for the pipeline in
+    // isolation — the UI-control-driven version of this claim is Profile's
+    // own future step's responsibility to add once a real selector exists
+    // there.
     mockAuthenticatedSession();
-    const user = userEvent.setup();
     render(<App />);
-    await screen.findByRole("heading", { level: 1, name: i18next.t("showcase.title") });
-    await clickLocaleOptionAndSettle(user, "locale-option-fr");
+    await screen.findByRole("heading", { level: 1, name: i18next.t("home.zeroGuild.title") });
+    await act(async () => {
+      await i18next.changeLanguage("fr");
+    });
     expect(document.documentElement.getAttribute("lang")).toBe("fr");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      i18next.getFixedT("fr")("showcase.title"),
+      i18next.getFixedT("fr")("home.zeroGuild.title"),
     );
   });
 

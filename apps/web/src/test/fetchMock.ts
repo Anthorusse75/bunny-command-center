@@ -57,12 +57,38 @@ const DEFAULT_TEST_USER: AuthUser = {
   themeMode: "system",
 };
 
-/** Points GET /api/auth/session at a successful, authenticated response — the shape apps/api/src/auth/routes.ts's GET /api/auth/session actually returns. */
-export function mockAuthenticatedSession(user: Partial<AuthUser> = {}): void {
+/**
+ * Points GET /api/auth/session at a successful, authenticated response — the
+ * shape apps/api/src/auth/routes.ts's GET /api/auth/session actually
+ * returns. Step 06 addition: also mocks a default, deterministic (empty)
+ * `GET /api/users/me/guilds` response, since `<App>` now always mounts the
+ * real router (`navigation/routes.tsx`), and Home always calls
+ * `useGuildList()` — without this, every test that authenticates would
+ * otherwise hit the generic 404 fallback and render Home's zero-guild state
+ * via an ERROR path rather than the real empty-list success path. Callers
+ * that need a non-empty guild list call `setFetchHandler` themselves,
+ * layering on top of (or replacing) this default.
+ */
+export function mockAuthenticatedSession(
+  user: Partial<AuthUser> = {},
+  options: { isSuperadmin?: boolean } = {},
+): void {
   const fullUser = { ...DEFAULT_TEST_USER, ...user };
   setFetchHandler((url) => {
     if (url.includes("/api/auth/session")) {
-      return jsonResponse(200, { data: { user: fullUser, sessionId: "test-session-id" } });
+      return jsonResponse(200, {
+        data: { user: fullUser, sessionId: "test-session-id", isSuperadmin: options.isSuperadmin ?? false },
+      });
+    }
+    if (url.includes("/api/users/me/guilds")) {
+      return jsonResponse(200, {
+        data: {
+          guilds: [],
+          inviteEligibleGuilds: [],
+          canInviteBunnyAnywhere: false,
+          inviteUrl: "https://discord.com/oauth2/authorize?scope=bot",
+        },
+      });
     }
     return defaultHandler(url);
   });

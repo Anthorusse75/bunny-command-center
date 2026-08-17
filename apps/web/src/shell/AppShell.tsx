@@ -49,9 +49,24 @@ function readStoredCollapsed(): boolean {
 
 export interface AppShellProps {
   children?: React.ReactNode;
+  /**
+   * Step 06 fills these three slots (`03_INFORMATION_ARCHITECTURE.md`'s
+   * navigation, this file's own comments below name the exact ordering) —
+   * AppShell itself stays domain-agnostic chrome, it never imports
+   * `navigation/`, so this Step 02 file is EXTENDED, not forked.
+   */
+  sidebarHeader?: React.ReactNode;
+  /** A plain node, or a render-prop receiving the sidebar's current collapsed state (icon-rail nav rows render differently collapsed vs expanded). */
+  sidebarContent?: React.ReactNode | ((collapsed: boolean) => React.ReactNode);
+  bottomNavContent?: React.ReactNode;
 }
 
-export function AppShell({ children }: AppShellProps): React.JSX.Element {
+export function AppShell({
+  children,
+  sidebarHeader,
+  sidebarContent,
+  bottomNavContent,
+}: AppShellProps): React.JSX.Element {
   const { t } = useTranslation();
   const isDesktop = useIsDesktopLayout();
   const [collapsed, setCollapsed] = useState<boolean>(() => readStoredCollapsed());
@@ -100,7 +115,14 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
         {t("a11y.skipToContent")}
       </Box>
 
-      {isDesktop ? <DesktopSidebar collapsed={collapsed} onToggle={toggleCollapsed} /> : null}
+      {isDesktop ? (
+        <DesktopSidebar
+          collapsed={collapsed}
+          onToggle={toggleCollapsed}
+          header={sidebarHeader}
+          content={sidebarContent}
+        />
+      ) : null}
 
       <Box
         sx={{
@@ -141,7 +163,7 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
         </Box>
       </Box>
 
-      {!isDesktop ? <MobileBottomNav /> : null}
+      {!isDesktop ? <MobileBottomNav>{bottomNavContent}</MobileBottomNav> : null}
     </Box>
   );
 }
@@ -149,9 +171,13 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
 function DesktopSidebar({
   collapsed,
   onToggle,
+  header,
+  content,
 }: {
   collapsed: boolean;
   onToggle: () => void;
+  header?: React.ReactNode;
+  content?: React.ReactNode | ((collapsed: boolean) => React.ReactNode);
 }): React.JSX.Element {
   const { t } = useTranslation();
   return (
@@ -187,18 +213,31 @@ function DesktopSidebar({
         </IconButton>
       </Box>
       {/*
+        22_DESKTOP_UX.md/09_MULTI_GUILD_MODEL.md: "the switcher lives in the
+        sidebar header, always visible". Hidden while collapsed (icon-rail
+        mode has no room for the switcher's text/search UI — a collapsed
+        sidebar's Guild nav item, in `sidebar-items` below, remains the
+        reachable equivalent).
+      */}
+      {!collapsed ? <Box data-testid="sidebar-header">{header}</Box> : null}
+      {/*
         Slot for the real sidebar groups, in the order 03_INFORMATION_ARCHITECTURE.md
         §Desktop navigation fixes: Home, Upload, Guild (with guild switcher on top),
         Contributions, Leaderboard, Notifications, divider, conditional Onboarding /
         Guild Admin / Technical, divider, conditional Superadmin + Hero Discovery, then
         Profile pinned at the bottom. Filled by Step 06.
       */}
-      <Box data-testid="sidebar-items" sx={{ flexGrow: 1 }} />
+      <Box
+        data-testid="sidebar-items"
+        sx={{ flexGrow: 1, display: "flex", flexDirection: "column", minHeight: 0 }}
+      >
+        {typeof content === "function" ? content(collapsed) : content}
+      </Box>
     </Box>
   );
 }
 
-function MobileBottomNav(): React.JSX.Element {
+function MobileBottomNav({ children }: { children?: React.ReactNode }): React.JSX.Element {
   const { t } = useTranslation();
   return (
     <Box
@@ -225,7 +264,9 @@ function MobileBottomNav(): React.JSX.Element {
         Slot for the five destinations 03_INFORMATION_ARCHITECTURE.md §Mobile navigation
         fixes: Home, Upload, Guild, Leaderboard, More. Filled by Step 06.
       */}
-      <Box data-testid="bottom-nav-items" sx={{ display: "flex", flexGrow: 1, height: "100%" }} />
+      <Box data-testid="bottom-nav-items" sx={{ display: "flex", flexGrow: 1, height: "100%" }}>
+        {children}
+      </Box>
     </Box>
   );
 }
