@@ -304,6 +304,21 @@ export interface Contributors {
   username: string | null;
 }
 
+export interface DashboardAdminOverrides {
+  admin_disabled: Generated<number>;
+  guild_id: string;
+  set_at: Generated<Date>;
+  set_by_user_id: string;
+  user_id: string;
+}
+
+export interface DashboardGuildPolicy {
+  admin_role_discord_id: string | null;
+  created_at: Generated<Date>;
+  guild_id: string;
+  updated_at: Generated<Date>;
+}
+
 export interface DashboardRoleAssignments {
   active_equivalent_key: Buffer | null;
   discord_user_id: number;
@@ -1552,6 +1567,8 @@ export interface DB {
   configuration_audit_events: ConfigurationAuditEvents;
   configuration_validation_results: ConfigurationValidationResults;
   contributors: Contributors;
+  dashboard_admin_overrides: DashboardAdminOverrides;
+  dashboard_guild_policy: DashboardGuildPolicy;
   dashboard_role_assignments: DashboardRoleAssignments;
   dashboard_schema_migrations: DashboardSchemaMigrations;
   dashboard_sessions: DashboardSessions;

@@ -26,6 +26,10 @@ const REQUIRED_DB_ENV: EnvSource = {
   DISCORD_REDIRECT_URI: "http://127.0.0.1/api/auth/callback",
   DASHBOARD_OAUTH_TRANSACTION_SIGNING_KEY: "11".repeat(32),
   DASHBOARD_TOKEN_ENCRYPTION_KEY: "22".repeat(32),
+  // Step 05 (ADR-008): also required for loadAppConfig() to succeed —
+  // a fixed, publicly-committed, test-only Snowflake (never the real
+  // production Superadmin ID, which lives only in a real deployment's env).
+  PLATFORM_SUPERADMIN_DISCORD_ID: "900000000000000001",
 };
 
 describe("apps/api config: SSE numeric env validation (correctness-review defect 7)", () => {
@@ -92,4 +96,44 @@ describe("apps/api config: SSE numeric env validation (correctness-review defect
   it("positiveIntEnv: a genuinely absent var uses the default and never throws", () => {
     expect(positiveIntEnv({}, "X", 42)).toBe(42);
   });
+});
+
+/**
+ * ADR-008: "production startup fails loudly if `PLATFORM_SUPERADMIN_DISCORD_ID`
+ * is unset or not a syntactically valid Discord snowflake." `loadAppConfig`
+ * is the only startup path this codebase has (see config.ts's own doc
+ * comment on `SuperadminConfig`) — these tests exercise it directly, the same
+ * way the SSE numeric-env tests above do for their own required values.
+ */
+describe("apps/api config: PLATFORM_SUPERADMIN_DISCORD_ID validation (Step 05, ADR-008)", () => {
+  it("accepts a syntactically valid Discord snowflake and stores it verbatim as a string", () => {
+    const config = loadAppConfig({
+      ...REQUIRED_DB_ENV,
+      PLATFORM_SUPERADMIN_DISCORD_ID: "365417631706251265",
+    });
+    expect(config.superadmin).toEqual({ discordUserId: "365417631706251265" });
+    expect(typeof config.superadmin.discordUserId).toBe("string");
+  });
+
+  it("fails startup loudly when PLATFORM_SUPERADMIN_DISCORD_ID is absent", () => {
+    const withoutSuperadmin: EnvSource = { ...REQUIRED_DB_ENV };
+    delete withoutSuperadmin["PLATFORM_SUPERADMIN_DISCORD_ID"];
+    expect(() => loadAppConfig(withoutSuperadmin)).toThrow(/PLATFORM_SUPERADMIN_DISCORD_ID/);
+  });
+
+  const malformedValues: Array<{ label: string; raw: string }> = [
+    { label: "empty string", raw: "" },
+    { label: "too short to be a real snowflake", raw: "12345" },
+    { label: "non-numeric", raw: "not-a-snowflake" },
+    { label: "numeric but with a decimal point", raw: "365417631706251265.0" },
+    { label: "numeric but with a leading plus sign", raw: "+365417631706251265" },
+    { label: "wildly too long", raw: "1".repeat(40) },
+  ];
+  for (const { label, raw } of malformedValues) {
+    it(`fails startup loudly for a malformed value (${label})`, () => {
+      expect(() => loadAppConfig({ ...REQUIRED_DB_ENV, PLATFORM_SUPERADMIN_DISCORD_ID: raw })).toThrow(
+        /Invalid PLATFORM_SUPERADMIN_DISCORD_ID/,
+      );
+    });
+  }
 });

@@ -228,4 +228,9 @@ jobs:
           DISCORD_REDIRECT_URI: http://127.0.0.1:8199/api/auth/callback
           DASHBOARD_OAUTH_TRANSACTION_SIGNING_KEY: "1111111111111111111111111111111111111111111111111111111111111111"
           DASHBOARD_TOKEN_ENCRYPTION_KEY: "2222222222222222222222222222222222222222222222222222222222222222"
+          # Step 05 (ADR-008): required for loadAppConfig() to succeed —
+          # deliberately-fake, non-secret, CI-only placeholder Snowflake
+          # (never the real production Superadmin ID, which lives only in a
+          # real deployment's env).
+          PLATFORM_SUPERADMIN_DISCORD_ID: "900000000000000001"
         run: npm run smoke-test-compiled

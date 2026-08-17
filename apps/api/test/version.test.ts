@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildServer } from "../src/server.js";
 import type { AppConfig } from "../src/config.js";
-import { testDiscordConfig, testSessionConfig } from "./helpers/testAuthConfig.js";
+import { testDiscordConfig, testSessionConfig, testSuperadminConfig } from "./helpers/testAuthConfig.js";
 
 const CONFIG: AppConfig = {
   port: 0,
@@ -16,6 +16,7 @@ const CONFIG: AppConfig = {
   },
   discord: testDiscordConfig(),
   session: testSessionConfig(),
+  superadmin: testSuperadminConfig(),
 };
 
 describe("/api/version", () => {

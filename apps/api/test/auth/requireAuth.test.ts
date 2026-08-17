@@ -29,7 +29,7 @@ import { upsertDashboardUser } from "../../src/auth/userRepo.js";
 import { createSession, findValidSessionByRawToken } from "../../src/auth/sessionRepo.js";
 import { encryptSecret } from "../../src/auth/tokenCrypto.js";
 import { buildRequireAuth, createSessionCookieRenewalHook } from "../../src/auth/requireAuth.js";
-import { testDiscordConfig, testSessionConfig } from "../helpers/testAuthConfig.js";
+import { testDiscordConfig, testSessionConfig, testSuperadminConfig } from "../helpers/testAuthConfig.js";
 
 const ROOT_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -131,6 +131,7 @@ describe("requireAuth: touchSession DB-write failure path (real MySQL + targeted
       },
       discord: testDiscordConfig(),
       session: testSessionConfig(),
+      superadmin: testSuperadminConfig(),
     };
   });
 

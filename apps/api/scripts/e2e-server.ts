@@ -41,7 +41,11 @@ import {
   createTestSourceSchema,
   testEventDataSchema,
 } from "../test/helpers/sseTestSource.js";
-import { testDiscordConfig, testSessionConfig } from "../test/helpers/testAuthConfig.js";
+import {
+  testDiscordConfig,
+  testSessionConfig,
+  testSuperadminConfig,
+} from "../test/helpers/testAuthConfig.js";
 
 const REAL_MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -111,6 +115,7 @@ async function main(): Promise<void> {
     // uses, reused here rather than duplicated.
     discord: testDiscordConfig(),
     session: testSessionConfig(),
+    superadmin: testSuperadminConfig(),
   };
 
   const fastify = await buildServer(config);

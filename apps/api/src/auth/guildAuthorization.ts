@@ -1,0 +1,206 @@
+/**
+ * `assertGuildMembership` + Guild Admin Resolution (08_AUTHORIZATION_AND_RBAC.md,
+ * ADR-006, ADR-007, ADR-004 corrected 2026-08-11 second pass). This is the
+ * ONE implementation of both algorithms -- `tier.ts`'s `requireTier` is the
+ * only caller in the real request path; no route may re-derive either check
+ * itself (IDOR checklist item 2/3).
+ *
+ * === Documented deviation from the literal 08_AUTHORIZATION_AND_RBAC.md
+ * flowchart, operator-resolved (see this step's HANDOVER) ===
+ * That document's flowchart has a "RoleValid" branch that, in the rare case
+ * where the caller's held-role-ID doesn't match the Dashboard's last-known
+ * configured role, consults Bunny OCR's role-catalog endpoint to distinguish
+ * "the role was deleted" from "the caller simply doesn't hold it" before
+ * applying the fail-safe. `IMPLEMENTATION/README.md`'s LATER, second-pass
+ * correction ("Step 05 (RBAC) -> Step 08: no dependency at all, hard or
+ * soft") directly contradicts that: it explicitly states Guild Admin
+ * Resolution for the current user has ZERO dependency on Bunny OCR, full
+ * stop. The operator directing this implementation resolved that
+ * contradiction in favor of the LATER correction: this module makes NO
+ * Bunny OCR call, ever, in any branch. When the configured role is not
+ * found in the caller's live `roles` array, this fails closed to USER
+ * WITHOUT attempting to distinguish "role deleted" from "role not held" --
+ * both states are indistinguishable here and both deny identically, per the
+ * operator's explicit instruction: "Step 05 does not need the complete
+ * guild role catalog merely to avoid granting access." The role-catalog /
+ * reconfiguration-diagnostic UX remains Step 12's concern.
+ */
+import type { Kysely } from "kysely";
+import type { DB } from "../db/codegen-types.js";
+import type { AppConfig } from "../config.js";
+import { isSuperadmin } from "./superadmin.js";
+import {
+  fetchUserGuilds,
+  fetchGuildMember,
+  hasAdministratorPermission,
+  type DiscordGuildSummary,
+} from "./discordGuildClient.js";
+import { GuildAuthCache, guildsListCacheKey, guildMemberCacheKey } from "./guildAuthCache.js";
+import { DiscordTokenService } from "./discordTokenService.js";
+import { getGuildPolicy } from "./guildPolicyRepo.js";
+import { getAdminOverride } from "./adminOverrideRepo.js";
+
+export type GuildTier = "USER" | "GUILD_ADMIN" | "SUPERADMIN";
+
+/** Numeric rank for `requireTier`'s `>=` comparisons -- never re-derived ad hoc elsewhere. */
+export const GUILD_TIER_RANK: Record<GuildTier, number> = {
+  USER: 0,
+  GUILD_ADMIN: 1,
+  SUPERADMIN: 2,
+};
+
+export interface AuthorizedCaller {
+  /** `dashboard_users.id` -- the internal FK used to load/decrypt Discord token material. */
+  id: number;
+  discordUserId: string;
+}
+
+export interface GuildAuthDeps {
+  db: Kysely<DB>;
+  config: AppConfig;
+  cache: GuildAuthCache;
+  tokenService: DiscordTokenService;
+}
+
+export function createGuildAuthDeps(
+  db: Kysely<DB>,
+  config: AppConfig,
+  cache?: GuildAuthCache,
+): GuildAuthDeps {
+  return {
+    db,
+    config,
+    cache: cache ?? new GuildAuthCache(),
+    tokenService: new DiscordTokenService(db, config),
+  };
+}
+
+/**
+ * Fetches the caller's OWN live guild list (`GET /users/@me/guilds`),
+ * subject to the 60s micro-cache (per-user; one Discord call answers
+ * membership for every guild at once, see `guildAuthCache.ts`'s doc
+ * comment). Goes through `DiscordTokenService.withFreshAccessToken` so an
+ * expired access token is transparently refreshed (carry-forward #2) --
+ * this is genuinely the FIRST place in the whole codebase that calls
+ * `withFreshAccessToken`.
+ */
+async function getCallerGuilds(
+  deps: GuildAuthDeps,
+  caller: AuthorizedCaller,
+): Promise<DiscordGuildSummary[]> {
+  const key = guildsListCacheKey(caller.discordUserId);
+  const cached = deps.cache.get<DiscordGuildSummary[]>(key);
+  if (cached) {
+    return cached;
+  }
+  const guilds = await deps.tokenService.withFreshAccessToken(caller.id, (accessToken) =>
+    fetchUserGuilds(deps.config.discord, accessToken),
+  );
+  deps.cache.set(key, guilds);
+  return guilds;
+}
+
+async function getCallerGuildMemberRoles(
+  deps: GuildAuthDeps,
+  caller: AuthorizedCaller,
+  guildId: string,
+): Promise<string[]> {
+  const key = guildMemberCacheKey(caller.discordUserId, guildId);
+  const cached = deps.cache.get<string[]>(key);
+  if (cached) {
+    return cached;
+  }
+  const member = await deps.tokenService.withFreshAccessToken(caller.id, (accessToken) =>
+    fetchGuildMember(deps.config.discord, accessToken, guildId),
+  );
+  deps.cache.set(key, member.roles);
+  return member.roles;
+}
+
+/**
+ * The mandatory prerequisite gate (08_AUTHORIZATION_AND_RBAC.md
+ * `assertGuildMembership`): Superadmin bypasses explicitly and unconditionally
+ * (no Discord call is made at all for a Superadmin caller -- tested to
+ * confirm this is an ACTUAL bypass, not a coincidental pass); every other
+ * caller must have `guildId` present in their own LIVE guild list. Returns
+ * `false` (never throws) for "not a member" -- the caller (`tier.ts`) is
+ * responsible for turning that into the documented 404.
+ */
+export async function assertGuildMembership(
+  deps: GuildAuthDeps,
+  caller: AuthorizedCaller,
+  guildId: string,
+): Promise<boolean> {
+  if (isSuperadmin(caller.discordUserId, deps.config)) {
+    return true;
+  }
+  const guilds = await getCallerGuilds(deps, caller);
+  return guilds.some((g) => g.id === guildId);
+}
+
+/**
+ * Guild Admin Resolution (08_AUTHORIZATION_AND_RBAC.md's flowchart, minus
+ * the Bunny role-deletion-detection branch -- see this module's header
+ * comment). MUST only be called after `assertGuildMembership` has already
+ * confirmed membership (or Superadmin) for this exact `guildId` -- this
+ * function does not re-derive that decision itself beyond a defensive
+ * fail-closed-to-USER fallback if it's ever called for a guild the caller
+ * turns out not to belong to (keeps this function safe to unit-test in
+ * isolation without ever becoming promotion-capable on its own).
+ */
+export async function resolveGuildAuthorization(
+  deps: GuildAuthDeps,
+  caller: AuthorizedCaller,
+  guildId: string,
+): Promise<GuildTier> {
+  // Platform Superadmin: GUILD_ADMIN-or-higher everywhere, by design
+  // (08_AUTHORIZATION_AND_RBAC.md: "Platform Superadmin: GUILD ADMIN for
+  // authorization purposes where the product contract grants it"). Returned
+  // as the distinct SUPERADMIN rank so a future platform-scoped
+  // `requireTier(guildIdParam, 'SUPERADMIN')` check can still distinguish
+  // "the platform Superadmin" from "an ordinary Guild Admin/Owner" within a
+  // guild context, per this step's IDOR-middleware separability requirement.
+  if (isSuperadmin(caller.discordUserId, deps.config)) {
+    return "SUPERADMIN";
+  }
+
+  const guilds = await getCallerGuilds(deps, caller);
+  const summary = guilds.find((g) => g.id === guildId);
+  if (!summary) {
+    // Defensive fail-closed fallback only -- the real request path always
+    // calls assertGuildMembership first and 404s before ever reaching here.
+    return "USER";
+  }
+
+  // Discord guild Owner: always admin, absolute protection -- ADMIN_DISABLED
+  // is checked further below and can NEVER reach/demote an Owner, because
+  // this branch returns unconditionally before the override is even loaded.
+  if (summary.owner) {
+    return "GUILD_ADMIN";
+  }
+
+  // Individual override: ADMIN_DISABLED removes Guild Admin rights (never
+  // Dashboard access -- the caller still resolves to a full USER) and
+  // short-circuits every branch below it, but can never reach an Owner
+  // (already returned above) or the Superadmin (already returned above).
+  const override = await getAdminOverride(deps.db, guildId, caller.discordUserId);
+  if (override?.adminDisabled) {
+    return "USER";
+  }
+
+  const policy = await getGuildPolicy(deps.db, guildId);
+  if (policy?.adminRoleDiscordId) {
+    const roles = await getCallerGuildMemberRoles(deps, caller, guildId);
+    // Fail-closed either way (role genuinely not held, OR the configured
+    // role no longer exists in the guild at all) -- see this module's
+    // header comment for why this deliberately never distinguishes the two
+    // and never consults Bunny OCR. Never falls back to the
+    // Administrator-permission branch below -- a configured role, once
+    // set, always takes precedence over the default.
+    return roles.includes(policy.adminRoleDiscordId) ? "GUILD_ADMIN" : "USER";
+  }
+
+  // No configured role: Discord Administrator permission is the documented
+  // default admin reference.
+  return hasAdministratorPermission(summary.permissions) ? "GUILD_ADMIN" : "USER";
+}

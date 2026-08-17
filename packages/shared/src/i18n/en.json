@@ -81,7 +81,13 @@
     "auth": {
       "unauthenticated": "You need to sign in to continue.",
       "csrfHeaderMissing": "This request could not be verified. Please reload the page and try again.",
-      "sessionNotFound": "That session no longer exists."
+      "sessionNotFound": "That session no longer exists.",
+      "insufficientPermissions": "You don't have the required permissions for this guild.",
+      "discordReauthRequired": "Your Discord connection needs to be renewed. Please sign in again.",
+      "authorizationChanged": "Your access to this guild has changed."
+    },
+    "guilds": {
+      "notFound": "We couldn't find that guild for your account."
     }
   },
   "a11y": {

@@ -1,3 +1,5 @@
+import { isSyntacticallyValidSnowflake } from "./auth/snowflake.js";
+
 export interface DbConfig {
   host: string;
   port: number;
@@ -32,6 +34,23 @@ export interface DiscordOAuthConfig {
   apiBaseUrl: string;
 }
 
+export interface SuperadminConfig {
+  /**
+   * ADR-008: exactly one, non-delegable Superadmin Discord user ID, sourced
+   * strictly from `PLATFORM_SUPERADMIN_DISCORD_ID` -- never a DB row, never
+   * UI-editable. `loadAppConfig` fails loudly (throws at startup) if this is
+   * absent or not a syntactically valid Discord Snowflake, exactly like
+   * `DISCORD_CLIENT_ID`/the encryption keys below already do for their own
+   * required values -- there is no separate "production-only" code path in
+   * this loader (every real call site is server startup; tests either build
+   * an `AppConfig` object directly or pass an explicit fake `env` object, see
+   * `test/helpers/testAuthConfig.ts`), so this validation is unconditional,
+   * matching ADR-008's "production startup fails loudly" contract via the
+   * only startup path that exists.
+   */
+  discordUserId: string;
+}
+
 export interface SessionConfig {
   cookieName: string;
   /** Pre-auth OAuth transaction cookie name — distinct purpose from the post-auth session cookie (27_SECURITY.md: session fixation prevention). */
@@ -53,6 +72,7 @@ export interface AppConfig {
   sse: SseConfig;
   discord: DiscordOAuthConfig;
   session: SessionConfig;
+  superadmin: SuperadminConfig;
 }
 
 /**
@@ -130,6 +150,32 @@ function requiredKeyBytes(env: EnvSource, name: string, expectedLength: number):
   return buf;
 }
 
+/**
+ * ADR-008: "production startup fails loudly if `PLATFORM_SUPERADMIN_DISCORD_ID`
+ * is unset or not a syntactically valid Discord snowflake." An absent value
+ * fails via the same `required()` path as every other mandatory env var; a
+ * PRESENT-but-malformed value (e.g. "12345", "not-a-snowflake") fails with a
+ * distinct, precise message rather than being silently accepted and only
+ * failing later, confusingly, the first time `isSuperadmin` is called.
+ */
+function requiredSnowflakeEnv(env: EnvSource, name: string): string {
+  // Absent (`undefined`) is a distinct failure from PRESENT-but-empty/
+  // malformed (mirrors `positiveIntEnv`'s own "an explicitly-set empty var
+  // is a present, invalid value, never silently treated as absent" rule) —
+  // an operator who set `PLATFORM_SUPERADMIN_DISCORD_ID=` by mistake gets a
+  // precise "Invalid" error, not a misleading "Missing" one.
+  if (env[name] === undefined) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  const value = env[name];
+  if (!isSyntacticallyValidSnowflake(value)) {
+    throw new Error(
+      `Invalid ${name}: must be a syntactically valid Discord snowflake (15-20 digits), got ${JSON.stringify(value)}.`,
+    );
+  }
+  return value;
+}
+
 export function loadAppConfig(env: EnvSource = process.env): AppConfig {
   return {
     port: Number(env.PORT ?? 8080),
@@ -166,6 +212,13 @@ export function loadAppConfig(env: EnvSource = process.env): AppConfig {
       slidingTtlMs: positiveIntEnv(env, "DASHBOARD_SESSION_SLIDING_TTL_DAYS", 30) * 24 * 60 * 60 * 1000,
       absoluteTtlMs: positiveIntEnv(env, "DASHBOARD_SESSION_ABSOLUTE_TTL_DAYS", 90) * 24 * 60 * 60 * 1000,
       sweepIntervalMs: positiveIntEnv(env, "DASHBOARD_SESSION_SWEEP_INTERVAL_MINUTES", 60) * 60 * 1000,
+    },
+    superadmin: {
+      // ADR-008: never a DB row, never UI-editable -- this is the ONLY place
+      // this value is read from the environment; every Superadmin check
+      // downstream (`auth/superadmin.ts`'s `isSuperadmin`) receives it
+      // already-validated from `config.superadmin.discordUserId`.
+      discordUserId: requiredSnowflakeEnv(env, "PLATFORM_SUPERADMIN_DISCORD_ID"),
     },
   };
 }
