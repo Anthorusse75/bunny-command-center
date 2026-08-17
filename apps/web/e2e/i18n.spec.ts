@@ -16,7 +16,7 @@ const de = CATALOGS.de;
 
 test.describe("language switching", () => {
   test("switches copy, <html lang> and the document title with no reload", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     let navigations = 0;
     page.on("framenavigated", () => {
       navigations += 1;
@@ -32,7 +32,7 @@ test.describe("language switching", () => {
   });
 
   test("persists the language across a real reload", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await page.getByTestId("locale-option-de").click();
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
 
@@ -45,7 +45,7 @@ test.describe("language switching", () => {
     // No stored preference: 19_I18N_FR_EN_DE.md §Language detection says navigator.language decides.
     const context = await browser.newContext({ locale: "de-DE" });
     const page = await context.newPage();
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
     await context.close();
   });
@@ -53,7 +53,7 @@ test.describe("language switching", () => {
   test("falls back to English for an unsupported browser language", async ({ browser }) => {
     const context = await browser.newContext({ locale: "es-ES" });
     const page = await context.newPage();
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await context.close();
   });
@@ -62,13 +62,13 @@ test.describe("language switching", () => {
     const context = await browser.newContext({ locale: "de-DE" });
     const page = await context.newPage();
     await seedPreferences(page, { locale: "fr" });
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await expect(page.locator("html")).toHaveAttribute("lang", "fr");
     await context.close();
   });
 
   test("never leaks a raw {{placeholder}} into the rendered page, in any language", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     for (const locale of LOCALES) {
       await page.getByTestId(`locale-option-${locale}`).click();
       await expect(page.locator("html")).toHaveAttribute("lang", locale);
@@ -83,7 +83,7 @@ test.describe("language switching", () => {
   });
 
   test("formats numbers per locale (the Intl wrapper is really wired)", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     const heroNumber = page.getByTestId("type-hero-number");
 
     await page.getByTestId("locale-option-en").click();
@@ -102,7 +102,7 @@ test.describe("language switching", () => {
 
 test.describe("status badge copy", () => {
   test("renders every tone's label in the active language", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     for (const locale of LOCALES) {
       await page.getByTestId(`locale-option-${locale}`).click();
       await expect(page.locator("html")).toHaveAttribute("lang", locale);

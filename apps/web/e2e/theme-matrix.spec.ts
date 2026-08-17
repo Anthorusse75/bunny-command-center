@@ -43,7 +43,7 @@ test.describe("theme x mode matrix", () => {
             await page.emulateMedia({ colorScheme: "light" });
           }
           await seedPreferences(page, { theme, mode: preference });
-          await page.goto("/");
+          await page.goto("/__showcase__");
           await expect(page.getByTestId("app-shell")).toBeVisible();
 
           const expectedMode = preference === "system" ? osScheme! : preference;
@@ -79,7 +79,7 @@ test.describe("switching at runtime", () => {
   test("changes theme and mode with no navigation and no flash", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "light" });
     await seedPreferences(page, { theme: "fusion", mode: "light" });
-    await page.goto("/");
+    await page.goto("/__showcase__");
 
     let navigations = 0;
     page.on("framenavigated", () => {
@@ -107,7 +107,7 @@ test.describe("switching at runtime", () => {
 
   test("persists both choices across a real reload", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "light" });
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await page.getByTestId("theme-option-premium").click();
     await page.getByTestId("mode-option-dark").click();
     await expect(page.locator("html")).toHaveAttribute(COLOR_SCHEME_ATTRIBUTE, "dark");
@@ -128,7 +128,7 @@ test.describe("SYSTEM mode follows the OS live", () => {
   }) => {
     await page.emulateMedia({ colorScheme: "light" });
     await seedPreferences(page, { theme: "fusion", mode: "system" });
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await expect(page.locator("html")).toHaveAttribute(COLOR_SCHEME_ATTRIBUTE, "light");
 
     // The OS setting changes underneath a running page.
@@ -158,7 +158,7 @@ test.describe("no flash of wrong theme", () => {
     // showing here is exactly what a user sees during the first paint. If the anti-FOUC pair were
     // missing or wired after the module script, this would be white.
     await page.route("**/assets/*.js", (route) => route.abort());
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.goto("/__showcase__", { waitUntil: "domcontentloaded" });
 
     const expected = hexToRgbString(getThemeTokens("heroic", "dark").palette.background.default);
     expect(await readBodyBackground(page)).toBe(expected);
@@ -171,7 +171,7 @@ test.describe("no flash of wrong theme", () => {
   }) => {
     await page.emulateMedia({ colorScheme: "dark" });
     await page.route("**/assets/*.js", (route) => route.abort());
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.goto("/__showcase__", { waitUntil: "domcontentloaded" });
 
     expect(await readBodyBackground(page)).toBe(
       hexToRgbString(getThemeTokens("fusion", "dark").palette.background.default),
