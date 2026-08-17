@@ -37,6 +37,7 @@ export { getAdminOverride, setAdminOverride, type DashboardAdminOverrideRow } fr
 export {
   assertGuildMembership,
   resolveGuildAuthorization,
+  getCallerGuildsForListing,
   createGuildAuthDeps,
   GUILD_TIER_RANK,
   type GuildTier,

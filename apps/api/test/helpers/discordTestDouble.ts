@@ -30,6 +30,9 @@ export interface DiscordGuildFixture {
   id: string;
   owner: boolean;
   permissions: string;
+  /** Step 06 addition — optional, display-only (discordGuildClient.ts's `DiscordGuildSummary.name`/`.icon`). Existing Step 05 fixtures omit these and keep working unchanged. */
+  name?: string;
+  icon?: string | null;
 }
 
 export interface DiscordTestDoubleState {

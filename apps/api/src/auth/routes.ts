@@ -39,6 +39,7 @@ import {
 } from "./sessionRepo.js";
 import { buildRequireAuth, requireCsrfHeader } from "./requireAuth.js";
 import { setSessionCookie, clearSessionCookie } from "./sessionCookie.js";
+import { isSuperadmin } from "./superadmin.js";
 
 const LOGIN_RATE_LIMIT = { max: 10, timeWindow: "15 minutes" };
 
@@ -258,6 +259,21 @@ export function buildAuthRoutes(
     // -----------------------------------------------------------------
     // GET /api/auth/session — authenticated "current user/session" contract
     // Step 05 is designed to consume (never includes any Discord token).
+    //
+    // Step 06 addition: `isSuperadmin` — a single boolean, computed
+    // server-side from the real `PLATFORM_SUPERADMIN_DISCORD_ID` check
+    // (never the raw ID itself, which stays server-only per ADR-008: "never
+    // a DB row, never UI-editable"). The desktop sidebar/mobile "More" sheet
+    // need to know whether to show the Superadmin/Hero Discovery
+    // destinations at all (03_INFORMATION_ARCHITECTURE.md's conditional
+    // items) — this is display-only routing/navigation convenience, NEVER
+    // an authorization source of truth by itself: every actual Superadmin
+    // route/action still independently re-resolves via the real
+    // `requireTier('SUPERADMIN')`/`isSuperadmin()` server-side check on its
+    // own request, exactly like every other tier decision in this codebase
+    // (08_AUTHORIZATION_AND_RBAC.md's trust-boundary rule — the browser
+    // never gets to assert its own tier, it only gets told the SERVER's
+    // already-computed answer for the CURRENT user, same as `user.*` above).
     // -----------------------------------------------------------------
     fastify.get("/api/auth/session", { preHandler: [requireAuth] }, (request) => {
       const user = request.authUser!;
@@ -273,6 +289,7 @@ export function buildAuthRoutes(
             themeMode: user.themeMode,
           },
           sessionId: request.authSessionId,
+          isSuperadmin: isSuperadmin(user.discordUserId, config),
         },
       };
     });

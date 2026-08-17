@@ -1,0 +1,21 @@
+-- Additive column on an existing Dashboard-owned table (ADR-011;
+-- 00_GLOBAL_IMPLEMENTATION_RULES.md #11: "A Dashboard-repo migration never
+-- touches a SHARED table" -- dashboard_users is Dashboard-owned, created by
+-- migration 0002, so this ALTER TABLE ... ADD COLUMN is in-bounds and purely
+-- additive: no DROP/MODIFY/CHANGE COLUMN, enforced by
+-- migrations/additive-audit.ts's static test).
+--
+-- See migration 0006's header comment for the full rationale: this column
+-- is the operator-resolved home for "which guild did the user last upload
+-- to" (09_MULTI_GUILD_MODEL.md's `last_upload_guild_id` concept), moved off
+-- `dashboard_user_guild_preferences` (a per-(user,guild) table) onto
+-- `dashboard_users` (one row per user) because Upload is a GLOBAL route with
+-- no guild-scoped context to hang a per-(user,guild) fact on. Nullable
+-- value-reference to a guild (no FK -- guild existence/membership is
+-- resolved live from Discord, never enforced via a shared-table FK from a
+-- Dashboard-owned table, matching the value-reference-by-ID style already
+-- used elsewhere in this document set, e.g. `hero_discovery_decisions.target_hero_uid`).
+-- VARCHAR, never numeric, same Snowflake-precision rationale as every other
+-- guild_id-shaped column in this ledger.
+ALTER TABLE dashboard_users
+  ADD COLUMN last_upload_guild_id VARCHAR(24) NULL AFTER discord_token_expires_at;

@@ -25,7 +25,7 @@ import { createSession } from "../../src/auth/sessionRepo.js";
 import { hashSessionToken } from "../../src/auth/sessionToken.js";
 import { upsertDashboardUser } from "../../src/auth/userRepo.js";
 import { encryptSecret } from "../../src/auth/tokenCrypto.js";
-import { testSuperadminConfig } from "../helpers/testAuthConfig.js";
+import { testSuperadminConfig, TEST_SUPERADMIN_DISCORD_ID } from "../helpers/testAuthConfig.js";
 
 const ROOT_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -601,6 +601,65 @@ describe("/api/auth/* (real MySQL + local Discord test double)", () => {
     const response = await app.inject({ method: "GET", url: "/api/auth/session" });
     expect(response.statusCode).toBe(401);
     expect(response.json()).toMatchObject({ error_code: "UNAUTHENTICATED" });
+  });
+
+  // -----------------------------------------------------------------------
+  // Step 06 addition: `isSuperadmin` on GET /api/auth/session — a single
+  // server-computed boolean (never the raw PLATFORM_SUPERADMIN_DISCORD_ID
+  // itself), used purely for navigation display (which sidebar/"More"
+  // destinations to show) — see apps/web's navigation for the consumer.
+  // -----------------------------------------------------------------------
+  it("GET /api/auth/session: isSuperadmin is false for an ordinary user, true for the configured Superadmin, and the raw Superadmin ID never appears on the wire", async () => {
+    const app = await buildApp();
+
+    discord.state.identityUserId = "800000000009999999";
+    const ordinaryLogin = await app.inject({ method: "GET", url: "/api/auth/login" });
+    const ordinaryTxn = findCookie(
+      parseSetCookieHeaders(ordinaryLogin.headers["set-cookie"]),
+      "bcc_oauth_txn",
+    )!;
+    const ordinaryState = new URL(ordinaryLogin.headers.location as string).searchParams.get("state")!;
+    const ordinaryCallback = await app.inject({
+      method: "GET",
+      url: `/api/auth/callback?code=ordinary-code&state=${ordinaryState}`,
+      cookies: { bcc_oauth_txn: ordinaryTxn.value },
+    });
+    const ordinarySession = findCookie(
+      parseSetCookieHeaders(ordinaryCallback.headers["set-cookie"]),
+      "bcc_session",
+    )!;
+    const ordinaryResponse = await app.inject({
+      method: "GET",
+      url: "/api/auth/session",
+      cookies: { bcc_session: ordinarySession.value },
+    });
+    expect(ordinaryResponse.json<{ data: { isSuperadmin: boolean } }>().data.isSuperadmin).toBe(false);
+
+    discord.state.identityUserId = TEST_SUPERADMIN_DISCORD_ID;
+    const adminLogin = await app.inject({ method: "GET", url: "/api/auth/login" });
+    const adminTxn = findCookie(parseSetCookieHeaders(adminLogin.headers["set-cookie"]), "bcc_oauth_txn")!;
+    const adminState = new URL(adminLogin.headers.location as string).searchParams.get("state")!;
+    const adminCallback = await app.inject({
+      method: "GET",
+      url: `/api/auth/callback?code=admin-code&state=${adminState}`,
+      cookies: { bcc_oauth_txn: adminTxn.value },
+    });
+    const adminSession = findCookie(
+      parseSetCookieHeaders(adminCallback.headers["set-cookie"]),
+      "bcc_session",
+    )!;
+    const adminResponse = await app.inject({
+      method: "GET",
+      url: "/api/auth/session",
+      cookies: { bcc_session: adminSession.value },
+    });
+    expect(adminResponse.json<{ data: { isSuperadmin: boolean } }>().data.isSuperadmin).toBe(true);
+    // The raw Superadmin ID is inevitably present in this test's OWN
+    // response (it's genuinely this user's discordUserId) — what must NEVER
+    // appear is any distinct env-var-shaped secret; this repo has no such
+    // secret for this value by design (ADR-008: the ID itself is not a
+    // secret, it's a fixed, publicly-known-to-that-user identity), so there
+    // is nothing further to assert here beyond the boolean itself.
   });
 
   it("GET /api/auth/session with a garbage/forged session cookie -> 401, fails closed", async () => {

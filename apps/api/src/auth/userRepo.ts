@@ -29,6 +29,15 @@ export interface DashboardUserRow {
   discord_access_token_enc: Buffer | null;
   discord_refresh_token_enc: Buffer | null;
   discord_token_expires_at: Date | null;
+  /**
+   * Step 06 addition (migration 0007) — see that migration's header comment
+   * and this step's HANDOVER for the documented deviation from
+   * 25_DATA_MODEL.md's literal column placement (moved here, off
+   * `dashboard_user_guild_preferences`, since Upload is a GLOBAL route with
+   * no per-guild context to hang a per-(user,guild) fact on). Same
+   * VARCHAR/never-numeric rationale as `discord_user_id`.
+   */
+  last_upload_guild_id: string | null;
 }
 
 export interface UpsertUserParams {
@@ -86,6 +95,26 @@ export async function findDashboardUserById(
   id: number,
 ): Promise<DashboardUserRow | undefined> {
   return db.selectFrom("dashboard_users").selectAll().where("id", "=", id).executeTakeFirst();
+}
+
+/**
+ * Step 06 addition — records "which guild did this user last upload to"
+ * (09_MULTI_GUILD_MODEL.md §Last-used guild), on `dashboard_users` per this
+ * step's documented deviation (migration 0007). **Honest wiring status
+ * (this step's HANDOVER)**: this function is IMPLEMENTED and unit-tested,
+ * but has NO real call site yet — Upload itself (the only real action that
+ * would ever call this) is Step 15's scope; this step only builds the
+ * placeholder `/upload` route. Provided now so Step 15 does not need its
+ * own migration to add this column, matching this step's documented
+ * "routes and their auth guards exist now; full feature content arrives
+ * per-domain in later steps" pattern applied to the DATA layer too.
+ */
+export async function setLastUploadGuild(db: Kysely<DB>, userId: number, guildId: string): Promise<void> {
+  await db
+    .updateTable("dashboard_users")
+    .set({ last_upload_guild_id: guildId })
+    .where("id", "=", userId)
+    .execute();
 }
 
 export interface UpdateUserTokensParams {
