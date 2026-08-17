@@ -25,6 +25,7 @@ import { createSession } from "../../src/auth/sessionRepo.js";
 import { hashSessionToken } from "../../src/auth/sessionToken.js";
 import { upsertDashboardUser } from "../../src/auth/userRepo.js";
 import { encryptSecret } from "../../src/auth/tokenCrypto.js";
+import { testSuperadminConfig } from "../helpers/testAuthConfig.js";
 
 const ROOT_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -125,6 +126,7 @@ function buildTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       absoluteTtlMs: 90 * 24 * 60 * 60 * 1000,
       sweepIntervalMs: 60 * 60 * 1000,
     },
+    superadmin: testSuperadminConfig(),
     ...overrides,
   };
 }

@@ -81,7 +81,13 @@
     "auth": {
       "unauthenticated": "Du musst dich anmelden, um fortzufahren.",
       "csrfHeaderMissing": "Diese Anfrage konnte nicht überprüft werden. Bitte lade die Seite neu und versuche es erneut.",
-      "sessionNotFound": "Diese Sitzung existiert nicht mehr."
+      "sessionNotFound": "Diese Sitzung existiert nicht mehr.",
+      "insufficientPermissions": "Du hast nicht die erforderlichen Berechtigungen für diesen Server.",
+      "discordReauthRequired": "Deine Discord-Verbindung muss erneuert werden. Bitte melde dich erneut an.",
+      "authorizationChanged": "Dein Zugriff auf diesen Server hat sich geändert."
+    },
+    "guilds": {
+      "notFound": "Wir konnten diesen Server für dein Konto nicht finden."
     }
   },
   "a11y": {

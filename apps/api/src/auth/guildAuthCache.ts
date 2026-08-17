@@ -1,0 +1,123 @@
+/**
+ * The 60-second permission-freshness micro-cache (08_AUTHORIZATION_AND_RBAC.md
+ * §Permission freshness / D-070, ADR-007's "short-TTL (60s) cache per (user,
+ * guild) pair, matching the pattern already used successfully in the Self-bot
+ * dashboard's `has_guild_admin_access()`"). This is deliberately NOT a
+ * long-lived authorization snapshot: every entry has an explicit expiry, is
+ * keyed so it can never be shared across users or guilds, and can be
+ * explicitly invalidated (e.g. by a future Step-12 admin-policy write) before
+ * its TTL naturally elapses.
+ *
+ * Read vs. sensitive-mutation freshness (D-070) is NOT this class's own
+ * concern -- `GuildAuthCache` is a plain, opinion-free TTL key/value store.
+ * The decision to skip reading it entirely for a sensitive mutation lives
+ * one layer up, in `guildAuthorization.ts`'s `AuthorizationFreshness`
+ * parameter (`assertGuildMembership`/`resolveGuildAuthorization`) and
+ * `tier.ts`'s `requireTier(..., { freshness: "SENSITIVE_MUTATION" })` -- see
+ * those modules for the actual bypass contract.
+ *
+ * Two independent Discord data SOURCES are cached, each under its own key
+ * shape, so invalidating/expiring one never silently invalidates the other:
+ *   - the caller's own guild LIST (`GET /users/@me/guilds`) - one Discord
+ *     call covers every guild the caller belongs to, so this is cached
+ *     per-USER only (guild-independent by nature: the exact same fetch
+ *     answers "am I in guild A" and "am I in guild B").
+ *   - the caller's own MEMBER info in one specific guild
+ *     (`GET /users/@me/guilds/{guild_id}/member`) - genuinely per-(user,
+ *     guild), only ever fetched when that guild has a configured admin role.
+ *
+ * Both key shapes still satisfy the mandatory keying rule (discord user
+ * identity + guild ID + source) - the guild-list key's "guild ID" component
+ * is the literal token `*` precisely BECAUSE that source answers the
+ * question for every guild at once; this is a deliberate, documented
+ * choice, not an omission (see this step's HANDOVER for the point-by-point
+ * justification). Neither key shape can ever collide across two different
+ * discordUserId values or two different sources.
+ */
+
+export type GuildAuthCacheSource = "guilds-list" | "guild-member";
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAtMs: number;
+}
+
+export interface GuildAuthCacheKey {
+  discordUserId: string;
+  /** `"*"` for the guild-independent `guilds-list` source - see module doc comment. */
+  guildId: string;
+  source: GuildAuthCacheSource;
+}
+
+/**
+ * `\0` (U+0000) as the component separator, written here as a TEXTUAL
+ * escape sequence, never a literal embedded byte in this source file -- an
+ * embedded raw NUL byte makes Git classify the whole file as binary (no
+ * readable `git diff`, no line-based history), which is purely a
+ * source-representation defect, not a runtime one; `"\0"` produces the
+ * exact same single-character runtime string either way.
+ *
+ * Discord Snowflakes are digit-only and `GuildAuthCacheSource` is a fixed,
+ * non-Snowflake-shaped string-literal union, so a plain `:`/space join
+ * could never actually collide across the real value space today -- U+0000
+ * is used anyway specifically to make that invariant irrelevant rather than
+ * load-bearing: it cannot appear in ANY of the three components (a Discord
+ * Snowflake, the literal `"*"`, or a `GuildAuthCacheSource` literal), so no
+ * combination of real inputs can ever produce two different logical keys
+ * that serialize to the same string.
+ */
+const KEY_SEPARATOR = "\0";
+
+function serializeKey(key: GuildAuthCacheKey): string {
+  return [key.discordUserId, key.guildId, key.source].join(KEY_SEPARATOR);
+}
+
+export function guildsListCacheKey(discordUserId: string): GuildAuthCacheKey {
+  return { discordUserId, guildId: "*", source: "guilds-list" };
+}
+
+export function guildMemberCacheKey(discordUserId: string, guildId: string): GuildAuthCacheKey {
+  return { discordUserId, guildId, source: "guild-member" };
+}
+
+export class GuildAuthCache {
+  private readonly store = new Map<string, CacheEntry<unknown>>();
+
+  constructor(
+    private readonly ttlMs = 60_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  get<T>(key: GuildAuthCacheKey): T | undefined {
+    const raw = serializeKey(key);
+    const entry = this.store.get(raw);
+    if (!entry) {
+      return undefined;
+    }
+    if (entry.expiresAtMs <= this.now()) {
+      this.store.delete(raw);
+      return undefined;
+    }
+    return entry.value as T;
+  }
+
+  set<T>(key: GuildAuthCacheKey, value: T): void {
+    this.store.set(serializeKey(key), { value, expiresAtMs: this.now() + this.ttlMs });
+  }
+
+  /** Explicit invalidation of exactly one entry - never a blanket clear, so invalidating one user/guild/source never affects any other cached decision. */
+  invalidate(key: GuildAuthCacheKey): void {
+    this.store.delete(serializeKey(key));
+  }
+
+  /** Invalidates BOTH sources for a single (user, guild) pair - the shape a future Step-12 admin-policy write or override toggle needs (a policy change for guild G must not still be served from a stale cached decision for that guild). */
+  invalidateUserGuild(discordUserId: string, guildId: string): void {
+    this.invalidate(guildsListCacheKey(discordUserId));
+    this.invalidate(guildMemberCacheKey(discordUserId, guildId));
+  }
+
+  /** Test/diagnostic only - never called from a real request path. */
+  get size(): number {
+    return this.store.size;
+  }
+}

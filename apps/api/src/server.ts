@@ -17,13 +17,18 @@ import {
 } from "./sse/index.js";
 import {
   buildAuthRoutes,
+  buildRequireAuth,
   createSessionCookieRenewalHook,
+  createGuildAuthDeps,
   OAuthTransactionRegistry,
   startOAuthTransactionSweep,
   startSessionSweep,
+  type GuildAuthDeps,
   type OAuthTransactionSweepHandle,
   type SessionSweepHandle,
 } from "./auth/index.js";
+import type { Kysely } from "kysely";
+import type { DB } from "./db/codegen-types.js";
 
 /**
  * In-process-only test seam (never an HTTP-reachable route - mission §35:
@@ -38,11 +43,25 @@ export interface SseTestHooks {
   poller: SsePollerHandle;
 }
 
-/** Same in-process-only test seam convention as SseTestHooks above, for Step 04's session-sweep timer and OAuth transaction registry sweep. */
+/**
+ * Same in-process-only test seam convention as SseTestHooks above, for Step
+ * 04's session-sweep timer/OAuth transaction registry sweep, and (Step 05)
+ * the RBAC dependency bundle + `requireAuth` factory + the app's own live DB
+ * pool -- letting an integration test register a SAMPLE guild-scoped route
+ * on THIS SAME real server instance (real requireAuth, real requireTier,
+ * real db pool, real config) to prove `requireTier`'s full IDOR-middleware
+ * chain end to end, without ever exposing a production-reachable probe
+ * endpoint (mission §35: "not a publicly shippable debug API" -- this is
+ * decorated on the Fastify instance, never routed, and the test itself is
+ * the only thing that ever calls `fastify.get(...)` with it).
+ */
 export interface AuthTestHooks {
   sessionSweep: SessionSweepHandle;
   oauthTransactionRegistry: OAuthTransactionRegistry;
   oauthTransactionSweep: OAuthTransactionSweepHandle;
+  db: Kysely<DB>;
+  guildAuthDeps: GuildAuthDeps;
+  requireAuth: ReturnType<typeof buildRequireAuth>;
 }
 
 declare module "fastify" {
@@ -122,7 +141,14 @@ export async function buildServer(config = loadAppConfig()) {
   const oauthTransactionSweep = startOAuthTransactionSweep({ registry: oauthTransactionRegistry, logger });
   await fastify.register(buildAuthRoutes(db, config, oauthTransactionRegistry));
   const sessionSweep = startSessionSweep({ db, logger, intervalMs: config.session.sweepIntervalMs });
-  fastify.decorate("authTestHooks", { sessionSweep, oauthTransactionRegistry, oauthTransactionSweep });
+  fastify.decorate("authTestHooks", {
+    sessionSweep,
+    oauthTransactionRegistry,
+    oauthTransactionSweep,
+    db,
+    guildAuthDeps: createGuildAuthDeps(db, config),
+    requireAuth: buildRequireAuth(db, config),
+  });
 
   await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db }));
   fastify.decorate("sseTestHooks", { hub, cursorRepo, poller });

@@ -36,3 +36,18 @@ export function testSessionConfig(): AppConfig["session"] {
     sweepIntervalMs: 60 * 60 * 1000,
   };
 }
+
+/**
+ * A fixed, publicly-committed, test-only Discord Snowflake -- deliberately
+ * NOT the real production Superadmin ID (ADR-008's value lives only in a
+ * real deployment's env, never in this repo). 18 digits, syntactically a
+ * valid Snowflake (`auth/snowflake.ts`'s `isSyntacticallyValidSnowflake`),
+ * distinct from every other fake ID used elsewhere in this test suite
+ * (`discordTestDouble.ts`'s default `identityUserId`, etc.) so a test can
+ * never accidentally pass by coincidental ID reuse.
+ */
+export const TEST_SUPERADMIN_DISCORD_ID = "900000000000000001";
+
+export function testSuperadminConfig(): AppConfig["superadmin"] {
+  return { discordUserId: TEST_SUPERADMIN_DISCORD_ID };
+}

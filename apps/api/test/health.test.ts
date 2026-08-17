@@ -11,7 +11,7 @@ import { buildServer } from "../src/server.js";
 import type { AppConfig } from "../src/config.js";
 import { runUp } from "../migrations/runner.js";
 import type { MigratorDbConfig } from "../migrations/config.js";
-import { testDiscordConfig, testSessionConfig } from "./helpers/testAuthConfig.js";
+import { testDiscordConfig, testSessionConfig, testSuperadminConfig } from "./helpers/testAuthConfig.js";
 
 const REACHABLE_DB_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -34,6 +34,7 @@ const BASE_CONFIG: AppConfig = {
   },
   discord: testDiscordConfig(),
   session: testSessionConfig(),
+  superadmin: testSuperadminConfig(),
 };
 
 async function freshDatabase(): Promise<void> {

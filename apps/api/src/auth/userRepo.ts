@@ -87,3 +87,37 @@ export async function findDashboardUserById(
 ): Promise<DashboardUserRow | undefined> {
   return db.selectFrom("dashboard_users").selectAll().where("id", "=", id).executeTakeFirst();
 }
+
+export interface UpdateUserTokensParams {
+  encryptedAccessToken: Buffer;
+  encryptedRefreshToken: Buffer;
+  tokenExpiresAt: Date;
+}
+
+/**
+ * Step 05's Discord-token-refresh lifecycle (`discordTokenService.ts`,
+ * 07_DISCORD_OAUTH.md §Discord token refresh, carry-forward #2 from Step 04):
+ * persists a REFRESHED access/refresh token pair (Discord may or may not
+ * rotate the refresh token itself — this always writes whatever the refresh
+ * response actually returned, rotated or not, never assumes one or the
+ * other) without touching `username`/`avatar_hash`/`locale`/theme
+ * preferences, unlike `upsertDashboardUser` (which is the LOGIN path and
+ * always has fresh identity data to write alongside the tokens). Scoped by
+ * internal `id`, never `discord_user_id` re-derived from anywhere
+ * client-influenced.
+ */
+export async function updateDashboardUserTokens(
+  db: Kysely<DB>,
+  id: number,
+  params: UpdateUserTokensParams,
+): Promise<void> {
+  await db
+    .updateTable("dashboard_users")
+    .set({
+      discord_access_token_enc: params.encryptedAccessToken,
+      discord_refresh_token_enc: params.encryptedRefreshToken,
+      discord_token_expires_at: params.tokenExpiresAt,
+    })
+    .where("id", "=", id)
+    .execute();
+}
