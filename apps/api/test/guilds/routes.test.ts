@@ -411,6 +411,29 @@ describe("Multi-guild model: GET /api/users/me/guilds, favorite/home-visibility,
     expect(rows[0][0]!.last_used_at).not.toBeNull();
   });
 
+  it("EXTERNAL REVIEW RESIDUAL 1 (second correction pass): the ACTUAL fresh-schema column default for home_visible is 0, not merely the application's behavior — inspects information_schema directly, so a future schema change that silently reintroduces the old DEFAULT 1 fails this test even if ensureRow()'s own explicit column list papered over it", async () => {
+    const rows = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT COLUMN_DEFAULT, IS_NULLABLE FROM information_schema.COLUMNS " +
+        "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'dashboard_user_guild_preferences' AND COLUMN_NAME = 'home_visible'",
+      [TEST_DB_NAME],
+    );
+    expect(rows[0]).toHaveLength(1);
+    // MySQL's information_schema reports column defaults as strings.
+    expect(rows[0][0]!.COLUMN_DEFAULT).toBe("0");
+    expect(rows[0][0]!.IS_NULLABLE).toBe("NO");
+
+    // Same check for is_favorite, which was already correct — proves this
+    // test's own query mechanism is sound (a real, both-columns-checked
+    // proof, not a test that only happens to pass for the one column that
+    // needed fixing).
+    const favRows = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT COLUMN_DEFAULT FROM information_schema.COLUMNS " +
+        "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'dashboard_user_guild_preferences' AND COLUMN_NAME = 'is_favorite'",
+      [TEST_DB_NAME],
+    );
+    expect(favRows[0][0]!.COLUMN_DEFAULT).toBe("0");
+  });
+
   it("unauthorized preference mutation is rejected: missing CSRF header -> 403, never reaches the DB write", async () => {
     const { cookie } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
     const response = await fastify.inject({
@@ -655,6 +678,59 @@ describe("Multi-guild model: GET /api/users/me/guilds, favorite/home-visibility,
     });
     expect(response.statusCode).toBe(200);
     expect(overviewBody(response).data).toMatchObject({ guildId: GUILD_A, tier: "SUPERADMIN" });
+  });
+
+  it("EXTERNAL REVIEW RESIDUAL 2 (second correction pass): a Superadmin with ZERO real Discord guild memberships still gets the real GET /api/guilds/:guildId platform bypass, but CANNOT mutate a personal preference for a guild it doesn't actually belong to — proves the fix didn't regress the real Superadmin product authorization while closing the personal-preference IDOR", async () => {
+    const superadminId = testSuperadminConfig().discordUserId;
+    const { cookie } = await makeSession([], superadminId);
+
+    // The real platform-scoped product route: requireTier's Superadmin
+    // bypass is CORRECT here and must keep working exactly as before.
+    const overview = await fastify.inject({
+      method: "GET",
+      url: `/api/guilds/${GUILD_A}`,
+      headers: { cookie },
+    });
+    expect(overview.statusCode).toBe(200);
+    expect(overviewBody(overview).data).toMatchObject({ guildId: GUILD_A, tier: "SUPERADMIN" });
+
+    // The personal-preference routes: NO Superadmin bypass. This same
+    // caller, same guild, same session — genuinely not a Discord member of
+    // GUILD_A — must be rejected exactly like an ordinary non-member.
+    const fav = await fastify.inject({
+      method: "POST",
+      url: `/api/users/me/guilds/${GUILD_A}/favorite`,
+      headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
+      payload: { isFavorite: true },
+    });
+    expect(fav.statusCode).toBe(404);
+    expect(fav.json()).toMatchObject({ error_code: "GUILD_NOT_FOUND" });
+
+    const homeVis = await fastify.inject({
+      method: "PATCH",
+      url: `/api/users/me/guilds/${GUILD_A}/home-visibility`,
+      headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
+      payload: { homeVisible: true },
+    });
+    expect(homeVis.statusCode).toBe(404);
+    expect(homeVis.json()).toMatchObject({ error_code: "GUILD_NOT_FOUND" });
+
+    // The overview GET above legitimately DOES create a preference row for
+    // this Superadmin (touchLastUsed — "viewing" is a real, intentionally
+    // ungated trigger per the FINDING 3 fix), so a row existing is not
+    // itself the proof — its is_favorite/home_visible values are. Both
+    // rejected mutations above must never have touched them: they must
+    // still read as the untouched-row defaults (0/0), not the `true`
+    // values either 404'd request attempted to write.
+    const rows = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT pref.is_favorite, pref.home_visible FROM dashboard_user_guild_preferences pref " +
+        "JOIN dashboard_users u ON u.id = pref.user_id " +
+        "WHERE u.discord_user_id = ? AND pref.guild_id = ?",
+      [superadminId, GUILD_A],
+    );
+    expect(rows[0]).toHaveLength(1);
+    expect(rows[0][0]!.is_favorite).toBe(0);
+    expect(rows[0][0]!.home_visible).toBe(0);
   });
 
   it("last_used_at is updated on a real guild-overview view (readback via the DB directly)", async () => {

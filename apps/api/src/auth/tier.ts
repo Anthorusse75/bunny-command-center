@@ -80,7 +80,16 @@ type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void
  * the browser cookie, and returns the documented re-login response -- never
  * a raw 401 with no explanation, never a half-authenticated browser state.
  */
-async function respondReauthRequired(
+/**
+ * Exported (Step 06 second external-review correction pass, Residual 2):
+ * `guilds/requireCallerGuildMembership.ts` reuses this EXACT re-login
+ * response rather than duplicating it -- the personal-guild-membership gate
+ * for favorite/home-visibility mutations goes through
+ * `DiscordTokenService.withFreshAccessToken` too (via
+ * `getCallerGuildsForListing`) and must fail the same documented way on a
+ * revoked/expired Discord grant.
+ */
+export async function respondReauthRequired(
   deps: GuildAuthDeps,
   request: FastifyRequest,
   reply: FastifyReply,

@@ -49,12 +49,47 @@
 -- `dashboard_users` (one row per user, nullable value-reference to a guild --
 -- migration 0007), NOT here. This table therefore has NO `last_upload_guild_id`
 -- column, despite the literal doc text.
+--
+-- === home_visible DEFAULT, corrected in Step 06's second external-review
+-- correction pass (this branch, unmerged) ===
+-- This column's DEFAULT was originally `1`, matching an earlier
+-- (incorrect) reading of 09_MULTI_GUILD_MODEL.md's "Both default to on"
+-- rule as "on for any row this table ever gets, including one created by
+-- mere navigation." The application-layer correction (see
+-- apps/api/src/guilds/guildPreferencesRepo.ts's `ensureRow` and
+-- guildsService.ts's `buildGuildList`) established the CORRECT reading:
+-- that rule's actual trigger is a genuine first meaningful action (first
+-- upload, first admin action, or explicit onboarding completion -- none of
+-- which are Step 06's scope; the real callers are Steps 15/12/10), never
+-- mere technical membership or mere viewing/navigation. Both application
+-- functions were fixed to default `home_visible` to `false`/`0` --  but
+-- this column's own DEFAULT clause, below, still said `1`, a genuine
+-- schema/application contradiction if this table were ever created by any
+-- path other than `ensureRow` (there currently is none, but a schema
+-- default should never silently disagree with its own application layer).
+-- Corrected in place, not via a new migration: this migration
+-- (`0006_create_dashboard_user_guild_preferences`) has never been applied
+-- to any real, persistent environment -- `main` does not have Step 06 at
+-- all yet, and this feature branch is unmerged. Every environment that has
+-- ever run it (CI, local disposable test databases) tears the schema down
+-- and rebuilds it from scratch on every single run, so no real migration
+-- ledger anywhere has ever recorded this file's checksum against a
+-- persistent target. The runner's checksum-mismatch protection
+-- (`apps/api/migrations/runner.ts`'s own header comment) exists
+-- specifically to catch an ALREADY-APPLIED migration's on-disk content
+-- silently drifting out from under a real, persisted ledger -- a
+-- protection this edit cannot violate, because no such ledger exists for
+-- this migration anywhere. The additive-only audit
+-- (`apps/api/migrations/additive-audit.ts`) is also unaffected: this edits
+-- a `DEFAULT` clause inside the original, not-yet-deployed `CREATE TABLE`
+-- statement itself, not a `DROP`/`MODIFY`/`ALTER ... DROP` against an
+-- existing deployed table.
 CREATE TABLE dashboard_user_guild_preferences (
   user_id BIGINT UNSIGNED NOT NULL,
   guild_id VARCHAR(24) NOT NULL,
   is_favorite TINYINT(1) NOT NULL DEFAULT 0,
   favorited_at DATETIME(6) NULL,
-  home_visible TINYINT(1) NOT NULL DEFAULT 1,
+  home_visible TINYINT(1) NOT NULL DEFAULT 0,
   last_used_at DATETIME(6) NULL,
   created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),

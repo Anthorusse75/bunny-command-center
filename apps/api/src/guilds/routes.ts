@@ -27,6 +27,7 @@ import {
   setHomeVisibility,
 } from "./guildsService.js";
 import { touchLastUsed } from "./guildPreferencesRepo.js";
+import { buildRequireCallerGuildMembership } from "./requireCallerGuildMembership.js";
 
 /**
  * `:guildId` route-param shape check (external review correction —
@@ -58,6 +59,7 @@ export function buildGuildRoutes(
 ): FastifyPluginAsync {
   const guildAuthDeps = guildAuthDepsOverride ?? createGuildAuthDeps(db, config);
   const requireTier = buildRequireTier(guildAuthDeps);
+  const requireCallerGuildMembership = buildRequireCallerGuildMembership(guildAuthDeps);
   const requireAuth = buildRequireAuth(db, config);
 
   // eslint-disable-next-line @typescript-eslint/require-await -- FastifyPluginAsync's contract
@@ -99,11 +101,18 @@ export function buildGuildRoutes(
     // things: "the caller WAS a member and later left" (genuinely harmless,
     // matches the reasoning) vs "the caller was NEVER a member of this
     // guildId at all" (an arbitrary-guild IDOR write, not harmless — an
-    // unbounded write surface with no relationship check). Fixed by adding
-    // the SAME `requireTier(guildIdParam, "USER")` used by
-    // `GET /api/guilds/:guildId` below — reusing Step 05's real
-    // `assertGuildMembership` chain rather than a second implementation.
-    // `"READ"` freshness (the default) is correct here, not
+    // unbounded write surface with no relationship check).
+    //
+    // SECOND CORRECTION PASS (Residual 2): the first fix used
+    // `requireTier(guildIdParam, "USER")` — but that reuses
+    // `assertGuildMembership`, whose Superadmin bypass is correct for
+    // PRODUCT guild routes (`GET /api/guilds/:guildId`) and WRONG here: a
+    // Superadmin's platform privilege must never fabricate a personal
+    // Discord membership for a guild they don't actually belong to. Fixed
+    // by using `requireCallerGuildMembership` instead
+    // (`requireCallerGuildMembership.ts` — same cached OAuth guild-list
+    // fetch, no Superadmin short-circuit, see that file's header comment).
+    // `"READ"` freshness (the default that gate uses) is correct here, not
     // `"SENSITIVE_MUTATION"`: this mutates a Dashboard-owned preference row,
     // never a guild's real configuration/bot behavior (D-070's freshness
     // bypass is reserved for sensitive guild-config/admin-policy/bot
@@ -115,11 +124,11 @@ export function buildGuildRoutes(
     fastify.post(
       "/api/users/me/guilds/:guildId/favorite",
       {
-        preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireTier("guildId", "USER")],
+        preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireCallerGuildMembership],
       },
       async (request, reply) => {
         if (reply.sent) return;
-        const { guildId } = request.guildAuthorization!;
+        const { guildId } = request.params as { guildId: string };
         const parsedBody = favoriteRequestSchema.safeParse(request.body);
         if (!parsedBody.success) {
           await reply.code(400).send({
@@ -137,17 +146,18 @@ export function buildGuildRoutes(
     // -------------------------------------------------------------------
     // PATCH /api/users/me/guilds/:guildId/home-visibility — toggle Home
     // widget visibility for this guild. Body: { homeVisible: boolean }.
-    // Same authorization shape as the favorite route above (external review
-    // correction: same missing-membership-check defect, same fix).
+    // Same authorization shape as the favorite route above (both correction
+    // passes: same missing-membership-check defect, then the same
+    // Superadmin-bypass-is-wrong-here defect, same fixes).
     // -------------------------------------------------------------------
     fastify.patch(
       "/api/users/me/guilds/:guildId/home-visibility",
       {
-        preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireTier("guildId", "USER")],
+        preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireCallerGuildMembership],
       },
       async (request, reply) => {
         if (reply.sent) return;
-        const { guildId } = request.guildAuthorization!;
+        const { guildId } = request.params as { guildId: string };
         const parsedBody = homeVisibilityRequestSchema.safeParse(request.body);
         if (!parsedBody.success) {
           await reply.code(400).send({
