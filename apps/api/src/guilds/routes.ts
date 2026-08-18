@@ -8,10 +8,15 @@
  * product route guarded by the shared `requireTier(guildIdParam, 'USER')`,
  * not a test-only sample route.
  */
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { Kysely } from "kysely";
 import type { DB } from "../db/codegen-types.js";
 import type { AppConfig } from "../config.js";
+import {
+  guildIdParamSchema,
+  favoriteRequestSchema,
+  homeVisibilityRequestSchema,
+} from "@bunny-command-center/shared";
 import { buildRequireTier, createGuildAuthDeps, type GuildAuthDeps } from "../auth/index.js";
 import { buildRequireAuth, requireCsrfHeader } from "../auth/requireAuth.js";
 import {
@@ -22,6 +27,29 @@ import {
   setHomeVisibility,
 } from "./guildsService.js";
 import { touchLastUsed } from "./guildPreferencesRepo.js";
+
+/**
+ * `:guildId` route-param shape check (external review correction —
+ * `guildIdParamSchema`, `packages/shared/src/types/guilds.ts`), run BEFORE
+ * `requireTier` on every guild-scoped route below. Must run before, not
+ * after: `requireTier`/`assertGuildMembership` already fail closed to 404 on
+ * a syntactically-invalid guildId (it simply won't match anything in the
+ * caller's live membership list), which would make a validation-specific
+ * 400 unreachable if this ran afterward — the two failure modes ("this
+ * doesn't even look like a Discord ID" vs "you don't have access to this
+ * real guild") stay distinct on purpose, matching this codebase's existing
+ * 403-vs-404 authorization-code discipline.
+ */
+async function validateGuildIdParam(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const result = guildIdParamSchema.safeParse(request.params);
+  if (!result.success) {
+    await reply.code(400).send({
+      error_code: "VALIDATION_ERROR",
+      message_key: "errors.validation",
+      parameters: {},
+    });
+  }
+}
 
 export function buildGuildRoutes(
   db: Kysely<DB>,
@@ -55,26 +83,45 @@ export function buildGuildRoutes(
     // -------------------------------------------------------------------
     // POST /api/users/me/guilds/:guildId/favorite — toggle favorite.
     // Body: { isFavorite: boolean }. This is a preference about the
-    // CALLER'S OWN relationship to a guild, not a guild-admin action, so it
-    // is guarded by `requireAuth` (any authenticated user) rather than
-    // `requireTier` — Kysely's PK upsert (guildPreferencesRepo.ts) is the
-    // only thing scoping it, always to `request.authUser.id`, never a
-    // client-supplied user id (IDOR discipline, 27_SECURITY.md). No
-    // membership check against the guild is required either: favoriting a
-    // guild the caller no longer belongs to is harmless (it simply won't
-    // appear in a future `GET .../guilds` response's `usable` list once
-    // membership truth — re-fetched live, never cached — no longer includes
-    // it) and rejecting it would require an extra live Discord round trip
-    // this mutation has no real need for.
+    // CALLER'S OWN relationship to a guild — Kysely's PK upsert
+    // (guildPreferencesRepo.ts) always scopes the WRITE to
+    // `request.authUser.id`, never a client-supplied user id (IDOR
+    // discipline, 27_SECURITY.md).
+    //
+    // EXTERNAL REVIEW CORRECTION (Step 06 correction pass): this route
+    // previously used ONLY `requireAuth` + `requireCsrfHeader`, with NO
+    // guild-membership check at all before persisting a preference row —
+    // an authenticated caller with a valid CSRF header could write a
+    // durable row for ANY guildId string, including one they have no
+    // Discord relationship to whatsoever. The original comment's "no
+    // membership check is required, favoriting a guild the caller no
+    // longer belongs to is harmless" reasoning conflated two different
+    // things: "the caller WAS a member and later left" (genuinely harmless,
+    // matches the reasoning) vs "the caller was NEVER a member of this
+    // guildId at all" (an arbitrary-guild IDOR write, not harmless — an
+    // unbounded write surface with no relationship check). Fixed by adding
+    // the SAME `requireTier(guildIdParam, "USER")` used by
+    // `GET /api/guilds/:guildId` below — reusing Step 05's real
+    // `assertGuildMembership` chain rather than a second implementation.
+    // `"READ"` freshness (the default) is correct here, not
+    // `"SENSITIVE_MUTATION"`: this mutates a Dashboard-owned preference row,
+    // never a guild's real configuration/bot behavior (D-070's freshness
+    // bypass is reserved for sensitive guild-config/admin-policy/bot
+    // mutations, 00_GLOBAL_IMPLEMENTATION_RULES.md-adjacent — this is
+    // exactly the "simple idempotent upsert" case
+    // IMPLEMENTATION/06_multi_guild_navigation.md's own Concurrency section
+    // already calls out).
     // -------------------------------------------------------------------
     fastify.post(
       "/api/users/me/guilds/:guildId/favorite",
-      { preHandler: [requireAuth, requireCsrfHeader] },
+      {
+        preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireTier("guildId", "USER")],
+      },
       async (request, reply) => {
         if (reply.sent) return;
-        const { guildId } = request.params as { guildId: string };
-        const body = request.body as { isFavorite?: unknown } | undefined;
-        if (typeof body?.isFavorite !== "boolean") {
+        const { guildId } = request.guildAuthorization!;
+        const parsedBody = favoriteRequestSchema.safeParse(request.body);
+        if (!parsedBody.success) {
           await reply.code(400).send({
             error_code: "VALIDATION_ERROR",
             message_key: "errors.validation",
@@ -82,7 +129,7 @@ export function buildGuildRoutes(
           });
           return;
         }
-        const row = await setFavorite(db, request.authUser!.id, guildId, body.isFavorite);
+        const row = await setFavorite(db, request.authUser!.id, guildId, parsedBody.data.isFavorite);
         return { data: row };
       },
     );
@@ -90,16 +137,19 @@ export function buildGuildRoutes(
     // -------------------------------------------------------------------
     // PATCH /api/users/me/guilds/:guildId/home-visibility — toggle Home
     // widget visibility for this guild. Body: { homeVisible: boolean }.
-    // Same authorization shape as the favorite route above.
+    // Same authorization shape as the favorite route above (external review
+    // correction: same missing-membership-check defect, same fix).
     // -------------------------------------------------------------------
     fastify.patch(
       "/api/users/me/guilds/:guildId/home-visibility",
-      { preHandler: [requireAuth, requireCsrfHeader] },
+      {
+        preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireTier("guildId", "USER")],
+      },
       async (request, reply) => {
         if (reply.sent) return;
-        const { guildId } = request.params as { guildId: string };
-        const body = request.body as { homeVisible?: unknown } | undefined;
-        if (typeof body?.homeVisible !== "boolean") {
+        const { guildId } = request.guildAuthorization!;
+        const parsedBody = homeVisibilityRequestSchema.safeParse(request.body);
+        if (!parsedBody.success) {
           await reply.code(400).send({
             error_code: "VALIDATION_ERROR",
             message_key: "errors.validation",
@@ -107,7 +157,7 @@ export function buildGuildRoutes(
           });
           return;
         }
-        const row = await setHomeVisibility(db, request.authUser!.id, guildId, body.homeVisible);
+        const row = await setHomeVisibility(db, request.authUser!.id, guildId, parsedBody.data.homeVisible);
         return { data: row };
       },
     );
@@ -124,8 +174,9 @@ export function buildGuildRoutes(
     // -------------------------------------------------------------------
     fastify.get(
       "/api/guilds/:guildId",
-      { preHandler: [requireAuth, requireTier("guildId", "USER")] },
-      async (request) => {
+      { preHandler: [requireAuth, validateGuildIdParam, requireTier("guildId", "USER")] },
+      async (request, reply) => {
+        if (reply.sent) return undefined;
         const { guildId, tier } = request.guildAuthorization!;
         const overview = await getGuildOverview(db, guildId);
         // "view guild overview" is itself a meaningful guild-scoped action

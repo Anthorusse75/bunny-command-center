@@ -1,6 +1,8 @@
-// `/guild/:guildId/admin` — guild-scoped, Guild-Admin-only. Real content is
-// Step 12's scope. See OnboardingScreen.tsx's comment for the tier-gating
-// rationale shared by every Guild-Admin-only placeholder in this step.
+// `/guild/:guildId/admin` — guild-scoped, Guild-Admin-only, gated by
+// `<GuildRouteGuard>` + `<RequireGuildAdmin>` in `routes.tsx`. Real content
+// is Step 12's scope. See OnboardingScreen.tsx's comment for the
+// tier-gating rationale shared by every Guild-Admin-only placeholder in
+// this step.
 import { PlaceholderScreen } from "./PlaceholderScreen.js";
 
 export function GuildAdminScreen(): React.JSX.Element {

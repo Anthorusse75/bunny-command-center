@@ -7,6 +7,7 @@
 import { createBrowserRouter } from "react-router";
 import { RootLayout } from "./RootLayout.js";
 import { GuildRouteGuard } from "./GuildRouteGuard.js";
+import { RequireGuildAdmin } from "./RequireGuildAdmin.js";
 import { SuperadminRouteGuard } from "./SuperadminRouteGuard.js";
 import { HomeScreen } from "../screens/HomeScreen.js";
 import { UploadScreen } from "../screens/UploadScreen.js";
@@ -64,10 +65,19 @@ export function createAppRouter(): ReturnType<typeof createBrowserRouter> {
           ),
         },
         {
+          // EXTERNAL REVIEW CORRECTION (Finding 1, BLOCKING): the three
+          // Guild-Admin-only routes below now wrap their screen in
+          // `<RequireGuildAdmin>`, in addition to `<GuildRouteGuard>`'s
+          // membership check — see that component's header comment for why
+          // this closes a real gap (these routes were previously reachable
+          // by any USER-tier member, despite their documented Guild-Admin-
+          // only semantics).
           path: "/guild/:guildId/onboarding",
           element: (
             <GuildRouteGuard>
-              <OnboardingScreen />
+              <RequireGuildAdmin>
+                <OnboardingScreen />
+              </RequireGuildAdmin>
             </GuildRouteGuard>
           ),
         },
@@ -75,7 +85,9 @@ export function createAppRouter(): ReturnType<typeof createBrowserRouter> {
           path: "/guild/:guildId/admin",
           element: (
             <GuildRouteGuard>
-              <GuildAdminScreen />
+              <RequireGuildAdmin>
+                <GuildAdminScreen />
+              </RequireGuildAdmin>
             </GuildRouteGuard>
           ),
         },
@@ -83,7 +95,9 @@ export function createAppRouter(): ReturnType<typeof createBrowserRouter> {
           path: "/guild/:guildId/technical",
           element: (
             <GuildRouteGuard>
-              <TechnicalScreen />
+              <RequireGuildAdmin>
+                <TechnicalScreen />
+              </RequireGuildAdmin>
             </GuildRouteGuard>
           ),
         },

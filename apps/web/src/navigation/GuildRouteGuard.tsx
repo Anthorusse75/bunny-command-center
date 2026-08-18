@@ -15,12 +15,16 @@
 // Guild-Admin-only sub-routes (onboarding/admin/technical) do NOT make a
 // second real HTTP call to prove GUILD_ADMIN tier specifically — they read
 // the `tier` field this SAME server-resolved overview call already
-// returned (via `useGuildOverviewContext` below). This is deliberate, not a
-// shortcut around authorization: the task's own instructions are explicit
-// that Step 06 must not add a fake/sample production endpoint merely to
-// claim wiring, and must not implement a second real business API per
-// domain ("Step 06 only needs placeholder UI routes for those domains, not
-// real APIs"). The tier value itself is 100% server-computed by the real
+// returned, via `useGuildOverviewContext` below, through the
+// `<RequireGuildAdmin>` guard (`RequireGuildAdmin.tsx`, added in this
+// step's external-review correction pass — see that file's header comment
+// for why: this guard did not actually exist at first push, despite this
+// comment already describing it). This is deliberate, not a shortcut
+// around authorization: the task's own instructions are explicit that
+// Step 06 must not add a fake/sample production endpoint merely to claim
+// wiring, and must not implement a second real business API per domain
+// ("Step 06 only needs placeholder UI routes for those domains, not real
+// APIs"). The tier value itself is 100% server-computed by the real
 // `requireTier` chain, re-fetched on every guild-context navigation
 // (TanStack Query's `guildId`-scoped query key), never a stale or
 // client-only flag — it is exactly as trustworthy as the overview screen's

@@ -72,18 +72,45 @@ export async function getPreference(
 }
 
 /**
- * A guild-scoped preference row is created lazily, on first write, with the
- * documented defaults (`is_favorite=0`, `home_visible=1` --
- * 09_MULTI_GUILD_MODEL.md: "Both default to on"). `ON DUPLICATE KEY UPDATE`
- * with the SAME values as the insert keeps this idempotent under concurrent
- * calls without a separate SELECT-then-INSERT race
- * (IMPLEMENTATION/06_multi_guild_navigation.md §Concurrency: "simple
+ * A guild-scoped preference row is created lazily, on first write, with
+ * BOTH flags off (`is_favorite=0`, `home_visible=0`).
+ *
+ * EXTERNAL REVIEW CORRECTION (Step 06 correction pass): this function
+ * previously created rows with `home_visible=1`, and its own comment
+ * claimed this implemented 09_MULTI_GUILD_MODEL.md's "Both default to on"
+ * rule — but that rule has a specific, narrower trigger than "any write to
+ * this table": "Both default to on for a guild the moment the user's FIRST
+ * MEANINGFUL ACTION there happens (first upload, first admin action, or
+ * explicit onboarding completion) — not on for every guild a user happens
+ * to technically belong to." None of those three trigger actions are Step
+ * 06's scope (Upload/Onboarding/Admin Config are Steps 15/10/12) — the only
+ * real callers of this function today are `touchLastUsed` (mere
+ * navigation/viewing, explicitly a DIFFERENT, broader trigger list per
+ * 09_MULTI_GUILD_MODEL.md §Last-used guild: "any meaningful guild-scoped
+ * action (view PremiumPlus, open Upload ...)" — note THAT list includes
+ * viewing, but the favorite/home-visible list does not) and
+ * `setFavorite`/`setHomeVisibility` (explicit user choices, which
+ * immediately overwrite whichever single field the caller is toggling,
+ * right after this call). Both-off is therefore the only value consistent
+ * with the doc for a row that exists ONLY because of navigation or because
+ * exactly one field was explicitly set — the untouched field must stay off,
+ * never silently inferred on. Steps 10 (onboarding completion), 12 (first
+ * admin action) and 15/17 (first upload) are the real future callers of a
+ * genuine "first meaningful action -> flip both on" mechanism; none exists
+ * yet, and Step 06 does not invent one merely to exercise it (this step's
+ * own explicit "do not create fake callers" constraint) — this HANDOVER's
+ * correction section names them explicitly so no later step has to
+ * rediscover this.
+ *
+ * `ON DUPLICATE KEY UPDATE` with the SAME values as the insert keeps this
+ * idempotent under concurrent calls without a separate SELECT-then-INSERT
+ * race (IMPLEMENTATION/06_multi_guild_navigation.md §Concurrency: "simple
  * idempotent upserts").
  */
 async function ensureRow(db: Kysely<DB>, userId: number, guildId: string): Promise<void> {
   await db
     .insertInto("dashboard_user_guild_preferences")
-    .values({ user_id: userId, guild_id: guildId, is_favorite: 0, home_visible: 1 })
+    .values({ user_id: userId, guild_id: guildId, is_favorite: 0, home_visible: 0 })
     .onDuplicateKeyUpdate({ guild_id: guildId })
     .execute();
 }

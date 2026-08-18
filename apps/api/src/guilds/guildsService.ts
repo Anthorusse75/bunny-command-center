@@ -136,7 +136,18 @@ export async function buildGuildList(
       canAdminister,
       isFavorite: pref?.isFavorite ?? false,
       favoritedAt: toIso(pref?.favoritedAt ?? null),
-      homeVisible: pref?.homeVisible ?? true,
+      // EXTERNAL REVIEW CORRECTION (Step 06 correction pass): was `?? true`.
+      // An ABSENT preference row means mere technical Discord membership —
+      // no favorite, no home-visibility choice, no meaningful action has
+      // ever happened for this guild (09_MULTI_GUILD_MODEL.md: "not on for
+      // every guild a user happens to technically belong to"). Defaulting
+      // this to `true` silently exposed every guild a user is a member of
+      // as Home-visible the instant they logged in, before any real action
+      // — exactly the clutter the doc's own example (a user who
+      // administers 30 unrelated Discord servers) explicitly calls out as
+      // the thing to avoid. See `guildPreferencesRepo.ts`'s `ensureRow`
+      // comment for the matching fix on the write side.
+      homeVisible: pref?.homeVisible ?? false,
       lastUsedAt: toIso(pref?.lastUsedAt ?? null),
     };
   });

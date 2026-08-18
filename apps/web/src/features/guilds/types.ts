@@ -1,36 +1,20 @@
-// Mirrors apps/api/src/guilds/guildsService.ts's response shapes
-// (IMPLEMENTATION/06_multi_guild_navigation.md). Duplicated rather than
-// imported from a shared package — the established convention already used
-// by features/auth/AuthProvider.tsx's own `AuthUser` (a lightweight,
-// per-side DTO mirror, not a cross-package type share).
-
-export interface GuildListEntry {
-  guildId: string;
-  name: string | null;
-  icon: string | null;
-  botPresent: boolean;
-  enabled: boolean | null;
-  isOwner: boolean;
-  canAdminister: boolean;
-  isFavorite: boolean;
-  favoritedAt: string | null;
-  homeVisible: boolean;
-  lastUsedAt: string | null;
-}
-
-export interface GuildListResponse {
-  guilds: GuildListEntry[];
-  inviteEligibleGuilds: GuildListEntry[];
-  canInviteBunnyAnywhere: boolean;
-  inviteUrl: string;
-}
-
-export type GuildTier = "USER" | "GUILD_ADMIN" | "SUPERADMIN";
-
-export interface GuildOverview {
-  guildId: string;
-  tier: GuildTier;
-  botPresent: boolean;
-  enabled: boolean | null;
-  displayName: string | null;
-}
+// Step-06 multi-guild types — re-exported from the shared Zod-derived
+// contracts (`packages/shared/src/types/guilds.ts`), the single source of
+// truth for shapes crossing apps/web <-> apps/api (24_API_CONTRACTS.md,
+// ADR-014).
+//
+// EXTERNAL REVIEW CORRECTION (Step 06 correction pass): this file used to
+// hand-duplicate its own plain TS interfaces instead of importing from
+// `packages/shared` — which had already drifted from what the real backend
+// returns (`postFavorite()`/`patchHomeVisibility()` claimed
+// `Promise<GuildListEntry>`, but `apps/api/src/guilds/routes.ts` actually
+// returns the narrower `GuildPreferenceResponse` shape — see `api.ts`'s
+// matching correction). Re-exporting from shared makes that kind of drift a
+// compile error instead of a silent runtime mismatch.
+export type {
+  GuildListEntry,
+  GuildListResponse,
+  GuildOverview,
+  GuildTier,
+  GuildPreferenceResponse,
+} from "@bunny-command-center/shared";

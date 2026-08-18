@@ -338,7 +338,7 @@ describe("Multi-guild model: GET /api/users/me/guilds, favorite/home-visibility,
   // POST .../favorite, PATCH .../home-visibility
   // ---------------------------------------------------------------------
 
-  it("favorite is persisted and independent of home-visibility (both default correctly, toggling one never changes the other)", async () => {
+  it("favorite is persisted and independent of home-visibility (both default OFF for an untouched guild, toggling one never changes the other)", async () => {
     const { cookie } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
     const fav = await fastify.inject({
       method: "POST",
@@ -347,17 +347,22 @@ describe("Multi-guild model: GET /api/users/me/guilds, favorite/home-visibility,
       payload: { isFavorite: true },
     });
     expect(fav.statusCode).toBe(200);
-    expect(preferenceBody(fav).data).toMatchObject({ isFavorite: true, homeVisible: true });
+    // External review correction: this used to assert `homeVisible: true`,
+    // encoding the very defect the correction fixed — favoriting a guild
+    // that was never otherwise touched must NOT silently flip its
+    // home-visibility on too (09_MULTI_GUILD_MODEL.md: favorite/home-visible
+    // are independent, and neither is "on" for mere technical membership).
+    expect(preferenceBody(fav).data).toMatchObject({ isFavorite: true, homeVisible: false });
 
-    const hide = await fastify.inject({
+    const show = await fastify.inject({
       method: "PATCH",
       url: `/api/users/me/guilds/${GUILD_A}/home-visibility`,
       headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
-      payload: { homeVisible: false },
+      payload: { homeVisible: true },
     });
-    expect(hide.statusCode).toBe(200);
+    expect(show.statusCode).toBe(200);
     // Favorite must be UNCHANGED by the home-visibility toggle.
-    expect(preferenceBody(hide).data).toMatchObject({ isFavorite: true, homeVisible: false });
+    expect(preferenceBody(show).data).toMatchObject({ isFavorite: true, homeVisible: true });
 
     const unfav = await fastify.inject({
       method: "POST",
@@ -370,8 +375,40 @@ describe("Multi-guild model: GET /api/users/me/guilds, favorite/home-visibility,
     expect(preferenceBody(unfav).data).toMatchObject({
       isFavorite: false,
       favoritedAt: null,
-      homeVisible: false,
+      homeVisible: true,
     });
+  });
+
+  it("EXTERNAL REVIEW FINDING 3: an untouched guild (no preference row at all) reports both isFavorite and homeVisible as false in the guild list — mere technical membership is never Home-visible by default", async () => {
+    const { cookie } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
+    const response = await fastify.inject({
+      method: "GET",
+      url: "/api/users/me/guilds",
+      headers: { cookie },
+    });
+    const entry = listBody(response).data.guilds.find((g) => g.guildId === GUILD_A);
+    expect(entry).toMatchObject({ isFavorite: false, homeVisible: false });
+  });
+
+  it("EXTERNAL REVIEW FINDING 3: merely viewing the guild overview (touchLastUsed's lazy row-create path) does NOT flip favorite or home-visibility on, only last_used_at", async () => {
+    const { cookie, userId } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
+    // GET /api/guilds/:guildId is the real production caller of
+    // touchLastUsed, which lazily creates the preference row via the same
+    // ensureRow() this correction fixed.
+    const overview = await fastify.inject({
+      method: "GET",
+      url: `/api/guilds/${GUILD_A}`,
+      headers: { cookie },
+    });
+    expect(overview.statusCode).toBe(200);
+    const rows = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT is_favorite, home_visible, last_used_at FROM dashboard_user_guild_preferences WHERE user_id = ? AND guild_id = ?",
+      [userId, GUILD_A],
+    );
+    expect(rows[0]).toHaveLength(1);
+    expect(rows[0][0]!.is_favorite).toBe(0);
+    expect(rows[0][0]!.home_visible).toBe(0);
+    expect(rows[0][0]!.last_used_at).not.toBeNull();
   });
 
   it("unauthorized preference mutation is rejected: missing CSRF header -> 403, never reaches the DB write", async () => {
@@ -432,12 +469,117 @@ describe("Multi-guild model: GET /api/users/me/guilds, favorite/home-visibility,
   });
 
   // ---------------------------------------------------------------------
+  // EXTERNAL REVIEW FINDING 4 — favorite/home-visibility must reject an
+  // arbitrary NON-MEMBER guildId, reusing the real Step-05
+  // assertGuildMembership chain (requireTier), not a second implementation.
+  // ---------------------------------------------------------------------
+
+  it("EXTERNAL REVIEW FINDING 4: caller who IS a member of guild A can mutate A's favorite (positive control for the tests below)", async () => {
+    const { cookie } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
+    const response = await fastify.inject({
+      method: "POST",
+      url: `/api/users/me/guilds/${GUILD_A}/favorite`,
+      headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
+      payload: { isFavorite: true },
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("EXTERNAL REVIEW FINDING 4: an authenticated caller who is NOT a member of guild B cannot mutate B's favorite — 404, and the write never happens", async () => {
+    // Caller's live Discord membership is GUILD_A only — GUILD_B is a real,
+    // syntactically-valid, bot-present guild the caller has zero
+    // relationship to.
+    const { cookie, userId } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
+    const response = await fastify.inject({
+      method: "POST",
+      url: `/api/users/me/guilds/${GUILD_B}/favorite`,
+      headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
+      payload: { isFavorite: true },
+    });
+    expect(response.statusCode).toBe(404);
+    // THIS caller's row for B must never have been created at all — not
+    // just "not favorited", genuinely absent (proves the write was rejected
+    // BEFORE ensureRow(), not silently accepted and then somehow not
+    // counted). Scoped to this test's own userId — other, unrelated tests
+    // in this same shared-database describe block legitimately create
+    // their OWN rows for GUILD_B under different users.
+    const rows = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT 1 FROM dashboard_user_guild_preferences WHERE guild_id = ? AND user_id = ?",
+      [GUILD_B, userId],
+    );
+    expect(rows[0]).toHaveLength(0);
+  });
+
+  it("EXTERNAL REVIEW FINDING 4: same non-member rejection applies to PATCH home-visibility", async () => {
+    const { cookie } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
+    const response = await fastify.inject({
+      method: "PATCH",
+      url: `/api/users/me/guilds/${GUILD_B}/home-visibility`,
+      headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
+      payload: { homeVisible: true },
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("EXTERNAL REVIEW FINDING 4: an arbitrary guildId that is syntactically NOT a Discord snowflake -> 400 validation error, distinct from the 404 a well-shaped-but-non-member guildId produces", async () => {
+    const { cookie } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
+    const notAGuildId = await fastify.inject({
+      method: "POST",
+      url: `/api/users/me/guilds/${encodeURIComponent("'; DROP TABLE guilds; --")}/favorite`,
+      headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
+      payload: { isFavorite: true },
+    });
+    expect(notAGuildId.statusCode).toBe(400);
+
+    const tooShort = await fastify.inject({
+      method: "PATCH",
+      url: "/api/users/me/guilds/123/home-visibility",
+      headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
+      payload: { homeVisible: true },
+    });
+    expect(tooShort.statusCode).toBe(400);
+  });
+
+  it("EXTERNAL REVIEW FINDING 2/4: exact 19-digit Snowflake round-trips through a mutation route (never coerced to a JS number)", async () => {
+    // `ON DUPLICATE KEY UPDATE` — an earlier test in this shared-database
+    // describe block ("exact Snowflake preservation") may already have
+    // inserted this same GUILD_HUGE row; this must stay correct regardless
+    // of test execution order.
+    await pool.query(
+      "INSERT INTO guilds (guild_id, display_name_cache, enabled) VALUES (?, ?, ?) " +
+        "ON DUPLICATE KEY UPDATE display_name_cache = VALUES(display_name_cache)",
+      [GUILD_HUGE, "Huge Guild", 1],
+    );
+    const { cookie } = await makeSession([{ id: GUILD_HUGE, owner: false, permissions: "0" }]);
+    const response = await fastify.inject({
+      method: "POST",
+      url: `/api/users/me/guilds/${GUILD_HUGE}/favorite`,
+      headers: { cookie, "x-requested-with": "BunnyCommandCenter" },
+      payload: { isFavorite: true },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(typeof preferenceBody(response).data.guildId).toBe("string");
+    expect(preferenceBody(response).data.guildId).toBe(GUILD_HUGE);
+    expect(response.rawPayload.toString()).toContain(`"guildId":"${GUILD_HUGE}"`);
+  });
+
+  // ---------------------------------------------------------------------
   // GET /api/guilds/:guildId — real production requireTier wiring closure
   // ---------------------------------------------------------------------
 
   it("PROOF OF WIRING: unauthenticated -> 401, never reaches guild-authorization logic", async () => {
     const response = await fastify.inject({ method: "GET", url: `/api/guilds/${GUILD_A}` });
     expect(response.statusCode).toBe(401);
+  });
+
+  it("EXTERNAL REVIEW FINDING 2: a syntactically-invalid guildId on the overview route -> 400, not a 404 fall-through", async () => {
+    const { cookie } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
+    const response = await fastify.inject({
+      method: "GET",
+      url: "/api/guilds/not-a-snowflake",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(400);
   });
 
   it("PROOF OF WIRING: authenticated but not a member -> 404 GUILD_NOT_FOUND (assertGuildMembership, real chain)", async () => {
