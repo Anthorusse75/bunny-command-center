@@ -26,6 +26,20 @@ export interface DiscordGuildSummary {
    * `hasAdministratorPermission` below, which uses `BigInt(...)`.
    */
   permissions: string;
+  /**
+   * Step 06 addition (IMPLEMENTATION/06_multi_guild_navigation.md): the
+   * guild switcher needs a human-readable name to alphabetize/display by --
+   * Step 05 never needed this (authorization only ever compares IDs/bits).
+   * Deliberately OPTIONAL and non-validated (unlike `id`/`owner`/
+   * `permissions` above, which fail the whole response as malformed if
+   * missing) -- this is display-only data, never an authorization input, so
+   * a Discord response that omits it (or the local test double's existing
+   * fixtures, which predate this field) must never break a guild-list fetch
+   * that Step 05's authorization path still depends on.
+   */
+  name?: string;
+  /** Same optional/display-only rationale as `name` above. `null` is Discord's own documented value for "no icon set". */
+  icon?: string | null;
 }
 
 export interface DiscordGuildMember {
@@ -94,10 +108,16 @@ export async function fetchUserGuilds(
         response.status,
       );
     }
+    const nameValue = (row as { name?: unknown }).name;
+    const iconValue = (row as { icon?: unknown }).icon;
     guilds.push({
       id: (row as { id: string }).id,
       owner: (row as { owner: boolean }).owner,
       permissions: (row as { permissions: string }).permissions,
+      // exactOptionalPropertyTypes: true -- the key is omitted entirely
+      // when absent, never assigned an explicit `undefined`.
+      ...(typeof nameValue === "string" ? { name: nameValue } : {}),
+      ...(typeof iconValue === "string" || iconValue === null ? { icon: iconValue } : {}),
     });
   }
   return guilds;

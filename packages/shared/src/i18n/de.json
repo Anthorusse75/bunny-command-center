@@ -62,6 +62,25 @@
       "guildAdmin": "Gilden-Administrator",
       "superadmin": "Superadministrator",
       "premiumPlus": "PremiumPlus"
+    },
+    "nav": {
+      "home": "Start",
+      "upload": "Hochladen",
+      "guild": "Gilde",
+      "contributions": "Beiträge",
+      "leaderboard": "Rangliste",
+      "notifications": "Benachrichtigungen",
+      "onboarding": "Einführung",
+      "guildAdmin": "Gilden-Administration",
+      "technical": "Technik",
+      "superadmin": "Superadmin",
+      "heroDiscovery": "Heldenerkennung",
+      "profile": "Profil",
+      "more": "Mehr"
+    },
+    "inviteBunny": {
+      "ctaCount_one": "Bunny auf einen anderen Server einladen ({{count}})",
+      "ctaCount_other": "Bunny auf einen anderen Server einladen ({{count}})"
     }
   },
   "errors": {
@@ -88,6 +107,21 @@
     },
     "guilds": {
       "notFound": "Wir konnten diesen Server für dein Konto nicht finden."
+    },
+    "notFoundPage": {
+      "title": "Diese Seite gibt es nicht",
+      "body": "Der Link ist möglicherweise veraltet oder die Adresse falsch eingegeben.",
+      "cta": "Zur Startseite"
+    },
+    "guildNotAccessible": {
+      "title": "Dieser Server ist nicht mehr erreichbar",
+      "body": "Du wurdest möglicherweise entfernt, oder der Server hat Bunny entfernt. Falls dir das falsch erscheint, bitte den Gilden-Administrator um Prüfung.",
+      "cta": "Zur Startseite"
+    },
+    "forbiddenGuild": {
+      "title": "Du hast keinen Zugriff mehr darauf",
+      "body": "Deine Rolle für diesen Server hat sich geändert, oder dieser Bereich erfordert Gilden-Administrator-Zugriff.",
+      "cta": "Zur Startseite"
     }
   },
   "a11y": {
@@ -104,7 +138,17 @@
     "notificationRegion": "Benachrichtigungen",
     "moreInformation": "Weitere Informationen",
     "closeNotification": "Diese Benachrichtigung ausblenden",
-    "statusLabel": "Status: {{status}}"
+    "statusLabel": "Status: {{status}}",
+    "breadcrumbs": "Breadcrumb-Navigation",
+    "nav": {
+      "guildSwitcher": "Gilde wechseln",
+      "guildSwitcherSearch": "Gilden nach Namen filtern",
+      "favoriteOn": "{{guildName}} aus Favoriten entfernen",
+      "favoriteOff": "{{guildName}} zu Favoriten hinzufügen",
+      "inviteBunny": "Bunny auf einen Server einladen, den du administrierst",
+      "moreMenu": "Weitere Navigationsziele",
+      "notificationsBadge": "{{count}} ungelesene Benachrichtigungen"
+    }
   },
   "showcase": {
     "title": "Design-System",
@@ -166,16 +210,108 @@
       "loginAgain": "Erneut anmelden"
     }
   },
-  "home": {},
-  "upload": {},
-  "guild": {},
+  "home": {
+    "zeroGuild": {
+      "title": "Willkommen bei Bunny Command Center",
+      "tagline": "Alles, was deine Gilde braucht, um Hero-Wars-Screenshots, PremiumPlus und Ranglisten zu verfolgen — an einem Ort.",
+      "features": {
+        "upload": "Screenshots in Sekunden im Massenupload hochladen",
+        "ocr": "Automatische OCR liest deine Werte für dich aus",
+        "premiumplus": "PremiumPlus-Kontingent im Blick",
+        "stock": "Bestand über Saisons hinweg",
+        "leaderboards": "Gilden-Ranglisten",
+        "notifications": "Benachrichtigungen, wenn es zählt",
+        "forecasts": "Prognosen und Trends"
+      },
+      "inviteCta": "Bunny auf deinen Server einladen",
+      "cannotInvite": "Bitte den Administrator deiner Gilde, Bunny einzuladen",
+      "cannotInviteBody": "Bunny ist noch auf keinem deiner Discord-Server vorhanden. Sobald der Administrator deiner Gilde ihn hinzufügt, füllt sich diese Seite automatisch."
+    },
+    "placeholder": {
+      "title": "Start",
+      "body": "Dein persönliches Dashboard kommt bald — Widgets für PremiumPlus, Beiträge und die Rangliste folgen in einem späteren Update."
+    },
+    "loadError": {
+      "title": "Deine Gilden konnten nicht geladen werden",
+      "body": "Beim Überprüfen deiner Server ist ein Fehler aufgetreten. Deine Daten sind sicher — versuche es in einem Moment erneut."
+    }
+  },
+  "upload": {
+    "placeholder": {
+      "title": "Massenupload",
+      "body": "Der Massenupload für Screenshots ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+    }
+  },
+  "guild": {
+    "switcher": {
+      "title": "Deine Gilden",
+      "searchPlaceholder": "Gilden filtern…",
+      "favoritesHeading": "Favoriten",
+      "allHeading": "Alle Gilden",
+      "empty": "Keine Gilde entspricht deiner Suche.",
+      "favoritedToast": "{{guildName}} zu Favoriten hinzugefügt",
+      "unfavoritedToast": "{{guildName}} aus Favoriten entfernt"
+    },
+    "overview": {
+      "title": "{{guildName}}",
+      "titleFallback": "Gildenübersicht",
+      "placeholderBody": "Detaillierte PremiumPlus-, Bestands- und Prognoseinhalte für diese Gilde folgen in einem späteren Update.",
+      "botNotPresent": "Bunny wurde diesem Server noch nicht hinzugefügt."
+    }
+  },
   "premiumplus": {},
-  "contributions": {},
-  "leaderboard": {},
-  "notifications": {},
-  "onboarding": {},
-  "adminGuild": {},
-  "superadmin": {},
-  "technical": {},
-  "profile": {}
+  "contributions": {
+    "placeholder": {
+      "title": "Beiträge",
+      "body": "Dein Beitragsverlauf und die Losdetails sind noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+    }
+  },
+  "leaderboard": {
+    "placeholder": {
+      "title": "Rangliste",
+      "body": "Die Rangliste dieser Gilde ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+    }
+  },
+  "notifications": {
+    "placeholder": {
+      "title": "Benachrichtigungen",
+      "body": "Dein Benachrichtigungscenter ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+    }
+  },
+  "onboarding": {
+    "placeholder": {
+      "title": "Gilden-Einführung",
+      "body": "Der Einführungsassistent ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+    }
+  },
+  "adminGuild": {
+    "placeholder": {
+      "title": "Gilden-Administration",
+      "body": "Die Gildenkonfiguration ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+    }
+  },
+  "superadmin": {
+    "placeholder": {
+      "title": "Plattformkonsole",
+      "body": "Die Superadmin-Plattformkonsole ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+    },
+    "heroDiscovery": {
+      "placeholder": {
+        "title": "Heldenerkennung",
+        "body": "Erkennungskandidaten und der Referenzkatalog sind noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+      }
+    }
+  },
+  "technical": {
+    "placeholder": {
+      "title": "Technik",
+      "body": "Gesundheitsstatus, Runs und Operator-Befehle dieser Gilde sind noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+    }
+  },
+  "profile": {
+    "placeholder": {
+      "title": "Profil",
+      "body": "Sprach-, Design- und Gildenpräferenzen folgen in einem späteren Update."
+    }
+  }
 }

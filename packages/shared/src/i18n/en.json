@@ -62,6 +62,25 @@
       "guildAdmin": "Guild Admin",
       "superadmin": "Superadmin",
       "premiumPlus": "PremiumPlus"
+    },
+    "nav": {
+      "home": "Home",
+      "upload": "Upload",
+      "guild": "Guild",
+      "contributions": "Contributions",
+      "leaderboard": "Leaderboard",
+      "notifications": "Notifications",
+      "onboarding": "Onboarding",
+      "guildAdmin": "Guild Admin",
+      "technical": "Technical",
+      "superadmin": "Superadmin",
+      "heroDiscovery": "Hero Discovery",
+      "profile": "Profile",
+      "more": "More"
+    },
+    "inviteBunny": {
+      "ctaCount_one": "Invite Bunny to another server ({{count}})",
+      "ctaCount_other": "Invite Bunny to another server ({{count}})"
     }
   },
   "errors": {
@@ -88,6 +107,21 @@
     },
     "guilds": {
       "notFound": "We couldn't find that guild for your account."
+    },
+    "notFoundPage": {
+      "title": "This page doesn't exist",
+      "body": "The link may be out of date, or the address may be mistyped.",
+      "cta": "Go to Home"
+    },
+    "guildNotAccessible": {
+      "title": "This guild is no longer accessible",
+      "body": "You may have been removed from it, or the server may have removed Bunny. If you think this is a mistake, ask the guild's admin to check.",
+      "cta": "Go to Home"
+    },
+    "forbiddenGuild": {
+      "title": "You don't have access to this anymore",
+      "body": "Your role for this guild changed, or this area needs Guild Admin access.",
+      "cta": "Go to Home"
     }
   },
   "a11y": {
@@ -104,7 +138,17 @@
     "notificationRegion": "Notifications",
     "moreInformation": "More information",
     "closeNotification": "Dismiss this notification",
-    "statusLabel": "Status: {{status}}"
+    "statusLabel": "Status: {{status}}",
+    "breadcrumbs": "Breadcrumb",
+    "nav": {
+      "guildSwitcher": "Switch guild",
+      "guildSwitcherSearch": "Filter guilds by name",
+      "favoriteOn": "Remove {{guildName}} from favorites",
+      "favoriteOff": "Add {{guildName}} to favorites",
+      "inviteBunny": "Invite Bunny to a server you administer",
+      "moreMenu": "More navigation destinations",
+      "notificationsBadge": "{{count}} unread notifications"
+    }
   },
   "showcase": {
     "title": "Design system",
@@ -166,16 +210,108 @@
       "loginAgain": "Log in again"
     }
   },
-  "home": {},
-  "upload": {},
-  "guild": {},
+  "home": {
+    "zeroGuild": {
+      "title": "Welcome to Bunny Command Center",
+      "tagline": "Everything your guild needs to track Hero Wars screenshots, PremiumPlus, and rankings — in one place.",
+      "features": {
+        "upload": "Bulk upload screenshots in seconds",
+        "ocr": "Automatic OCR reads your stats for you",
+        "premiumplus": "PremiumPlus quota tracking",
+        "stock": "Stock across seasons",
+        "leaderboards": "Guild leaderboards",
+        "notifications": "Notifications when it matters",
+        "forecasts": "Forecasts and trends"
+      },
+      "inviteCta": "Invite Bunny to your server",
+      "cannotInvite": "Ask your guild's admin to invite Bunny",
+      "cannotInviteBody": "Bunny isn't in any of your Discord servers yet. Once your guild's admin adds it, this page fills up automatically."
+    },
+    "placeholder": {
+      "title": "Home",
+      "body": "Your personalized dashboard is on its way — widgets for PremiumPlus, contributions, and the leaderboard arrive in a later update."
+    },
+    "loadError": {
+      "title": "We couldn't load your guilds",
+      "body": "Something went wrong while checking your servers. Your data is safe — try again in a moment."
+    }
+  },
+  "upload": {
+    "placeholder": {
+      "title": "Bulk Upload",
+      "body": "The bulk screenshot uploader isn't built yet — this is a placeholder for the route and its navigation."
+    }
+  },
+  "guild": {
+    "switcher": {
+      "title": "Your guilds",
+      "searchPlaceholder": "Filter guilds…",
+      "favoritesHeading": "Favorites",
+      "allHeading": "All guilds",
+      "empty": "No guilds match your search.",
+      "favoritedToast": "{{guildName}} added to favorites",
+      "unfavoritedToast": "{{guildName}} removed from favorites"
+    },
+    "overview": {
+      "title": "{{guildName}}",
+      "titleFallback": "Guild overview",
+      "placeholderBody": "Detailed PremiumPlus, stock, and forecast content for this guild arrives in a later update.",
+      "botNotPresent": "Bunny hasn't been added to this server yet."
+    }
+  },
   "premiumplus": {},
-  "contributions": {},
-  "leaderboard": {},
-  "notifications": {},
-  "onboarding": {},
-  "adminGuild": {},
-  "superadmin": {},
-  "technical": {},
-  "profile": {}
+  "contributions": {
+    "placeholder": {
+      "title": "Contributions",
+      "body": "Your contribution history and batch detail aren't built yet — this is a placeholder for the route and its navigation."
+    }
+  },
+  "leaderboard": {
+    "placeholder": {
+      "title": "Leaderboard",
+      "body": "This guild's leaderboard isn't built yet — this is a placeholder for the route and its navigation."
+    }
+  },
+  "notifications": {
+    "placeholder": {
+      "title": "Notifications",
+      "body": "Your notification center isn't built yet — this is a placeholder for the route and its navigation."
+    }
+  },
+  "onboarding": {
+    "placeholder": {
+      "title": "Guild Onboarding",
+      "body": "The onboarding stepper isn't built yet — this is a placeholder for the route and its navigation."
+    }
+  },
+  "adminGuild": {
+    "placeholder": {
+      "title": "Guild Admin",
+      "body": "Guild configuration isn't built yet — this is a placeholder for the route and its navigation."
+    }
+  },
+  "superadmin": {
+    "placeholder": {
+      "title": "Platform Console",
+      "body": "The Superadmin platform console isn't built yet — this is a placeholder for the route and its navigation."
+    },
+    "heroDiscovery": {
+      "placeholder": {
+        "title": "Hero Discovery",
+        "body": "Hero recognition candidates and the reference catalog aren't built yet — this is a placeholder for the route and its navigation."
+      }
+    }
+  },
+  "technical": {
+    "placeholder": {
+      "title": "Technical",
+      "body": "Health, runs, and operator commands for this guild aren't built yet — this is a placeholder for the route and its navigation."
+    }
+  },
+  "profile": {
+    "placeholder": {
+      "title": "Profile",
+      "body": "Language, theme, and guild preferences settings arrive in a later update."
+    }
+  }
 }

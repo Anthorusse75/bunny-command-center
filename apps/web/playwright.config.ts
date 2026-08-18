@@ -80,7 +80,7 @@ export default defineConfig({
       // scope and never see those events, which is correct Step-04 behavior
       // but not what this Step-03 regression suite is proving (see its own
       // `realtime-chromium` project below, unchanged from Step 03).
-      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts/,
+      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts|multi-guild(-mobile)?\.spec\.ts/,
     },
     {
       // Mobile: a real device profile (touch, DPR, UA), so the bottom-nav layout and the
@@ -88,7 +88,7 @@ export default defineConfig({
       name: "mobile-chromium",
       use: { ...devices["Pixel 7"], storageState: STORAGE_STATE_PATH },
       dependencies: ["setup"],
-      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts/,
+      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts|multi-guild(-mobile)?\.spec\.ts/,
     },
     {
       // Step 04: the real (unauthenticated) Login/OAuth-error/logout flows,
@@ -113,6 +113,24 @@ export default defineConfig({
       name: "realtime-mobile-chromium",
       use: { ...devices["Pixel 7"] },
       testMatch: /realtime\.spec\.ts/,
+    },
+    {
+      // Step 06: multi-guild.spec.ts logs in itself per-test with its own
+      // guild fixture (via the E2E-only `/api/__test__/login?guilds=...`
+      // route) — like realtime.spec.ts/auth.spec.ts, it does NOT use the
+      // shared `setup` project's storageState (a fixed default user with no
+      // guilds would make every guild-scoped assertion meaningless).
+      // Desktop viewport: exercises the sidebar guild switcher.
+      name: "multi-guild-chromium",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+      testMatch: /multi-guild\.spec\.ts$/,
+    },
+    {
+      // Mobile device profile: exercises the bottom-nav Guild tab + picker
+      // sheet (03_INFORMATION_ARCHITECTURE.md §Mobile navigation).
+      name: "multi-guild-mobile-chromium",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /multi-guild-mobile\.spec\.ts$/,
     },
   ],
   webServer: [

@@ -37,6 +37,7 @@ export { getAdminOverride, setAdminOverride, type DashboardAdminOverrideRow } fr
 export {
   assertGuildMembership,
   resolveGuildAuthorization,
+  getCallerGuildsForListing,
   createGuildAuthDeps,
   GUILD_TIER_RANK,
   type GuildTier,
@@ -44,4 +45,9 @@ export {
   type AuthorizedCaller,
   type AuthorizationFreshness,
 } from "./guildAuthorization.js";
-export { buildRequireTier, type ResolvedGuildAuthorization, type RequireTierOptions } from "./tier.js";
+export {
+  buildRequireTier,
+  respondReauthRequired,
+  type ResolvedGuildAuthorization,
+  type RequireTierOptions,
+} from "./tier.js";

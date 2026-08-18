@@ -42,7 +42,7 @@ test.describe("breakpoint swap", () => {
   ]) {
     test(`at ${width}px the shell is ${expected}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto("/");
+      await page.goto("/__showcase__");
       await expect(page.getByTestId("app-shell")).toHaveAttribute("data-layout", expected);
       if (expected === "desktop") {
         await expect(page.getByTestId("sidebar")).toBeVisible();
@@ -56,7 +56,7 @@ test.describe("breakpoint swap", () => {
 
   test("swaps live across 960px without a reload", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await expect(page.getByTestId("sidebar")).toBeVisible();
 
     await page.setViewportSize({ width: 600, height: 900 });
@@ -73,7 +73,7 @@ test.describe("no horizontal overflow", () => {
     test(`at ${MIN_WIDTH}px in ${locale}`, async ({ page }) => {
       await seedPreferences(page, { locale });
       await page.setViewportSize({ width: MIN_WIDTH, height: 720 });
-      await page.goto("/");
+      await page.goto("/__showcase__");
       await expect(page.locator("html")).toHaveAttribute("lang", locale);
       // Raise every toast so the widest transient surface is on screen too.
       await page.getByTestId("toast-error-button").click();
@@ -88,7 +88,7 @@ test.describe("no horizontal overflow", () => {
     await seedPreferences(page, { locale: "de" });
     for (const width of [MIN_WIDTH, 360, 599, 600, 768, 959, 960, 1280]) {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto("/");
+      await page.goto("/__showcase__");
       await expect(page.locator("html")).toHaveAttribute("lang", "de");
       const result = await checkHorizontalOverflow(page);
       expect(result.overflow, `overflow at ${width}px in German: ${result.detail}`).toBe(false);
@@ -106,7 +106,7 @@ test.describe("overflow detector regression proof", () => {
     // the browser WILL let a user scroll to it, unlike the metrics-only discrepancy that
     // motivated moving off a blind scrollWidth/clientWidth tolerance in the first place.
     await page.setViewportSize({ width: MIN_WIDTH, height: 900 });
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await page.evaluate(() => {
       const probe = document.createElement("div");
       probe.setAttribute("data-testid", "deliberate-overflow-probe");
@@ -130,7 +130,7 @@ test.describe("touch targets and mobile chrome", () => {
     // 21_MOBILE_UX.md §Touch targets: "Minimum touch target: 44x44px [...] enforced as a design-token
     // constant (`spacing.touchTarget`), checked in component review, not just eyeballed."
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/");
+    await page.goto("/__showcase__");
 
     const undersized = await page.evaluate(() => {
       const results: string[] = [];
@@ -154,7 +154,7 @@ test.describe("touch targets and mobile chrome", () => {
 
   test("places toasts bottom-centre on mobile and top-right on desktop", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await page.getByTestId("toast-error-button").click();
     await expect(page.getByTestId("toast-region")).toHaveAttribute("data-placement", "mobile-bottom-center");
     // ...and it must not sit on top of the bottom nav.
@@ -174,7 +174,7 @@ test.describe("touch targets and mobile chrome", () => {
 
   test("collapses and restores the desktop sidebar, remembering the choice", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
     const expandedWidth = (await page.getByTestId("sidebar").boundingBox())?.width ?? 0;
 

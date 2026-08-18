@@ -22,7 +22,7 @@ test.describe("axe-core", () => {
       test(`${theme}/${mode} has no axe violations`, async ({ page }) => {
         await page.emulateMedia({ colorScheme: mode });
         await seedPreferences(page, { theme, mode });
-        await page.goto("/");
+        await page.goto("/__showcase__");
         await expect(page.getByTestId("app-shell")).toBeVisible();
 
         const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
@@ -38,7 +38,7 @@ test.describe("axe-core", () => {
   }
 
   test("the toast region is clean once toasts are on screen", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await page.getByTestId("toast-info-button").click();
     await page.getByTestId("toast-error-button").click();
     await expect(page.getByTestId("toast")).toHaveCount(2);
@@ -48,7 +48,7 @@ test.describe("axe-core", () => {
   });
 
   test("the open tooltip surface is clean", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await page.getByTestId("info-tooltip-trigger").click();
     await expect(page.getByRole("tooltip")).toBeVisible();
 
@@ -59,7 +59,7 @@ test.describe("axe-core", () => {
 
 test.describe("keyboard-only operation", () => {
   test("reaches the skip link first, then every appearance control", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     // STEP 04: the app shell now renders only after the async
     // GET /api/auth/session bootstrap resolves (AuthProvider) — waiting for
     // it here (matching every other test in this file) avoids a race where
@@ -133,7 +133,7 @@ test.describe("keyboard-only operation", () => {
 
   test("changes theme, mode and language with the keyboard alone", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "light" });
-    await page.goto("/");
+    await page.goto("/__showcase__");
 
     await page.getByTestId("theme-option-heroic").focus();
     await page.keyboard.press("Enter");
@@ -149,7 +149,7 @@ test.describe("keyboard-only operation", () => {
   });
 
   test("shows a visible focus ring built from the theme's own focus tokens", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     const control = page.getByTestId("theme-option-heroic");
     await control.focus();
 
@@ -184,7 +184,7 @@ test.describe("keyboard-only operation", () => {
   });
 
   test("dismisses a toast from the keyboard", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     await page.getByTestId("toast-error-button").click();
     await expect(page.getByTestId("toast")).toHaveCount(1);
 
@@ -195,7 +195,7 @@ test.describe("keyboard-only operation", () => {
   });
 
   test("opens and closes the tooltip from the keyboard, restoring focus", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/__showcase__");
     const trigger = page.getByTestId("info-tooltip-trigger");
     await trigger.focus();
     await page.keyboard.press("Enter");
@@ -210,7 +210,7 @@ test.describe("keyboard-only operation", () => {
 test.describe("reduced motion", () => {
   test("collapses transitions to an instant change without removing the state change", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.goto("/");
+    await page.goto("/__showcase__");
     // 28_ACCESSIBILITY.md §Reduced motion: reduced to an instant, never removed. The state change
     // itself must still happen.
     await page.getByTestId("mode-option-dark").click();

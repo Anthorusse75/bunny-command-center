@@ -369,6 +369,17 @@ export interface DashboardSseCursor {
   updated_at: Generated<Date>;
 }
 
+export interface DashboardUserGuildPreferences {
+  created_at: Generated<Date>;
+  favorited_at: Date | null;
+  guild_id: string;
+  home_visible: Generated<number>;
+  is_favorite: Generated<number>;
+  last_used_at: Date | null;
+  updated_at: Generated<Date>;
+  user_id: number;
+}
+
 export interface DashboardUsers {
   avatar_hash: string | null;
   created_at: Generated<Date>;
@@ -377,6 +388,7 @@ export interface DashboardUsers {
   discord_token_expires_at: Date | null;
   discord_user_id: string;
   id: Generated<number>;
+  last_upload_guild_id: string | null;
   locale: Generated<string>;
   theme_mode: Generated<string>;
   theme_name: Generated<string>;
@@ -1573,6 +1585,7 @@ export interface DB {
   dashboard_schema_migrations: DashboardSchemaMigrations;
   dashboard_sessions: DashboardSessions;
   dashboard_sse_cursor: DashboardSseCursor;
+  dashboard_user_guild_preferences: DashboardUserGuildPreferences;
   dashboard_users: DashboardUsers;
   discord_ingestion_cursors: DiscordIngestionCursors;
   discord_message_cleanup_jobs: DiscordMessageCleanupJobs;

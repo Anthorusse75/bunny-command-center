@@ -181,6 +181,27 @@ export async function assertGuildMembership(
 }
 
 /**
+ * Step 06 addition (IMPLEMENTATION/06_multi_guild_navigation.md): the guild
+ * switcher / `GET /api/users/me/guilds` needs the caller's FULL live guild
+ * list (id/owner/permissions/name/icon), not just a yes/no membership
+ * answer or a resolved tier for one guild -- exposes the exact same cached
+ * fetch `assertGuildMembership`/`resolveGuildAuthorization` already use
+ * internally (`apps/api/src/guilds/guildsService.ts` is the one caller), so
+ * Step 06 and the existing Step 05 authorization checks share ONE 60s
+ * cache entry per user, never two independent Discord calls for the same
+ * window. Deliberately a thin wrapper (not a re-implementation) so there is
+ * still exactly ONE function that ever calls the Discord guild-list
+ * endpoint.
+ */
+export async function getCallerGuildsForListing(
+  deps: GuildAuthDeps,
+  caller: AuthorizedCaller,
+  freshness: AuthorizationFreshness = "READ",
+): Promise<DiscordGuildSummary[]> {
+  return getCallerGuilds(deps, caller, freshness);
+}
+
+/**
  * Guild Admin Resolution (08_AUTHORIZATION_AND_RBAC.md's flowchart, minus
  * the Bunny role-deletion-detection branch -- see this module's header
  * comment). MUST only be called after `assertGuildMembership` has already

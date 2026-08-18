@@ -46,8 +46,26 @@ import {
   testSessionConfig,
   testSuperadminConfig,
 } from "../test/helpers/testAuthConfig.js";
+import { startDiscordTestDouble, type DiscordTestDouble } from "../test/helpers/discordTestDouble.js";
 
 const REAL_MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
+// Step 06 addition: the SHARED self-bot schema migrations (`guilds` table —
+// bot-presence cross-reference). The Step 03 E2E harness never needed this
+// (Guild Admin Resolution/realtime never touch `guilds`); Step 06's
+// multi-guild E2E suite is the first to need real bot-presence fixture
+// rows, applied the SAME way `test/guilds/routes.test.ts` does for the
+// Vitest integration suite — this repo's own generic runner against the
+// vendored migrations directory, never a second migration mechanism.
+const SHARED_MIGRATIONS_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "vendor",
+  "self-bot-schema",
+  "database",
+  "migrations",
+);
 
 function required(name: string): string {
   const value = process.env[name];
@@ -77,12 +95,18 @@ async function main(): Promise<void> {
     database: required("DB_NAME"),
   };
 
-  // Ensures the Dashboard migration ledger (dashboard_sse_cursor) and the
-  // synthetic test source fixture table both exist before the server starts
-  // accepting connections - real DDL, the same runner CI/integration tests
-  // use, never ad hoc SQL against a table the server will actually query.
+  // Ensures the SHARED self-bot schema (`guilds` — Step 06's bot-presence
+  // fixture table), the Dashboard migration ledger (dashboard_sse_cursor,
+  // dashboard_user_guild_preferences, etc.), and the synthetic test source
+  // fixture table all exist before the server starts accepting connections -
+  // real DDL, the same runner CI/integration tests use, never ad hoc SQL
+  // against a table the server will actually query.
   const conn = await mysql.createConnection(migratorConfig);
   try {
+    const sharedResult = await runUp(conn, SHARED_MIGRATIONS_DIR, migratorConfig);
+    if (!sharedResult.ok) {
+      throw new Error(`E2E server: shared schema migration failed: ${sharedResult.message}`);
+    }
     const migrationResult = await runUp(conn, REAL_MIGRATIONS_DIR, migratorConfig);
     if (!migrationResult.ok) {
       throw new Error(`E2E server: Dashboard migration failed: ${migrationResult.message}`);
@@ -95,6 +119,18 @@ async function main(): Promise<void> {
   registerEventType({ type: TEST_EVENT_TYPE, schema: testEventDataSchema });
   const pool = mysql.createPool(dbConfig);
   registerSourceAdapter(createTestSourceAdapter(pool));
+
+  // Step 06 addition: a REAL local Discord OAuth test double (the exact
+  // same one apps/api/test/auth/*.test.ts and apps/api/test/guilds/routes.test.ts
+  // use — 31_TEST_STRATEGY.md's "a controlled local Discord OAuth HTTP test
+  // double is acceptable for deterministic protocol testing"), so
+  // `GET /api/users/me/guilds`/`GET /api/guilds/:guildId` have something
+  // real to call during the Playwright suite. `testDiscordConfig()`'s
+  // placeholder URLs (`http://127.0.0.1:0/...`) were sufficient for Steps
+  // 01-04's E2E specs (none of them ever make a live Discord call — the
+  // test-only login route below bypasses that entirely), but Step 06's
+  // multi-guild spec is the first E2E suite that needs one.
+  const discordDouble: DiscordTestDouble = await startDiscordTestDouble();
 
   const config: AppConfig = {
     port: Number(process.env["PORT"] ?? 8090),
@@ -109,11 +145,12 @@ async function main(): Promise<void> {
       maxQueuedFramesPerConnection: 200,
       maxRowsPerSourcePerTick: 500,
     },
-    // The Step-03 realtime E2E suite (apps/web/e2e/realtime.spec.ts) never
-    // exercises the OAuth/session flow itself - these are the same
-    // deliberately-fake, non-secret placeholders test/helpers/testAuthConfig.ts
-    // uses, reused here rather than duplicated.
-    discord: testDiscordConfig(),
+    discord: {
+      ...testDiscordConfig(),
+      authorizeBaseUrl: discordDouble.baseUrl,
+      tokenUrl: discordDouble.tokenUrl,
+      apiBaseUrl: discordDouble.apiBaseUrl,
+    },
     session: testSessionConfig(),
     superadmin: testSuperadminConfig(),
   };
@@ -136,34 +173,73 @@ async function main(): Promise<void> {
   // attributes production login sets. `apps/web/e2e/auth.setup.ts` is the
   // only consumer, once, to seed Playwright's shared `storageState` - it is
   // never called from `apps/web/src/` runtime code.
+  //
+  // Step 06 addition: optional `?discordUserId=` (defaults to the original
+  // Step-04 fixed ID, so every pre-existing spec keeps working unchanged)
+  // and `?guilds=<url-encoded JSON array>` query params. The encrypted
+  // access token this route stores is now always
+  // `discordDouble.state.currentAccessToken` itself (never a second,
+  // independent fake string) so a REAL `GET /api/users/me/guilds` call made
+  // by the browser afterward authenticates against the double correctly —
+  // this is what makes the multi-guild E2E suite's guild list/switcher
+  // genuinely real rather than a client-only fixture.
   const testOnlyDb = createKyselyClient(dbConfig);
-  fastify.get("/api/__test__/login", async (_request, reply) => {
-    const user = await upsertDashboardUser(testOnlyDb, {
-      discordUserId: "900000000001",
-      username: "E2ETestUser",
-      avatarHash: null,
-      encryptedAccessToken: encryptSecret("e2e-fake-access-token", config.session.tokenEncryptionKey),
-      encryptedRefreshToken: encryptSecret("e2e-fake-refresh-token", config.session.tokenEncryptionKey),
-      tokenExpiresAt: new Date(Date.now() + 3600_000),
-    });
-    const rawToken = generateSessionToken();
-    await createSession(testOnlyDb, rawToken, {
-      userId: user.id,
-      deviceLabel: null,
-      userAgent: null,
-      ipHash: null,
-      slidingTtlMs: config.session.slidingTtlMs,
-      absoluteTtlMs: config.session.absoluteTtlMs,
-    });
-    reply.setCookie(config.session.cookieName, rawToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: Math.floor(config.session.slidingTtlMs / 1000),
-    });
-    return { data: { success: true } };
-  });
+  fastify.get<{ Querystring: { discordUserId?: string; guilds?: string } }>(
+    "/api/__test__/login",
+    async (request, reply) => {
+      const discordUserId = request.query.discordUserId ?? "900000000001";
+      if (request.query.guilds) {
+        discordDouble.state.guilds = JSON.parse(request.query.guilds) as typeof discordDouble.state.guilds;
+      }
+      const user = await upsertDashboardUser(testOnlyDb, {
+        discordUserId,
+        username: "E2ETestUser",
+        avatarHash: null,
+        encryptedAccessToken: encryptSecret(
+          discordDouble.state.currentAccessToken,
+          config.session.tokenEncryptionKey,
+        ),
+        encryptedRefreshToken: encryptSecret("e2e-fake-refresh-token", config.session.tokenEncryptionKey),
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      });
+      const rawToken = generateSessionToken();
+      await createSession(testOnlyDb, rawToken, {
+        userId: user.id,
+        deviceLabel: null,
+        userAgent: null,
+        ipHash: null,
+        slidingTtlMs: config.session.slidingTtlMs,
+        absoluteTtlMs: config.session.absoluteTtlMs,
+      });
+      reply.setCookie(config.session.cookieName, rawToken, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: Math.floor(config.session.slidingTtlMs / 1000),
+      });
+      return { data: { success: true } };
+    },
+  );
+
+  // TEST-ONLY (this file only) — seeds/updates a row in the SHARED `guilds`
+  // table (bot-presence fixture: "has Bunny actually been added to this
+  // guild"). Mirrors `test/guilds/routes.test.ts`'s direct-pool-insert
+  // approach at the integration level, exposed here as a route because the
+  // E2E harness has no other in-process seam into the running server's own
+  // DB pool. `apps/web/e2e/multi-guild.spec.ts` is the only consumer.
+  fastify.get<{ Querystring: { guildId: string; displayName?: string; enabled?: string } }>(
+    "/api/__test__/seed-guild",
+    async (request, reply) => {
+      const { guildId, displayName, enabled } = request.query;
+      await pool.query(
+        "INSERT INTO guilds (guild_id, display_name_cache, enabled) VALUES (?, ?, ?) " +
+          "ON DUPLICATE KEY UPDATE display_name_cache = VALUES(display_name_cache), enabled = VALUES(enabled)",
+        [guildId, displayName ?? null, enabled === "false" ? 0 : 1],
+      );
+      return reply.send({ data: { success: true } });
+    },
+  );
   await fastify.listen({ port: config.port, host: "127.0.0.1" });
   console.log(`[e2e-server] listening on http://127.0.0.1:${config.port}`);
 

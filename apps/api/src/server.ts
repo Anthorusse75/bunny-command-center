@@ -27,6 +27,7 @@ import {
   type OAuthTransactionSweepHandle,
   type SessionSweepHandle,
 } from "./auth/index.js";
+import { buildGuildRoutes } from "./guilds/index.js";
 import type { Kysely } from "kysely";
 import type { DB } from "./db/codegen-types.js";
 
@@ -141,14 +142,26 @@ export async function buildServer(config = loadAppConfig()) {
   const oauthTransactionSweep = startOAuthTransactionSweep({ registry: oauthTransactionRegistry, logger });
   await fastify.register(buildAuthRoutes(db, config, oauthTransactionRegistry));
   const sessionSweep = startSessionSweep({ db, logger, intervalMs: config.session.sweepIntervalMs });
+  // ONE shared GuildAuthDeps instance (one GuildAuthCache) for both the
+  // real production guild routes below and the authTestHooks seam — a
+  // second independent instance would mean the 60s micro-cache Step 05
+  // documents is silently duplicated per-consumer, and a test invalidating
+  // via `authTestHooks.guildAuthDeps.cache` would never affect the real
+  // routes it's supposed to be testing.
+  const guildAuthDeps = createGuildAuthDeps(db, config);
   fastify.decorate("authTestHooks", {
     sessionSweep,
     oauthTransactionRegistry,
     oauthTransactionSweep,
     db,
-    guildAuthDeps: createGuildAuthDeps(db, config),
+    guildAuthDeps,
     requireAuth: buildRequireAuth(db, config),
   });
+
+  // Multi-guild model / navigation (IMPLEMENTATION/06_multi_guild_navigation.md):
+  // GET /api/users/me/guilds, POST .../favorite, PATCH .../home-visibility,
+  // GET /api/guilds/:guildId (the real production requireTier-guarded route).
+  await fastify.register(buildGuildRoutes(db, config, guildAuthDeps));
 
   await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db }));
   fastify.decorate("sseTestHooks", { hub, cursorRepo, poller });

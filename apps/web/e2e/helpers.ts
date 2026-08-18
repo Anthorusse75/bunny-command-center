@@ -6,8 +6,9 @@ import type { Page } from "@playwright/test";
 /** The shape of the locale catalogs, narrowed to the parts the browser specs assert on. */
 export interface Catalog {
   app: { title: string };
-  common: { status: Record<string, string> };
+  common: { status: Record<string, string>; nav: Record<string, string> };
   showcase: { title: string };
+  errors: { guildNotAccessible: { title: string }; forbiddenGuild: { title: string } };
 }
 
 const CATALOG_DIR = path.join(
