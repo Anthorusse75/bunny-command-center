@@ -148,6 +148,36 @@ test.describe("Multi-guild model — real browser (desktop)", () => {
     expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 
+  test('axe-core: the OPEN desktop guild switcher has no violations (regression coverage — this exact surface previously nested a real IconButton inside a role="menuitem" row, an axe "nested-interactive" defect no prior test caught because nothing scanned it OPEN)', async ({
+    page,
+  }) => {
+    const gA = guildId();
+    const gB = guildId();
+    await seedGuild(page, gA, "Alpha Guild");
+    await seedGuild(page, gB, "Bravo Guild");
+    await loginAs(page, freshDiscordUserId(), [
+      { id: gA, owner: false, permissions: "0", name: "Alpha Guild" },
+      { id: gB, owner: false, permissions: "0", name: "Bravo Guild" },
+    ]);
+    // 28_ACCESSIBILITY.md §Reduced motion clamps every transition to 0.01ms
+    // (createBccTheme.ts) — emulating it here (same pattern as
+    // accessibility.spec.ts's "reduced motion" suite) makes the Popover's
+    // entrance transition resolve before the next paint instead of leaving a
+    // real but transient low-opacity frame for axe-core to catch. Without
+    // this, `color-contrast` was flaky (~intermittent): a real render state
+    // that exists for a few animation frames, not a permanent app defect,
+    // but still worth eliminating rather than tolerating as test flakiness.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`/guild/${gA}`);
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+
+    await page.getByTestId("guild-switcher-trigger").click();
+    await expect(page.getByTestId(`guild-option-${gB}`)).toBeVisible();
+
+    const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
+    expect(results.violations.map((v) => v.id)).toEqual([]);
+  });
+
   for (const locale of ["fr", "en", "de"] as const) {
     test(`nav labels render in ${locale}`, async ({ page }) => {
       const gA = guildId();

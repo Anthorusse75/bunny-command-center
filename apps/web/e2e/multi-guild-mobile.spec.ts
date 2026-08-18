@@ -7,7 +7,10 @@
  * the full real-chain rationale; the helpers below are re-exported from it.
  */
 import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import { guildId, loginAs, seedGuild, freshDiscordUserId } from "./multiGuildHelpers.js";
+
+const WCAG_AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 test.describe("Multi-guild model — real browser (mobile)", () => {
   test("mobile guild picker: reachable from the bottom-nav Guild tab, switches guild and preserves the screen", async ({
@@ -69,5 +72,33 @@ test.describe("Multi-guild model — real browser (mobile)", () => {
     await expect(page.getByTestId("more-sheet")).toBeVisible();
     await expect(page.getByTestId("more-item-contributions")).toBeVisible();
     await expect(page.getByTestId("more-item-profile")).toBeVisible();
+  });
+
+  test("axe-core: the OPEN mobile guild picker sheet has no violations (regression coverage — this exact surface used to nest a real IconButton inside ListItemButton, both rendering interactive roles; caught only by a real-browser accessibility-tree snapshot, never by a test that scanned it closed)", async ({
+    page,
+  }) => {
+    const gA = guildId();
+    const gB = guildId();
+    await seedGuild(page, gA, "Alpha Guild");
+    await seedGuild(page, gB, "Bravo Guild");
+    await loginAs(page, freshDiscordUserId(), [
+      { id: gA, owner: false, permissions: "0", name: "Alpha Guild" },
+      { id: gB, owner: false, permissions: "0", name: "Bravo Guild" },
+    ]);
+    // See multi-guild.spec.ts's identical desktop axe test for why: the
+    // Drawer's entrance transition can otherwise leave a real but transient
+    // low-opacity frame for axe-core's `color-contrast` check to catch.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+
+    const guildsResponsePromise = page.waitForResponse((r) => r.url().includes("/api/users/me/guilds"));
+    await page.goto(`/guild/${gA}/leaderboard`);
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await guildsResponsePromise;
+
+    await page.getByTestId("bottom-nav-guild").click();
+    await expect(page.getByTestId(`guild-option-mobile-${gB}`)).toBeVisible();
+
+    const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
+    expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 });

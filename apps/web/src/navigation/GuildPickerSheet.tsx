@@ -10,7 +10,6 @@ import Box from "@mui/material/Box";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
 import ListItemButton from "@mui/material/ListItemButton";
-import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import ListSubheader from "@mui/material/ListSubheader";
 import Divider from "@mui/material/Divider";
@@ -143,35 +142,44 @@ function GuildRow({
   onToggleFavorite: (args: { guildId: string; isFavorite: boolean }) => void;
 }): React.JSX.Element {
   const { t } = useTranslation();
+  // MUI's OWN documented pattern for "a row with both a primary action and a
+  // separate icon action" — `secondaryAction` renders the IconButton as a
+  // SIBLING of ListItemButton within ListItem (absolutely positioned),
+  // never nested inside it. The previous structure nested a real
+  // `IconButton` (`<button>`) INSIDE `ListItemButton` (also a real
+  // `<button>` by MUI's default `ButtonBase` rendering) — invalid HTML
+  // (interactive content cannot nest), confirmed via a real-browser
+  // Playwright accessibility-tree snapshot showing a "button" inside
+  // another "button" for this exact row. Never caught by this repo's own
+  // axe-core coverage because no existing test scanned the picker sheet
+  // OPEN (see multi-guild-mobile.spec.ts's new axe assertion).
   return (
-    <ListItem disablePadding>
+    <ListItem
+      disablePadding
+      secondaryAction={
+        <IconButton
+          edge="end"
+          size="small"
+          onClick={() => onToggleFavorite({ guildId: guild.guildId, isFavorite: !guild.isFavorite })}
+          aria-label={
+            guild.isFavorite
+              ? t("a11y.nav.favoriteOn", { guildName: guild.name ?? guild.guildId })
+              : t("a11y.nav.favoriteOff", { guildName: guild.name ?? guild.guildId })
+          }
+        >
+          {guild.isFavorite ? (
+            <StarOutlined fontSize="small" color="warning" />
+          ) : (
+            <StarBorderOutlined fontSize="small" />
+          )}
+        </IconButton>
+      }
+    >
       <ListItemButton
         onClick={() => onSelect(guild.guildId)}
         data-testid={`guild-option-mobile-${guild.guildId}`}
-        sx={{ minHeight: 44 }}
+        sx={{ minHeight: 44, paddingInlineEnd: 6 }}
       >
-        <ListItemIcon
-          sx={{ minWidth: 40 }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleFavorite({ guildId: guild.guildId, isFavorite: !guild.isFavorite });
-          }}
-        >
-          <IconButton
-            size="small"
-            aria-label={
-              guild.isFavorite
-                ? t("a11y.nav.favoriteOn", { guildName: guild.name ?? guild.guildId })
-                : t("a11y.nav.favoriteOff", { guildName: guild.name ?? guild.guildId })
-            }
-          >
-            {guild.isFavorite ? (
-              <StarOutlined fontSize="small" color="warning" />
-            ) : (
-              <StarBorderOutlined fontSize="small" />
-            )}
-          </IconButton>
-        </ListItemIcon>
         <ListItemText primary={guild.name ?? guild.guildId} />
       </ListItemButton>
     </ListItem>

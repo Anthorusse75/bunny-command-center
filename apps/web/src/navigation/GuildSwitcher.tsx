@@ -5,11 +5,28 @@
 // comes straight from the real `GET /api/users/me/guilds` response
 // (`apps/api/src/guilds/guildsService.ts`'s `buildGuildList`), this
 // component only filters/renders it and never re-sorts.
+//
+// Built on `Popover` + a real `List` (not `Menu`/`MenuItem`) — DELIBERATE,
+// documented choice: each row needs TWO independent interactive actions
+// (select the guild, toggle favorite), and `MenuItem` renders as
+// `<li role="menuitem">` with `ButtonBase` semantics — nesting a real
+// `IconButton` inside it is a genuine nested-interactive-controls defect
+// (axe-core's "nested-interactive" rule; a real-browser Playwright
+// accessibility-tree snapshot caught the equivalent bug in the mobile
+// picker sheet, which used to nest the same way). `List`/`ListItem`'s
+// `secondaryAction` prop is MUI's own documented pattern for exactly this
+// row shape — the IconButton renders as a SIBLING of `ListItemButton`, both
+// children of `ListItem`, never nested — matching `GuildPickerSheet.tsx`'s
+// (mobile) row structure exactly, so desktop and mobile share one correct
+// pattern instead of two different accessibility postures.
 import { useId, useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Menu from "@mui/material/Menu";
-import MenuItem from "@mui/material/MenuItem";
+import Popover from "@mui/material/Popover";
+import List from "@mui/material/List";
+import ListItem from "@mui/material/ListItem";
+import ListItemButton from "@mui/material/ListItemButton";
+import ListItemText from "@mui/material/ListItemText";
 import ListSubheader from "@mui/material/ListSubheader";
 import Divider from "@mui/material/Divider";
 import TextField from "@mui/material/TextField";
@@ -41,7 +58,7 @@ export function GuildSwitcher(): React.JSX.Element {
 
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [query, setQuery] = useState("");
-  const menuId = useId();
+  const popoverId = useId();
 
   const guilds = data?.guilds ?? [];
   const currentGuildId = /^\/guild\/([^/]+)/.exec(location.pathname)?.[1];
@@ -53,14 +70,17 @@ export function GuildSwitcher(): React.JSX.Element {
 
   const open = Boolean(anchorEl);
 
-  function handleSelect(guildId: string): void {
+  function handleClose(): void {
     setAnchorEl(null);
     setQuery("");
+  }
+
+  function handleSelect(guildId: string): void {
+    handleClose();
     void navigate(buildGuildSwitchPath(location.pathname, guildId));
   }
 
-  function handleToggleFavorite(event: React.MouseEvent, guild: GuildListEntry): void {
-    event.stopPropagation();
+  function handleToggleFavorite(guild: GuildListEntry): void {
     favoriteMutation.mutate(
       { guildId: guild.guildId, isFavorite: !guild.isFavorite },
       {
@@ -86,9 +106,9 @@ export function GuildSwitcher(): React.JSX.Element {
       <Button
         data-testid="guild-switcher-trigger"
         onClick={(e) => setAnchorEl(e.currentTarget)}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
+        aria-controls={open ? popoverId : undefined}
         aria-label={t("a11y.nav.guildSwitcher")}
         startIcon={<GroupsOutlined fontSize="small" />}
         endIcon={<ExpandMoreOutlined fontSize="small" />}
@@ -103,60 +123,79 @@ export function GuildSwitcher(): React.JSX.Element {
           {current?.name ?? t("guild.switcher.title")}
         </Box>
       </Button>
-      <Menu
-        id={menuId}
+      <Popover
+        id={popoverId}
         anchorEl={anchorEl}
         open={open}
-        onClose={() => setAnchorEl(null)}
-        slotProps={{ list: { dense: true, sx: { minWidth: 280, maxWidth: 360 } } }}
+        onClose={handleClose}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        slotProps={{
+          paper: { sx: { minWidth: 280, maxWidth: 360, maxHeight: 480 } },
+        }}
       >
-        <Box sx={{ paddingInline: 2, paddingBlockEnd: 1 }}>
-          <TextField
-            autoFocus
-            size="small"
-            fullWidth
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("guild.switcher.searchPlaceholder")}
-            slotProps={{ htmlInput: { "aria-label": t("a11y.nav.guildSwitcherSearch") } }}
-            onKeyDown={(e) => e.stopPropagation()}
-          />
-        </Box>
-        {favorites.length === 0 && others.length === 0 ? (
-          <MenuItem disabled>{t("guild.switcher.empty")}</MenuItem>
-        ) : null}
-        {favorites.length > 0 ? <ListSubheader>{t("guild.switcher.favoritesHeading")}</ListSubheader> : null}
-        {favorites.map((g) => (
-          <GuildMenuRow
-            key={g.guildId}
-            guild={g}
-            onSelect={handleSelect}
-            onToggleFavorite={handleToggleFavorite}
-          />
-        ))}
-        {others.length > 0 ? <ListSubheader>{t("guild.switcher.allHeading")}</ListSubheader> : null}
-        {others.map((g) => (
-          <GuildMenuRow
-            key={g.guildId}
-            guild={g}
-            onSelect={handleSelect}
-            onToggleFavorite={handleToggleFavorite}
-          />
-        ))}
-        {data && data.canInviteBunnyAnywhere ? (
-          <Box>
-            <Divider />
-            <MenuItem
-              component="a"
-              href={data.inviteUrl}
-              data-testid="invite-bunny-menu-item"
-              aria-label={t("a11y.nav.inviteBunny")}
-            >
-              {t("common.inviteBunny.ctaCount", { count: data.inviteEligibleGuilds.length })}
-            </MenuItem>
+        <Box role="dialog" aria-label={t("guild.switcher.title")} sx={{ paddingBlock: 1 }}>
+          <Box sx={{ paddingInline: 2, paddingBlockEnd: 1 }}>
+            <TextField
+              autoFocus
+              size="small"
+              fullWidth
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("guild.switcher.searchPlaceholder")}
+              slotProps={{ htmlInput: { "aria-label": t("a11y.nav.guildSwitcherSearch") } }}
+            />
           </Box>
-        ) : null}
-      </Menu>
+          {favorites.length === 0 && others.length === 0 ? (
+            // Rendered OUTSIDE <List> — a <ul> must directly contain only
+            // real listitems (axe-core's "list" rule, same rationale as
+            // GuildPickerSheet.tsx's identical empty-state placement).
+            <Typography variant="body2" color="text.secondary" sx={{ paddingInline: 2 }}>
+              {t("guild.switcher.empty")}
+            </Typography>
+          ) : null}
+          <List dense sx={{ overflowY: "auto", maxHeight: 320 }}>
+            {favorites.length > 0 ? (
+              <ListSubheader>{t("guild.switcher.favoritesHeading")}</ListSubheader>
+            ) : null}
+            {favorites.map((g) => (
+              <GuildMenuRow
+                key={g.guildId}
+                guild={g}
+                onSelect={handleSelect}
+                onToggleFavorite={handleToggleFavorite}
+              />
+            ))}
+            {others.length > 0 ? <ListSubheader>{t("guild.switcher.allHeading")}</ListSubheader> : null}
+            {others.map((g) => (
+              <GuildMenuRow
+                key={g.guildId}
+                guild={g}
+                onSelect={handleSelect}
+                onToggleFavorite={handleToggleFavorite}
+              />
+            ))}
+          </List>
+          {data && data.canInviteBunnyAnywhere ? (
+            <Box>
+              <Divider />
+              <List dense disablePadding>
+                <ListItem disablePadding>
+                  <ListItemButton
+                    component="a"
+                    href={data.inviteUrl}
+                    data-testid="invite-bunny-menu-item"
+                    aria-label={t("a11y.nav.inviteBunny")}
+                  >
+                    <ListItemText
+                      primary={t("common.inviteBunny.ctaCount", { count: data.inviteEligibleGuilds.length })}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              </List>
+            </Box>
+          ) : null}
+        </Box>
+      </Popover>
     </Box>
   );
 }
@@ -168,31 +207,47 @@ function GuildMenuRow({
 }: {
   guild: GuildListEntry;
   onSelect: (guildId: string) => void;
-  onToggleFavorite: (event: React.MouseEvent, guild: GuildListEntry) => void;
+  onToggleFavorite: (guild: GuildListEntry) => void;
 }): React.JSX.Element {
   const { t } = useTranslation();
   return (
-    <MenuItem onClick={() => onSelect(guild.guildId)} data-testid={`guild-option-${guild.guildId}`}>
-      <IconButton
-        size="small"
-        edge="start"
-        onClick={(e) => onToggleFavorite(e, guild)}
-        aria-label={
-          guild.isFavorite
-            ? t("a11y.nav.favoriteOn", { guildName: guild.name ?? guild.guildId })
-            : t("a11y.nav.favoriteOff", { guildName: guild.name ?? guild.guildId })
-        }
-        sx={{ marginInlineEnd: 1 }}
+    <ListItem
+      disablePadding
+      secondaryAction={
+        <IconButton
+          edge="end"
+          size="small"
+          onClick={() => onToggleFavorite(guild)}
+          aria-label={
+            guild.isFavorite
+              ? t("a11y.nav.favoriteOn", { guildName: guild.name ?? guild.guildId })
+              : t("a11y.nav.favoriteOff", { guildName: guild.name ?? guild.guildId })
+          }
+        >
+          {guild.isFavorite ? (
+            <StarOutlined fontSize="small" color="warning" />
+          ) : (
+            <StarBorderOutlined fontSize="small" />
+          )}
+        </IconButton>
+      }
+    >
+      <ListItemButton
+        onClick={() => onSelect(guild.guildId)}
+        data-testid={`guild-option-${guild.guildId}`}
+        sx={{ paddingInlineEnd: 6 }}
       >
-        {guild.isFavorite ? (
-          <StarOutlined fontSize="small" color="warning" />
-        ) : (
-          <StarBorderOutlined fontSize="small" />
-        )}
-      </IconButton>
-      <Typography component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-        {guild.name ?? guild.guildId}
-      </Typography>
-    </MenuItem>
+        <ListItemText
+          primary={
+            <Typography
+              component="span"
+              sx={{ overflow: "hidden", textOverflow: "ellipsis", display: "block" }}
+            >
+              {guild.name ?? guild.guildId}
+            </Typography>
+          }
+        />
+      </ListItemButton>
+    </ListItem>
   );
 }
