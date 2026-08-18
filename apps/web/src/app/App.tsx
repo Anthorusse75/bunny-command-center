@@ -52,9 +52,18 @@ initGuildRealtimeWiring();
 // lives INSIDE the router, at `RootLayout`, so every screen gets the same
 // chrome without `App.tsx` needing to know about routing at all. The
 // showcase route itself was never part of `03_INFORMATION_ARCHITECTURE.md`'s
-// domain table and is dropped from the live app (still exercised directly by
-// `design-system/__tests__/*` component tests, which render it in
-// isolation, not through the router).
+// domain table (it's not a product feature, not linked from any nav chrome)
+// but is still deliberately reachable at the dedicated `/__showcase__` path
+// (`navigation/routes.tsx`) — CORRECTED (Step 06, Copilot review pass,
+// Finding 2): an earlier version of this comment claimed it was "dropped
+// from the live app," which was never accurate — it stays registered in the
+// real router precisely so the existing Step 01-03 real-browser Playwright
+// coverage (`theme-matrix`/`responsive`/`i18n`/`accessibility`.spec.ts) keeps
+// exercising the design-system primitives through a real route, not a
+// component rendered in isolation (see `navigation/routes.tsx`'s own comment
+// on this route for the full rationale). `design-system/__tests__/*`
+// component tests are a SEPARATE, additional layer that render individual
+// primitives directly, without the router at all.
 export function App(): React.JSX.Element {
   const [queryClient] = useState(createBccQueryClient);
   const [router] = useState(createAppRouter);

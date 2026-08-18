@@ -5,6 +5,7 @@
 // placeholder, see this step's own scope note).
 import { describe, expect, it } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import i18next from "../../i18n/index.js";
@@ -111,5 +112,62 @@ describe("HomeScreen — zero-guild marketing state (SCREENS/HOME.md)", () => {
       ).toBeVisible(),
     );
     expect(screen.queryByTestId("zero-guild-state")).not.toBeInTheDocument();
+  });
+});
+
+describe("HomeScreen — Copilot review Finding 5: a failed guild-list request must never render as the zero-guild success state", () => {
+  it("a 500 from GET /api/users/me/guilds renders the load-error state, never the zero-guild marketing CTA", async () => {
+    setFetchHandler((url) =>
+      url.includes("/api/users/me/guilds")
+        ? jsonResponse(500, { error_code: "SERVER_ERROR", message_key: "errors.server", parameters: {} })
+        : jsonResponse(404, {}),
+    );
+    renderHome();
+    await waitFor(() => expect(screen.getByTestId("home-load-error")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { level: 1, name: i18next.t("home.loadError.title") })).toBeVisible();
+    // Must NOT show the success-shaped zero-guild state — a real failure is
+    // not "you have zero guilds, here's how to get Bunny".
+    expect(screen.queryByTestId("zero-guild-state")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("invite-bunny-cta")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cannot-invite-message")).not.toBeInTheDocument();
+  });
+
+  it("a genuinely successful empty list still renders the real zero-guild state (not misdiagnosed as an error)", async () => {
+    setFetchHandler((url) =>
+      url.includes("/api/users/me/guilds")
+        ? jsonResponse(200, {
+            data: { guilds: [], inviteEligibleGuilds: [], canInviteBunnyAnywhere: false, inviteUrl: "x" },
+          })
+        : jsonResponse(404, {}),
+    );
+    renderHome();
+    await waitFor(() => expect(screen.getByTestId("zero-guild-state")).toBeInTheDocument());
+    expect(screen.queryByTestId("home-load-error")).not.toBeInTheDocument();
+  });
+
+  it("the retry button re-issues the request, and a subsequent success renders the real content", async () => {
+    let callCount = 0;
+    setFetchHandler((url) => {
+      if (!url.includes("/api/users/me/guilds")) return jsonResponse(404, {});
+      callCount += 1;
+      if (callCount === 1) {
+        return jsonResponse(500, {
+          error_code: "SERVER_ERROR",
+          message_key: "errors.server",
+          parameters: {},
+        });
+      }
+      return jsonResponse(200, {
+        data: { guilds: [], inviteEligibleGuilds: [], canInviteBunnyAnywhere: false, inviteUrl: "x" },
+      });
+    });
+    renderHome();
+    await waitFor(() => expect(screen.getByTestId("home-load-error")).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("home-load-error-retry"));
+
+    await waitFor(() => expect(screen.getByTestId("zero-guild-state")).toBeInTheDocument());
+    expect(callCount).toBe(2);
   });
 });

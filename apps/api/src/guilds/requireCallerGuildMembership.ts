@@ -33,6 +33,17 @@
  * convention, and reuses `tier.ts`'s exact `respondReauthRequired` for a
  * revoked/expired Discord grant (this gate also goes through
  * `DiscordTokenService.withFreshAccessToken`, via `getCallerGuildsForListing`).
+ *
+ * EXTERNAL REVIEW CORRECTION (Step 06, Copilot review pass, Finding 4): the
+ * `!isMember` branch below sent the 404 but did not explicitly `return`
+ * afterward, the one branch in this file inconsistent with its own 401 and
+ * `DiscordReauthRequiredError` branches (both of which already `return`).
+ * Made explicit for the same reason `validateGuildIdParam` was
+ * (`routes.ts`'s matching correction) — not because the rejected mutation
+ * was reproduced actually reaching `setFavorite`/`setHomeVisibility`
+ * (Fastify's own `reply.sent` check already prevents that, and this was
+ * already covered by this step's own passing non-member-rejection tests),
+ * but for explicitness and consistency with this file's other two branches.
  */
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
@@ -65,6 +76,7 @@ export function buildRequireCallerGuildMembership(
         await reply
           .code(404)
           .send({ error_code: "GUILD_NOT_FOUND", message_key: "errors.guilds.notFound", parameters: {} });
+        return;
       }
     } catch (err) {
       if (err instanceof DiscordReauthRequiredError) {

@@ -230,6 +230,10 @@
     "placeholder": {
       "title": "Start",
       "body": "Dein persönliches Dashboard kommt bald — Widgets für PremiumPlus, Beiträge und die Rangliste folgen in einem späteren Update."
+    },
+    "loadError": {
+      "title": "Deine Gilden konnten nicht geladen werden",
+      "body": "Beim Überprüfen deiner Server ist ein Fehler aufgetreten. Deine Daten sind sicher — versuche es in einem Moment erneut."
     }
   },
   "upload": {

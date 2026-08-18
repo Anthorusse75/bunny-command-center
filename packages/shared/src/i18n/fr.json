@@ -232,6 +232,10 @@
     "placeholder": {
       "title": "Accueil",
       "body": "Votre tableau de bord personnalisé arrive bientôt — les widgets PremiumPlus, contributions et classement seront ajoutés dans une prochaine mise à jour."
+    },
+    "loadError": {
+      "title": "Impossible de charger vos guildes",
+      "body": "Une erreur s'est produite lors de la vérification de vos serveurs. Vos données sont en sécurité — réessayez dans un instant."
     }
   },
   "upload": {

@@ -68,19 +68,32 @@ const DEFAULT_TEST_USER: AuthUser = {
  * via an ERROR path rather than the real empty-list success path. Callers
  * that need a non-empty guild list call `setFetchHandler` themselves,
  * layering on top of (or replacing) this default.
+ *
+ * EXTERNAL REVIEW CORRECTION (Step 06, Copilot review pass, Finding 1): the
+ * guild-list branch below used to match with `url.includes("/api/users/me/guilds")`
+ * — a substring test that ALSO matches
+ * `/api/users/me/guilds/:guildId/favorite` and
+ * `/api/users/me/guilds/:guildId/home-visibility`, silently swallowing
+ * those mutation requests and answering them with the guild-LIST response
+ * shape instead of ever reaching a test's own mock (or the generic 404
+ * fallback a test might be asserting against). Fixed to an exact path match
+ * (stripped of any query string) plus a GET-only method check, so it can
+ * only ever match the one real `GET /api/users/me/guilds` endpoint.
  */
 export function mockAuthenticatedSession(
   user: Partial<AuthUser> = {},
   options: { isSuperadmin?: boolean } = {},
 ): void {
   const fullUser = { ...DEFAULT_TEST_USER, ...user };
-  setFetchHandler((url) => {
+  setFetchHandler((url, init) => {
     if (url.includes("/api/auth/session")) {
       return jsonResponse(200, {
         data: { user: fullUser, sessionId: "test-session-id", isSuperadmin: options.isSuperadmin ?? false },
       });
     }
-    if (url.includes("/api/users/me/guilds")) {
+    const path = url.split("?")[0];
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (path === "/api/users/me/guilds" && method === "GET") {
       return jsonResponse(200, {
         data: {
           guilds: [],

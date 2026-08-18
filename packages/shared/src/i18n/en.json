@@ -230,6 +230,10 @@
     "placeholder": {
       "title": "Home",
       "body": "Your personalized dashboard is on its way — widgets for PremiumPlus, contributions, and the leaderboard arrive in a later update."
+    },
+    "loadError": {
+      "title": "We couldn't load your guilds",
+      "body": "Something went wrong while checking your servers. Your data is safe — try again in a moment."
     }
   },
   "upload": {

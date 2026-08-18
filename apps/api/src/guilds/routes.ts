@@ -40,6 +40,18 @@ import { buildRequireCallerGuildMembership } from "./requireCallerGuildMembershi
  * doesn't even look like a Discord ID" vs "you don't have access to this
  * real guild") stay distinct on purpose, matching this codebase's existing
  * 403-vs-404 authorization-code discipline.
+ *
+ * EXTERNAL REVIEW CORRECTION (Step 06, Copilot review pass, Finding 3): the
+ * `if (!result.success)` branch below sent the 400 but did not explicitly
+ * `return` afterward — Fastify's own dispatcher already checks `reply.sent`
+ * and does not invoke the next preHandler/the route handler once a reply
+ * has been sent (empirically proven by this exact route's own
+ * "malformed guildId -> 400" test passing before this change), but every
+ * OTHER preHandler/handler short-circuit in this codebase (the route
+ * handlers' own `if (reply.sent) return;` checks, `requireCallerGuildMembership.ts`'s
+ * 401/`DiscordReauthRequiredError` branches) makes this explicit rather than
+ * relying on that implicit framework behavior. Made explicit here for the
+ * same reason and for consistency, not because a live bug was reproduced.
  */
 async function validateGuildIdParam(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const result = guildIdParamSchema.safeParse(request.params);
@@ -49,6 +61,7 @@ async function validateGuildIdParam(request: FastifyRequest, reply: FastifyReply
       message_key: "errors.validation",
       parameters: {},
     });
+    return;
   }
 }
 

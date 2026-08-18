@@ -17,6 +17,43 @@ import { useTranslation } from "react-i18next";
 import { useGuildList } from "../features/guilds/index.js";
 import { PageHeading } from "../navigation/PageHeading.js";
 
+/**
+ * EXTERNAL REVIEW CORRECTION (Step 06, Copilot review pass, Finding 5 —
+ * product-significant): this screen previously only destructured
+ * `data`/`isPending` from `useGuildList()` — a FAILED request (network
+ * error, 500, etc.) also resolves to `isPending: false`/`data: undefined`
+ * once retries are exhausted, which fell straight through
+ * `hasUsableGuild = (data?.guilds.length ?? 0) > 0` into the SUCCESSFUL
+ * empty-list marketing state (`ZeroGuildState`) — presenting a genuine
+ * technical failure as "you have zero guilds, here's how to get Bunny."
+ * `SCREENS/ERROR_STATES.md`'s "500 — Unexpected server error" contract
+ * ("[Try again]", never a disguised success state) is now honored via the
+ * dedicated `HomeLoadErrorState` below.
+ */
+function HomeLoadErrorState({
+  onRetry,
+  isRetrying,
+}: {
+  onRetry: () => void;
+  isRetrying: boolean;
+}): React.JSX.Element {
+  const { t } = useTranslation();
+  return (
+    <Box
+      data-testid="home-load-error"
+      sx={{ maxWidth: 480, textAlign: "center", marginInline: "auto", paddingBlockStart: 8 }}
+    >
+      <PageHeading text={t("home.loadError.title")} />
+      <Typography variant="body1" color="text.secondary" sx={{ marginBlockEnd: 3 }}>
+        {t("home.loadError.body")}
+      </Typography>
+      <Button data-testid="home-load-error-retry" variant="contained" onClick={onRetry} disabled={isRetrying}>
+        {t("common.actions.retry")}
+      </Button>
+    </Box>
+  );
+}
+
 const FEATURE_KEYS = [
   "home.zeroGuild.features.upload",
   "home.zeroGuild.features.ocr",
@@ -29,7 +66,7 @@ const FEATURE_KEYS = [
 
 export function HomeScreen(): React.JSX.Element {
   const { t } = useTranslation();
-  const { data, isPending } = useGuildList();
+  const { data, isPending, isError, refetch, isRefetching } = useGuildList();
 
   if (isPending) {
     return (
@@ -37,6 +74,10 @@ export function HomeScreen(): React.JSX.Element {
         <CircularProgress aria-label={t("common.state.loading")} />
       </Box>
     );
+  }
+
+  if (isError) {
+    return <HomeLoadErrorState onRetry={() => void refetch()} isRetrying={isRefetching} />;
   }
 
   const hasUsableGuild = (data?.guilds.length ?? 0) > 0;

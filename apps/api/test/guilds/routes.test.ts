@@ -545,7 +545,7 @@ describe("Multi-guild model: GET /api/users/me/guilds, favorite/home-visibility,
   });
 
   it("EXTERNAL REVIEW FINDING 4: an arbitrary guildId that is syntactically NOT a Discord snowflake -> 400 validation error, distinct from the 404 a well-shaped-but-non-member guildId produces", async () => {
-    const { cookie } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
+    const { cookie, userId } = await makeSession([{ id: GUILD_A, owner: false, permissions: "0" }]);
     const notAGuildId = await fastify.inject({
       method: "POST",
       url: `/api/users/me/guilds/${encodeURIComponent("'; DROP TABLE guilds; --")}/favorite`,
@@ -561,6 +561,17 @@ describe("Multi-guild model: GET /api/users/me/guilds, favorite/home-visibility,
       payload: { homeVisible: true },
     });
     expect(tooShort.statusCode).toBe(400);
+
+    // COPILOT REVIEW FINDING 3: proves `validateGuildIdParam`'s 400
+    // genuinely short-circuits BEFORE the route handler ever runs — not
+    // just that the HTTP status happens to be 400. Neither rejected
+    // request created a row for this user at all (setFavorite/setHomeVisibility
+    // always upsert a row when they actually execute).
+    const rows = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT 1 FROM dashboard_user_guild_preferences WHERE user_id = ?",
+      [userId],
+    );
+    expect(rows[0]).toHaveLength(0);
   });
 
   it("EXTERNAL REVIEW FINDING 2/4: exact 19-digit Snowflake round-trips through a mutation route (never coerced to a JS number)", async () => {
