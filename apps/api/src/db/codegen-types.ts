@@ -319,6 +319,40 @@ export interface DashboardGuildPolicy {
   updated_at: Generated<Date>;
 }
 
+export interface DashboardNotificationDeliveries {
+  attempt_count: Generated<number>;
+  channel: string;
+  created_at: Generated<Date>;
+  last_attempted_at: Date | null;
+  notification_id: string;
+  operator_command_id: string | null;
+  state: string;
+  updated_at: Generated<Date>;
+}
+
+export interface DashboardNotificationPreferences {
+  created_at: Generated<Date>;
+  discord_dm_enabled: number;
+  event_type: string;
+  in_app_enabled: number;
+  updated_at: Generated<Date>;
+  user_id: number;
+}
+
+export interface DashboardNotifications {
+  created_at: Generated<Date>;
+  deeplink_path: string;
+  dismissed_at: Date | null;
+  event_type: string;
+  guild_id: string | null;
+  id: string;
+  message_key: string;
+  parameters_json: Json;
+  read_at: Date | null;
+  sse_seq: Generated<number>;
+  user_id: number;
+}
+
 export interface DashboardRoleAssignments {
   active_equivalent_key: Buffer | null;
   discord_user_id: number;
@@ -1581,6 +1615,9 @@ export interface DB {
   contributors: Contributors;
   dashboard_admin_overrides: DashboardAdminOverrides;
   dashboard_guild_policy: DashboardGuildPolicy;
+  dashboard_notification_deliveries: DashboardNotificationDeliveries;
+  dashboard_notification_preferences: DashboardNotificationPreferences;
+  dashboard_notifications: DashboardNotifications;
   dashboard_role_assignments: DashboardRoleAssignments;
   dashboard_schema_migrations: DashboardSchemaMigrations;
   dashboard_sessions: DashboardSessions;

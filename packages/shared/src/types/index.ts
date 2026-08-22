@@ -3,3 +3,4 @@
 // ADR-002). First real business-domain types added in Step 06 (multi-guild
 // model) — see `./guilds.js`.
 export * from "./guilds.js";
+export * from "./notifications.js";
