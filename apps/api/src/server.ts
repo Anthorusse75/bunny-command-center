@@ -28,6 +28,12 @@ import {
   type SessionSweepHandle,
 } from "./auth/index.js";
 import { buildGuildRoutes } from "./guilds/index.js";
+import {
+  buildNotificationRoutes,
+  registerNotificationsSse,
+  startNotificationReconciliationWatcher,
+  type NotificationReconciliationWatcherHandle,
+} from "./notifications/index.js";
 import type { Kysely } from "kysely";
 import type { DB } from "./db/codegen-types.js";
 
@@ -65,10 +71,16 @@ export interface AuthTestHooks {
   requireAuth: ReturnType<typeof buildRequireAuth>;
 }
 
+/** Same in-process-only test seam convention as `SseTestHooks`/`AuthTestHooks` above — lets an integration test force one reconciliation-watcher tick synchronously (`runOnceForTests()`) instead of waiting on the real poll interval. */
+export interface NotificationTestHooks {
+  watcher: NotificationReconciliationWatcherHandle;
+}
+
 declare module "fastify" {
   interface FastifyInstance {
     sseTestHooks?: SseTestHooks;
     authTestHooks?: AuthTestHooks;
+    notificationTestHooks?: NotificationTestHooks;
   }
 }
 
@@ -125,6 +137,14 @@ export async function buildServer(config = loadAppConfig()) {
   const db = createKyselyClient(config.db);
   const cursorRepo = createSseCursorRepo(db);
   const hub = new SseHub();
+  // Step 09 (Notifications): registers `notification.created` via Step 03's
+  // documented extension points (`registerEventType`/`registerSourceAdapter`)
+  // — this step's task brief: "registered at real server startup (not just
+  // defined in a file), do not build a second SSE endpoint/mechanism". Must
+  // run before the poller's first tick (which `startSsePoller` below
+  // schedules `config.sse.pollIntervalMs` in the future, never immediately),
+  // so registering here is safely ahead of it.
+  registerNotificationsSse(db);
   const poller = startSsePoller({
     hub,
     cursorRepo,
@@ -163,6 +183,22 @@ export async function buildServer(config = loadAppConfig()) {
   // GET /api/guilds/:guildId (the real production requireTier-guarded route).
   await fastify.register(buildGuildRoutes(db, config, guildAuthDeps));
 
+  // Step 09 (Notifications): GET/PUT /api/notifications*, the real
+  // production `createNotification()`-backed routes (24_API_CONTRACTS.md
+  // §Notifications). The reconciliation watcher (correction #2 — observation
+  // -only, maps `operator_commands.state`/`last_error_code` onto
+  // `dashboard_notification_deliveries.state`, never re-enqueues) reuses the
+  // exact same poll-interval/scheduling convention as the SSE poller above.
+  await fastify.register(buildNotificationRoutes(db, config));
+  const notificationReconciliationWatcher: NotificationReconciliationWatcherHandle =
+    startNotificationReconciliationWatcher({
+      db,
+      logger,
+      pollIntervalMs: config.sse.pollIntervalMs,
+      maxRowsPerTick: config.sse.maxRowsPerSourcePerTick,
+    });
+  fastify.decorate("notificationTestHooks", { watcher: notificationReconciliationWatcher });
+
   await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db }));
   fastify.decorate("sseTestHooks", { hub, cursorRepo, poller });
 
@@ -178,6 +214,7 @@ export async function buildServer(config = loadAppConfig()) {
   // empirically; see the Step-03 HANDOVER's Deviations/lessons section).
   fastify.addHook("preClose", async () => {
     poller.stop();
+    notificationReconciliationWatcher.stop();
     sessionSweep.stop();
     oauthTransactionSweep.stop();
     hub.closeAll("server_shutting_down");

@@ -137,3 +137,29 @@ describe("apps/api config: PLATFORM_SUPERADMIN_DISCORD_ID validation (Step 05, A
     });
   }
 });
+
+describe("apps/api config: DASHBOARD_PUBLIC_URL (Step 09) — optional, never a startup failure", () => {
+  it("is absent from AppConfig entirely when unset (exactOptionalPropertyTypes — never publicUrl: undefined)", () => {
+    const config = loadAppConfig(REQUIRED_DB_ENV);
+    expect("publicUrl" in config).toBe(false);
+    expect(config.publicUrl).toBeUndefined();
+  });
+
+  it("accepts a well-formed absolute http(s) URL and strips a trailing slash", () => {
+    const config = loadAppConfig({ ...REQUIRED_DB_ENV, DASHBOARD_PUBLIC_URL: "https://dashboard.example.com/" });
+    expect(config.publicUrl).toBe("https://dashboard.example.com");
+  });
+
+  it("keeps a URL with no trailing slash unchanged", () => {
+    const config = loadAppConfig({ ...REQUIRED_DB_ENV, DASHBOARD_PUBLIC_URL: "http://localhost:5173" });
+    expect(config.publicUrl).toBe("http://localhost:5173");
+  });
+
+  const malformedPublicUrls = ["not a url", "ftp://example.com", "", "   "];
+  for (const raw of malformedPublicUrls) {
+    it(`degrades to undefined (never throws) for a malformed value: ${JSON.stringify(raw)}`, () => {
+      const config = loadAppConfig({ ...REQUIRED_DB_ENV, DASHBOARD_PUBLIC_URL: raw });
+      expect(config.publicUrl).toBeUndefined();
+    });
+  }
+});

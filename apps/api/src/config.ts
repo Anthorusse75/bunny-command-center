@@ -73,6 +73,32 @@ export interface AppConfig {
   discord: DiscordOAuthConfig;
   session: SessionConfig;
   superadmin: SuperadminConfig;
+  /**
+   * Step 09 (Notifications): the absolute base URL of THIS deployment of
+   * the Dashboard, used to build the Discord-DM footer's
+   * "manage your preferences" deep link
+   * (18_NOTIFICATIONS_AND_DISCORD_DM.md §First-DM footer). Deliberately the
+   * SAME env var name (`DASHBOARD_PUBLIC_URL`) Bunny OCR's own Reminder
+   * Bulk-Upload CTA already reads (`02_NEW_BOT_OCR/cogs/y_tasks.py`'s
+   * `_dashboard_public_url()`) — one shared convention across both services,
+   * per this step's task brief ("using the project's existing configured
+   * Dashboard public base URL env var (never hardcode a hostname)").
+   * OPTIONAL, deliberately mirroring Bunny's own `_dashboard_public_url()`
+   * graceful-degradation contract: unset/malformed -> `undefined`, and the
+   * DM footer is omitted entirely rather than shipping a broken link
+   * (`apps/api/src/notifications/service.ts`) — never a startup failure,
+   * since a Dashboard instance can legitimately run before its own public
+   * URL is finalized (mirrors Bunny's own "never a hard failure of the
+   * whole reminder send over this one optional addition"). Deliberately an
+   * OPTIONAL property (not `string | undefined`, always-present) — under
+   * this project's `exactOptionalPropertyTypes: true`, that lets every
+   * EXISTING test that builds an `AppConfig` object literal directly
+   * (`apps/api/test/**`, none of which know about this new field) keep
+   * compiling unchanged by simply omitting the key, rather than requiring a
+   * mechanical edit to every one of those files for a property their tests
+   * never exercise.
+   */
+  publicUrl?: string;
 }
 
 /**
@@ -176,7 +202,31 @@ function requiredSnowflakeEnv(env: EnvSource, name: string): string {
   return value;
 }
 
+/**
+ * Mirrors Bunny's own `_dashboard_public_url()` validation exactly
+ * (`02_NEW_BOT_OCR/cogs/y_tasks.py:104-142`): a present-but-malformed value
+ * degrades to `undefined` (never throws — see `AppConfig.publicUrl`'s own
+ * doc comment for why this must never be a startup failure).
+ */
+function optionalPublicUrlEnv(env: EnvSource, name: string): string | undefined {
+  const raw = env[name]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    // No trailing slash, so callers can safely do `${publicUrl}/some/path`.
+    return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+  } catch {
+    return undefined;
+  }
+}
+
 export function loadAppConfig(env: EnvSource = process.env): AppConfig {
+  const publicUrl = optionalPublicUrlEnv(env, "DASHBOARD_PUBLIC_URL");
   return {
     port: Number(env.PORT ?? 8080),
     logLevel: env.LOG_LEVEL ?? "info",
@@ -220,5 +270,6 @@ export function loadAppConfig(env: EnvSource = process.env): AppConfig {
       // already-validated from `config.superadmin.discordUserId`.
       discordUserId: requiredSnowflakeEnv(env, "PLATFORM_SUPERADMIN_DISCORD_ID"),
     },
+    ...(publicUrl !== undefined ? { publicUrl } : {}),
   };
 }
