@@ -33,6 +33,8 @@ interface NotificationCreatedPayload {
   notificationId: string;
   messageKey: string;
   parameters: Record<string, unknown>;
+  /** External-review item 2 — `false` for a durable row whose IN_APP delivery is SKIPPED_PREFERENCE; must never be announced. */
+  inAppVisible: boolean;
 }
 
 export function NotificationsScreen(): React.JSX.Element {
@@ -55,7 +57,19 @@ export function NotificationsScreen(): React.JSX.Element {
   // `renderMessage` reads (`messageKey`+`parameters` — no server round-trip
   // needed for the announcement string).
   useRealtimeChannel<NotificationCreatedPayload>("notification.created", (payload) => {
-    setLiveAnnouncement(t("notifications.center.newAnnouncement", { message: t(payload.messageKey, payload.parameters) }));
+    // External-review item 2: a durable row whose IN_APP delivery was
+    // SKIPPED_PREFERENCE (recipient turned in-app off for this event type)
+    // still wakes the client via SSE (the server-side cursor must advance
+    // past it regardless), but must never surface here — no announcement,
+    // and (via the SAME query invalidation this handler's sibling
+    // registration in realtimeWiring.ts always triggers) the list/badge
+    // queries themselves already exclude it server-side.
+    if (!payload.inAppVisible) {
+      return;
+    }
+    setLiveAnnouncement(
+      t("notifications.center.newAnnouncement", { message: t(payload.messageKey, payload.parameters) }),
+    );
   });
 
   const items = data?.pages.flatMap((page) => page.items) ?? [];
@@ -97,7 +111,13 @@ export function NotificationsScreen(): React.JSX.Element {
 
   return (
     <Box sx={{ display: "flex", gap: 4, alignItems: "flex-start" }}>
-      <div aria-live="polite" role="status" className="sr-only" style={visuallyHidden}>
+      <div
+        aria-live="polite"
+        role="status"
+        className="sr-only"
+        data-testid="notification-live-announcement"
+        style={visuallyHidden}
+      >
         {liveAnnouncement}
       </div>
       <Box sx={{ flex: "1 1 480px", minWidth: 0, maxWidth: 640 }}>
@@ -137,10 +157,9 @@ export function NotificationsScreen(): React.JSX.Element {
                   <ListItemButton
                     selected={item.id === selectedId}
                     onClick={() => openNotification(item)}
-                    aria-label={t(
-                      unread ? "a11y.notifications.unreadItem" : "a11y.notifications.readItem",
-                      { message: item.message },
-                    )}
+                    aria-label={t(unread ? "a11y.notifications.unreadItem" : "a11y.notifications.readItem", {
+                      message: item.message,
+                    })}
                   >
                     {/* Unread state: dot + bold text together, never color alone
                         (28_ACCESSIBILITY.md). */}
@@ -169,7 +188,11 @@ export function NotificationsScreen(): React.JSX.Element {
         )}
 
         {hasNextPage ? (
-          <Button onClick={() => void fetchNextPage()} disabled={isFetchingNextPage} sx={{ marginBlockStart: 2 }}>
+          <Button
+            onClick={() => void fetchNextPage()}
+            disabled={isFetchingNextPage}
+            sx={{ marginBlockStart: 2 }}
+          >
             {t("common.actions.more")}
           </Button>
         ) : null}
@@ -182,7 +205,13 @@ export function NotificationsScreen(): React.JSX.Element {
       {isDesktop ? (
         <Box
           data-testid="notification-preview-pane"
-          sx={{ flex: "1 1 320px", minWidth: 280, borderInlineStart: 1, borderColor: "divider", paddingInlineStart: 3 }}
+          sx={{
+            flex: "1 1 320px",
+            minWidth: 280,
+            borderInlineStart: 1,
+            borderColor: "divider",
+            paddingInlineStart: 3,
+          }}
         >
           {selected ? (
             <>

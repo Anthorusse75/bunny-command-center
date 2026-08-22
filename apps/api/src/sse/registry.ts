@@ -77,6 +77,29 @@ export function listSourceAdapters(): SourceAdapter[] {
   return [...sourceAdaptersByTable.values()];
 }
 
+/**
+ * Removes ONE specific adapter (by `sourceTable`), a no-op if it isn't
+ * currently registered. External-review item 3's `health.test.ts`
+ * investigation: a caller that re-registers the SAME logical adapter with a
+ * NEW underlying resource (e.g. `notifications/sseAdapter.ts`'s
+ * `registerNotificationsSse`, called again from a SECOND `buildServer()` in
+ * the same process with a freshly-created `db`) needs a way to retire the
+ * OLD registration first — without this, a module-level "already
+ * registered, skip" guard silently leaves the poller querying a
+ * possibly-already-`destroy()`-ed pool from a PREVIOUS server instance
+ * forever. Deliberately narrower than `resetRegistryForTests` (which clears
+ * everything, event types included, and is documented test-only) — this
+ * removes exactly one adapter and is safe to call from non-test code.
+ */
+export function unregisterSourceAdapter(sourceTable: string): void {
+  const adapter = sourceAdaptersByTable.get(sourceTable);
+  if (!adapter) {
+    return;
+  }
+  sourceAdaptersByTable.delete(sourceTable);
+  sourceIndexesInUse.delete(adapter.sourceIndex);
+}
+
 export function getSourceAdapterByIndex(sourceIndex: number): SourceAdapter | undefined {
   const table = sourceIndexesInUse.get(sourceIndex);
   return table ? sourceAdaptersByTable.get(table) : undefined;

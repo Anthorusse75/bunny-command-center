@@ -41,6 +41,7 @@ import {
   ensureDeliveryRow,
   ensureNotificationRow,
   ensureSendDmOperatorCommand,
+  getDiscordDmDeliveryOperatorCommandId,
   resolvePreference,
   setDeliveryOperatorCommandId,
   updateDiscordDmDeliveryState,
@@ -111,6 +112,24 @@ export async function createNotification(
     if (preference.discordDmEnabled) {
       await ensureDeliveryRow(trx, { notificationId: id, channel: "DISCORD_DM", state: "PENDING" });
 
+      // External-review item 6: if a PRIOR call for this SAME notification
+      // id already bound a real operator_commands row, never build/enqueue
+      // again — the composite UNIQUE(requested_by_discord_id, target_service,
+      // idempotency_key) constraint alone does NOT catch a retry whose
+      // `triggeredBy` actor differs from the first call's (a different
+      // requested_by_discord_id does not collide with it), which would
+      // otherwise insert a genuine second operator_commands row and send a
+      // second DM. The first durable association wins; this retry is a
+      // structural no-op — never mutates the historical actor.
+      const alreadyBoundCommandId = await getDiscordDmDeliveryOperatorCommandId(trx, id);
+      if (alreadyBoundCommandId !== null) {
+        return {
+          notificationId: id,
+          inAppEnabled: preference.inAppEnabled,
+          discordDmEnabled: preference.discordDmEnabled,
+        };
+      }
+
       // ADR-013 / this step's own scope note: "A failed DM must NEVER lose
       // the underlying notification or block any other part of the
       // system." That invariant applies to a failure IN THIS BUILD/ENQUEUE
@@ -128,7 +147,9 @@ export async function createNotification(
         const locale = isSupportedLocale(recipient.locale) ? recipient.locale : FALLBACK_LOCALE;
         const content = renderMessage(locale, def.messageKey, params.parameters);
         const footer = config.publicUrl
-          ? renderMessage(locale, NOTIFICATION_DM_FOOTER_KEY, { url: `${config.publicUrl}/notifications/preferences` })
+          ? renderMessage(locale, NOTIFICATION_DM_FOOTER_KEY, {
+              url: `${config.publicUrl}/notifications/preferences`,
+            })
           : "";
         const payloadJsonText = buildSendDmPayloadJsonText({
           discordUserId: recipient.discord_user_id,
@@ -147,7 +168,10 @@ export async function createNotification(
           requestedByRole: requestedBy.role,
           payloadJsonText,
         });
-        await setDeliveryOperatorCommandId(trx, { notificationId: id, operatorCommandId: authoritativeCommandId });
+        await setDeliveryOperatorCommandId(trx, {
+          notificationId: id,
+          operatorCommandId: authoritativeCommandId,
+        });
       } catch (err) {
         logger.error(
           { err, notificationId: id },
@@ -156,9 +180,17 @@ export async function createNotification(
         await updateDiscordDmDeliveryState(trx, id, "FAILED");
       }
     } else {
-      await ensureDeliveryRow(trx, { notificationId: id, channel: "DISCORD_DM", state: "SKIPPED_PREFERENCE" });
+      await ensureDeliveryRow(trx, {
+        notificationId: id,
+        channel: "DISCORD_DM",
+        state: "SKIPPED_PREFERENCE",
+      });
     }
 
-    return { notificationId: id, inAppEnabled: preference.inAppEnabled, discordDmEnabled: preference.discordDmEnabled };
+    return {
+      notificationId: id,
+      inAppEnabled: preference.inAppEnabled,
+      discordDmEnabled: preference.discordDmEnabled,
+    };
   });
 }

@@ -10,13 +10,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Kysely } from "kysely";
 import { buildServer } from "../../src/server.js";
 import type { AppConfig } from "../../src/config.js";
+import type { DB } from "../../src/db/codegen-types.js";
 import { runUp } from "../../migrations/runner.js";
 import type { MigratorDbConfig } from "../../migrations/config.js";
 import { upsertDashboardUser } from "../../src/auth/userRepo.js";
 import { createNotification } from "../../src/notifications/service.js";
 import { generateNotificationId } from "../../src/notifications/id.js";
+import { NotificationIdentityConflictError } from "../../src/notifications/repo.js";
+import { startNotificationReconciliationWatcher } from "../../src/notifications/reconciliationWatcher.js";
 import { testDiscordConfig, testSessionConfig, testSuperadminConfig } from "../helpers/testAuthConfig.js";
 
 const ROOT_CONFIG = {
@@ -61,7 +65,12 @@ describe("createNotification() + reconciliation watcher — real MySQL", () => {
       logLevel: "silent",
       appVersion: "test",
       db: dbConfig,
-      sse: { heartbeatSeconds: 30, pollIntervalMs: 60_000, maxQueuedFramesPerConnection: 200, maxRowsPerSourcePerTick: 500 },
+      sse: {
+        heartbeatSeconds: 30,
+        pollIntervalMs: 60_000,
+        maxQueuedFramesPerConnection: 200,
+        maxRowsPerSourcePerTick: 500,
+      },
       discord: testDiscordConfig(),
       session: testSessionConfig(),
       superadmin: testSuperadminConfig(),
@@ -246,9 +255,10 @@ describe("createNotification() + reconciliation watcher — real MySQL", () => {
       deeplinkPath: "/contributions",
     });
     const dmBefore = await deliveryRow(result.notificationId, "DISCORD_DM");
-    await pool.query("UPDATE operator_commands SET state = 'FAILED', last_error_code = 'DISCORD_FORBIDDEN' WHERE command_id = ?", [
-      dmBefore!.operator_command_id,
-    ]);
+    await pool.query(
+      "UPDATE operator_commands SET state = 'FAILED', last_error_code = 'DISCORD_FORBIDDEN' WHERE command_id = ?",
+      [dmBefore!.operator_command_id],
+    );
 
     await fastify.notificationTestHooks!.watcher.runOnceForTests();
 
@@ -328,7 +338,12 @@ describe("createNotification() + reconciliation watcher — real MySQL", () => {
     // RANKING_TOP3_CHANGE defaults DM OFF — flip the preference ON directly (same write path the PUT route uses).
     await fastify
       .authTestHooks!.db.insertInto("dashboard_notification_preferences")
-      .values({ user_id: user.id, event_type: "RANKING_TOP3_CHANGE", in_app_enabled: 1, discord_dm_enabled: 1 })
+      .values({
+        user_id: user.id,
+        event_type: "RANKING_TOP3_CHANGE",
+        in_app_enabled: 1,
+        discord_dm_enabled: 1,
+      })
       .execute();
 
     const beforeDelivery = await deliveryRow(before.notificationId, "DISCORD_DM");
@@ -342,5 +357,287 @@ describe("createNotification() + reconciliation watcher — real MySQL", () => {
     });
     const afterDelivery = await deliveryRow(after.notificationId, "DISCORD_DM");
     expect(afterDelivery!.state).toBe("PENDING");
+  });
+
+  // ==========================================================================
+  // External-review item 6 — idempotency: retry with a DIFFERENT actor, and
+  // fail-closed conflict detection for a retry with genuinely different
+  // content under the same reused notificationId.
+  // ==========================================================================
+
+  it("retrying createNotification() with the SAME notificationId but a DIFFERENT triggeredBy actor (A then B) creates exactly ONE notification, ONE DISCORD_DM delivery, and ONE operator_commands row — the FIRST actor association is never mutated", async () => {
+    const user = await makeUser();
+    const notificationId = generateNotificationId();
+    const actorA = "111111111111111111";
+    const actorB = "222222222222222222";
+    const baseParams = {
+      notificationId,
+      userId: user.id,
+      eventType: "URGENT_GUILD_NEED" as const,
+      parameters: { guildName: "Charlie" },
+      deeplinkPath: "/guild/z",
+    };
+
+    const first = await createNotification(fastify.authTestHooks!.db, config, {
+      ...baseParams,
+      triggeredBy: { discordUserId: actorA },
+    });
+    const second = await createNotification(fastify.authTestHooks!.db, config, {
+      ...baseParams,
+      triggeredBy: { discordUserId: actorB },
+    });
+    expect(first.notificationId).toBe(second.notificationId);
+
+    // Exactly one notification row.
+    const [notifRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT COUNT(*) as c FROM dashboard_notifications WHERE id = ?",
+      [notificationId],
+    );
+    expect(Number(notifRows[0]!.c)).toBe(1);
+
+    // Exactly one DISCORD_DM delivery row (PK is (notification_id, channel) — structurally at most one, reconfirmed here).
+    const [deliveryRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT COUNT(*) as c FROM dashboard_notification_deliveries WHERE notification_id = ? AND channel = 'DISCORD_DM'",
+      [notificationId],
+    );
+    expect(Number(deliveryRows[0]!.c)).toBe(1);
+
+    // Exactly ONE operator_commands row for this idempotency_key, REGARDLESS
+    // of actor — this is the load-bearing assertion: the composite
+    // UNIQUE(requested_by_discord_id, target_service, idempotency_key)
+    // constraint alone would NOT have caught this (actorB's insert has a
+    // DIFFERENT requested_by_discord_id, so it would not collide) — the
+    // "already bound" check in service.ts is what actually prevents the
+    // second row.
+    const [allCommandRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT command_id, CAST(requested_by_discord_id AS CHAR) as requested_by_discord_id FROM operator_commands WHERE idempotency_key = ?",
+      [notificationId],
+    );
+    expect(allCommandRows).toHaveLength(1);
+    // The original actor (A) — never silently mutated to B.
+    expect(allCommandRows[0]!.requested_by_discord_id).toBe(actorA);
+
+    const dm = await deliveryRow(notificationId, "DISCORD_DM");
+    expect(dm!.operator_command_id).toBe(allCommandRows[0]!.command_id);
+  });
+
+  it("retrying createNotification() with the SAME notificationId but a DIFFERENT eventType is rejected fail-closed (NotificationIdentityConflictError), never silently duplicated or overwritten", async () => {
+    const user = await makeUser();
+    const notificationId = generateNotificationId();
+    await createNotification(fastify.authTestHooks!.db, config, {
+      notificationId,
+      userId: user.id,
+      eventType: "UPLOAD_COMPLETED",
+      parameters: { count: 1 },
+      deeplinkPath: "/contributions",
+    });
+
+    await expect(
+      createNotification(fastify.authTestHooks!.db, config, {
+        notificationId,
+        userId: user.id,
+        eventType: "UPLOAD_PROBLEM", // different eventType -> different messageKey
+        parameters: { count: 1 },
+        deeplinkPath: "/upload",
+      }),
+    ).rejects.toThrow(NotificationIdentityConflictError);
+
+    // The ORIGINAL row's identity is untouched.
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT event_type FROM dashboard_notifications WHERE id = ?",
+      [notificationId],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.event_type).toBe("UPLOAD_COMPLETED");
+  });
+
+  it("retrying createNotification() with the SAME notificationId but DIFFERENT parameters is rejected fail-closed", async () => {
+    const user = await makeUser();
+    const notificationId = generateNotificationId();
+    await createNotification(fastify.authTestHooks!.db, config, {
+      notificationId,
+      userId: user.id,
+      eventType: "UPLOAD_COMPLETED",
+      parameters: { count: 1 },
+      deeplinkPath: "/contributions",
+    });
+
+    await expect(
+      createNotification(fastify.authTestHooks!.db, config, {
+        notificationId,
+        userId: user.id,
+        eventType: "UPLOAD_COMPLETED",
+        parameters: { count: 99 }, // different parameters, same everything else
+        deeplinkPath: "/contributions",
+      }),
+    ).rejects.toThrow(NotificationIdentityConflictError);
+  });
+
+  it("retrying createNotification() with the SAME notificationId but a DIFFERENT recipient userId is rejected fail-closed", async () => {
+    const userA = await makeUser();
+    const userB = await makeUser();
+    const notificationId = generateNotificationId();
+    await createNotification(fastify.authTestHooks!.db, config, {
+      notificationId,
+      userId: userA.id,
+      eventType: "UPLOAD_COMPLETED",
+      parameters: { count: 1 },
+      deeplinkPath: "/contributions",
+    });
+
+    await expect(
+      createNotification(fastify.authTestHooks!.db, config, {
+        notificationId,
+        userId: userB.id, // different recipient — this aliases a different logical notification
+        eventType: "UPLOAD_COMPLETED",
+        parameters: { count: 1 },
+        deeplinkPath: "/contributions",
+      }),
+    ).rejects.toThrow(NotificationIdentityConflictError);
+
+    // userB never got a notification created under this id.
+    const bList = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT id FROM dashboard_notifications WHERE id = ? AND user_id = ?",
+      [notificationId, userB.id],
+    );
+    expect(bList[0]).toHaveLength(0);
+  });
+
+  it("a genuine retry with the SAME identity (same userId/eventType/parameters) is still a pure no-op — never a false-positive conflict", async () => {
+    const user = await makeUser();
+    const notificationId = generateNotificationId();
+    const params = {
+      notificationId,
+      userId: user.id,
+      eventType: "UPLOAD_COMPLETED" as const,
+      parameters: { count: 7, nested: { a: 1, b: [1, 2, 3] } },
+      deeplinkPath: "/contributions",
+    };
+    await createNotification(fastify.authTestHooks!.db, config, params);
+    // Same object, and a structurally-identical-but-differently-key-ordered
+    // copy — both must be accepted (canonical comparison, not raw string
+    // equality of a JSON.stringify with unstable key order).
+    await expect(createNotification(fastify.authTestHooks!.db, config, params)).resolves.toBeDefined();
+    await expect(
+      createNotification(fastify.authTestHooks!.db, config, {
+        ...params,
+        parameters: { nested: { b: [1, 2, 3], a: 1 }, count: 7 },
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  // ==========================================================================
+  // External-review item 7 — reconciliation watcher re-audit: idempotent
+  // repeated passes, and a transient scan failure leaves PENDING untouched.
+  // ==========================================================================
+
+  it("the watcher reconciling an already-terminal (SENT) delivery twice in a row is idempotent — no double-update", async () => {
+    const user = await makeUser();
+    const result = await createNotification(fastify.authTestHooks!.db, config, {
+      userId: user.id,
+      eventType: "UPLOAD_COMPLETED",
+      parameters: { count: 1 },
+      deeplinkPath: "/contributions",
+    });
+    const dmBefore = await deliveryRow(result.notificationId, "DISCORD_DM");
+    await pool.query("UPDATE operator_commands SET state = 'SUCCEEDED' WHERE command_id = ?", [
+      dmBefore!.operator_command_id,
+    ]);
+
+    await fastify.notificationTestHooks!.watcher.runOnceForTests();
+    const afterFirst = await deliveryRow(result.notificationId, "DISCORD_DM");
+    expect(afterFirst!.state).toBe("SENT");
+    expect(afterFirst!.attempt_count).toBe(1);
+
+    // A SECOND pass must not re-scan this row at all (findPendingDiscordDmDeliveries
+    // only ever selects state='PENDING' rows) — attempt_count/timestamps stay
+    // exactly as the first pass left them.
+    await fastify.notificationTestHooks!.watcher.runOnceForTests();
+    const afterSecond = await deliveryRow(result.notificationId, "DISCORD_DM");
+    expect(afterSecond!.state).toBe("SENT");
+    expect(afterSecond!.attempt_count).toBe(1);
+    expect(new Date(afterSecond!.last_attempted_at as string).getTime()).toBe(
+      new Date(afterFirst!.last_attempted_at as string).getTime(),
+    );
+  });
+
+  it("a transient DB read failure during the watcher's scan leaves an in-flight delivery PENDING and untouched (never flipped to FAILED or lost)", async () => {
+    const user = await makeUser();
+    const result = await createNotification(fastify.authTestHooks!.db, config, {
+      userId: user.id,
+      eventType: "UPLOAD_COMPLETED",
+      parameters: { count: 1 },
+      deeplinkPath: "/contributions",
+    });
+    const before = await deliveryRow(result.notificationId, "DISCORD_DM");
+    expect(before!.state).toBe("PENDING");
+
+    // A genuinely broken Kysely instance (bad pool) simulates a transient
+    // scan failure — the watcher's own top-level try/catch around the scan
+    // query must catch it, log, and leave everything untouched rather than
+    // throwing out of the tick.
+    const brokenDb = {
+      selectFrom: () => {
+        throw new Error("simulated transient DB read failure");
+      },
+    } as unknown as Kysely<DB>;
+    const brokenWatcher = startNotificationReconciliationWatcher({
+      db: brokenDb,
+      logger: fastify.log,
+      pollIntervalMs: 60_000,
+      maxRowsPerTick: 100,
+    });
+    await expect(brokenWatcher.runOnceForTests()).resolves.toBeUndefined();
+    await brokenWatcher.stop();
+
+    const after = await deliveryRow(result.notificationId, "DISCORD_DM");
+    expect(after!.state).toBe("PENDING");
+    expect(after!.attempt_count).toBe(0);
+  });
+
+  // ==========================================================================
+  // External-review item 4 — real MySQL roundtrip: a Snowflake larger than
+  // Number.MAX_SAFE_INTEGER survives CAST(? AS JSON) as a genuine JSON
+  // number (never a string), with the exact decimal value preserved.
+  // ==========================================================================
+
+  it("a real Snowflake larger than Number.MAX_SAFE_INTEGER round-trips through operator_commands.payload_json as a valid, genuine JSON NUMBER with the exact decimal value preserved", async () => {
+    const hugeSnowflake = "9223372036854775800"; // > Number.MAX_SAFE_INTEGER, real-Snowflake-shaped, within BIGINT UNSIGNED range
+    const user = await upsertDashboardUser(fastify.authTestHooks!.db, {
+      discordUserId: hugeSnowflake,
+      username: "huge-snowflake-user",
+      avatarHash: null,
+      encryptedAccessToken: Buffer.from("x"),
+      encryptedRefreshToken: Buffer.from("y"),
+      tokenExpiresAt: new Date(Date.now() + 3600_000),
+    });
+    const result = await createNotification(fastify.authTestHooks!.db, config, {
+      userId: user.id,
+      eventType: "UPLOAD_COMPLETED",
+      parameters: { count: 1 },
+      deeplinkPath: "/contributions",
+    });
+    const dm = await deliveryRow(result.notificationId, "DISCORD_DM");
+    expect(dm!.operator_command_id).not.toBeNull();
+
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT
+         JSON_VALID(payload_json) as valid,
+         JSON_TYPE(JSON_EXTRACT(payload_json, '$.discord_user_id')) as id_type,
+         JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.discord_user_id')) as id_text
+       FROM operator_commands WHERE command_id = ?`,
+      [dm!.operator_command_id],
+    );
+    expect(rows).toHaveLength(1);
+    expect(Number(rows[0]!.valid)).toBe(1);
+    // A genuine JSON number, never a JSON string ("STRING") or float
+    // ("DOUBLE") — MySQL's JSON_TYPE reports "INTEGER" or "UNSIGNED INTEGER"
+    // (its own internal 64-bit storage class split, both still a real
+    // unquoted numeric literal, never a string) only for an actual raw
+    // numeric literal — confirmed empirically against this exact value.
+    expect(["INTEGER", "UNSIGNED INTEGER"]).toContain(rows[0]!.id_type);
+    // Exact decimal value preserved — compared as a STRING, never round-tripped
+    // through JS Number() (which would silently round this value).
+    expect(rows[0]!.id_text).toBe(hugeSnowflake);
   });
 });

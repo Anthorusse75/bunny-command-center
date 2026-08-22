@@ -22,6 +22,21 @@ describe("isSyntacticallyValidSnowflake", () => {
   it("rejects a value far too long to be a real 64-bit snowflake", () => {
     expect(isSyntacticallyValidSnowflake("1".repeat(40))).toBe(false);
   });
+
+  it("range: a 20-digit string can still exceed MySQL BIGINT UNSIGNED's real max — rejected via BigInt, never Number()", () => {
+    const max = "18446744073709551615"; // 2^64-1, exactly BIGINT UNSIGNED's max, 20 digits
+    const overMax = "18446744073709551616"; // one past it, still 20 digits — the length check alone would pass this
+    expect(isSyntacticallyValidSnowflake(max)).toBe(true);
+    expect(isSyntacticallyValidSnowflake(overMax)).toBe(false);
+    // Sanity-check the premise this test exists for: both values are the
+    // same digit-length, so only a real numeric range check (not the regex
+    // alone) can tell them apart.
+    expect(max.length).toBe(overMax.length);
+  });
+
+  it("range: a wildly-oversized 20-digit garbage value is rejected", () => {
+    expect(isSyntacticallyValidSnowflake("9".repeat(20))).toBe(false);
+  });
 });
 
 describe("snowflakeEquals — exact string identity, never numeric coercion", () => {

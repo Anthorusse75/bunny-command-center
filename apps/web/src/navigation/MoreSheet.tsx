@@ -11,10 +11,12 @@ import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import IconButton from "@mui/material/IconButton";
 import Typography from "@mui/material/Typography";
+import Badge from "@mui/material/Badge";
 import CloseOutlined from "@mui/icons-material/CloseOutlined";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import { moreMenuItems, type NavContext } from "./navConfig.js";
+import { useUnreadNotificationsCount } from "../features/notifications/useNotifications.js";
 
 export interface MoreSheetProps {
   open: boolean;
@@ -26,6 +28,13 @@ export function MoreSheet({ open, onClose, ctx }: MoreSheetProps): React.JSX.Ele
   const { t } = useTranslation();
   const navigate = useNavigate();
   const items = moreMenuItems(ctx);
+  // External-review item 1 (mobile nav badge gap noted in this step's
+  // original HANDOVER): the desktop sidebar's notifications bell already
+  // carries the real unread count (SidebarNav.tsx) — this is the same data
+  // source wired into the mobile "More" sheet's notifications row, which
+  // previously carried no badge at all.
+  const unreadQuery = useUnreadNotificationsCount();
+  const unreadCount = unreadQuery.data ?? 0;
 
   return (
     <Drawer
@@ -67,7 +76,17 @@ export function MoreSheet({ open, onClose, ctx }: MoreSheetProps): React.JSX.Ele
                   }}
                 >
                   <ListItemIcon>
-                    <Icon fontSize="small" />
+                    {item.key === "notifications" ? (
+                      <Badge
+                        badgeContent={unreadCount}
+                        color="error"
+                        aria-label={t("a11y.nav.notificationsBadge", { count: unreadCount })}
+                      >
+                        <Icon fontSize="small" />
+                      </Badge>
+                    ) : (
+                      <Icon fontSize="small" />
+                    )}
                   </ListItemIcon>
                   <ListItemText primary={t(item.labelKey)} />
                 </ListItemButton>

@@ -22,9 +22,25 @@
  * the one place the lie happens, rather than scattered `as unknown as
  * number` casts at every call site.
  */
+/**
+ * MySQL `BIGINT UNSIGNED`'s real maximum (2^64-1) -- see
+ * `auth/snowflake.ts`'s identical constant for the full rationale. Checked
+ * via `BigInt` (exact, arbitrary-precision) purely as a one-shot boolean
+ * range comparison, discarded immediately -- never forwarded to a
+ * `JSON.stringify`/serialization path.
+ */
+const BIGINT_UNSIGNED_MAX = 18446744073709551615n;
+
 export function bindBigIntUnsigned(exactDecimalDigits: string): number {
   if (!/^\d+$/.test(exactDecimalDigits)) {
-    throw new Error(`bindBigIntUnsigned: not a plain decimal digit string: ${JSON.stringify(exactDecimalDigits)}`);
+    throw new Error(
+      `bindBigIntUnsigned: not a plain decimal digit string: ${JSON.stringify(exactDecimalDigits)}`,
+    );
+  }
+  if (BigInt(exactDecimalDigits) > BIGINT_UNSIGNED_MAX) {
+    throw new Error(
+      `bindBigIntUnsigned: value exceeds MySQL BIGINT UNSIGNED's max (${BIGINT_UNSIGNED_MAX}): ${exactDecimalDigits}`,
+    );
   }
   return exactDecimalDigits as unknown as number;
 }

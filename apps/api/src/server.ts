@@ -134,7 +134,7 @@ export async function buildServer(config = loadAppConfig()) {
   // leaves a dangling pool, timer, or socket. Step 04 reuses this SAME pool
   // for dashboard_users/dashboard_sessions access - one runtime connection
   // pool for the whole process, per ADR-022.
-  const db = createKyselyClient(config.db);
+  const db = createKyselyClient(config.db, logger);
   const cursorRepo = createSseCursorRepo(db);
   const hub = new SseHub();
   // Step 09 (Notifications): registers `notification.created` via Step 03's
@@ -213,8 +213,22 @@ export async function buildServer(config = loadAppConfig()) {
   // this as `onClose` instead deadlocks `fastify.close()` forever (verified
   // empirically; see the Step-03 HANDOVER's Deviations/lessons section).
   fastify.addHook("preClose", async () => {
-    poller.stop();
-    notificationReconciliationWatcher.stop();
+    // `poller.stop()`/`notificationReconciliationWatcher.stop()` are now
+    // AWAITED (external-review item 3's `health.test.ts` "DB DOWN"
+    // investigation, reproduced deterministically outside Vitest too): each
+    // one waits for any tick it had ALREADY started to fully settle before
+    // resolving, so `db.destroy()` below can never run while one of these
+    // background pollers still has an in-flight query/connection attempt
+    // against `db`'s pool — previously, a tick's connection attempt could
+    // outlive `db.destroy()`, and its eventual (correctly try/caught, but
+    // now ORPHANED) timeout fired against an already-destroyed pool with no
+    // listener left, surfacing as an unhandled rejection that crashed the
+    // whole process. `sessionSweep`/`oauthTransactionSweep` remain
+    // synchronous `stop()`s (Step 04, pre-existing, unrelated to this
+    // investigation — their poll interval is minutes-to-hours, never
+    // exercised within a single test's lifetime).
+    await poller.stop();
+    await notificationReconciliationWatcher.stop();
     sessionSweep.stop();
     oauthTransactionSweep.stop();
     hub.closeAll("server_shutting_down");

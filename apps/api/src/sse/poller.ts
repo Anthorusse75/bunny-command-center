@@ -6,7 +6,20 @@ import type { SseHub } from "./hub.js";
 import { SSE_HUB_CURSOR_KEY } from "./types.js";
 
 export interface SsePollerHandle {
-  stop(): void;
+  /**
+   * Stops scheduling future ticks AND waits for any tick CURRENTLY in
+   * flight to fully settle before resolving (external-review item 3's
+   * `health.test.ts` "DB DOWN" investigation — see this function's own doc
+   * comment below for the exact failure this closes: a tick's in-flight
+   * `pool.getConnection()` attempt against an unreachable host could
+   * previously outlive `stop()` returning, and if the caller then destroyed
+   * the underlying pool (`server.ts`'s `preClose` hook calls `db.destroy()`
+   * right after `stop()`) while that connection attempt was still pending,
+   * its EVENTUAL timeout fired against an already-destroyed pool with no
+   * listener left to catch it — an unhandled rejection that crashed the
+   * whole test process, reproduced deterministically outside Vitest too).
+   */
+  stop(): Promise<void>;
   /** Test hook: run exactly one tick synchronously, awaiting completion (avoids `setInterval` timing races in integration tests). */
   runOnceForTests(): Promise<void>;
 }
@@ -35,6 +48,8 @@ export function startSsePoller(params: {
 }): SsePollerHandle {
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
+  /** The currently-in-flight tick's promise, if any — `stop()` awaits this so a caller can safely destroy the underlying pool right after `stop()` resolves (see `SsePollerHandle.stop`'s doc comment). */
+  let inFlightTick: Promise<void> | null = null;
 
   async function tick(): Promise<void> {
     params.onPollTick?.();
@@ -120,7 +135,12 @@ export function startSsePoller(params: {
       if (stopped) {
         return;
       }
-      void tick().finally(() => {
+      const running = tick();
+      inFlightTick = running;
+      void running.finally(() => {
+        if (inFlightTick === running) {
+          inFlightTick = null;
+        }
         scheduleNext();
       });
     }, params.pollIntervalMs);
@@ -129,12 +149,18 @@ export function startSsePoller(params: {
   scheduleNext();
 
   return {
-    stop() {
+    async stop() {
       stopped = true;
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
+      // Wait for a tick that had ALREADY started before `stop()` was called
+      // to fully settle — `tick()` itself never throws (every adapter's
+      // query is individually try/caught), so this can't hang or reject; it
+      // simply lets an in-flight `pool.getConnection()` attempt finish
+      // before the caller is free to destroy the pool.
+      await inFlightTick;
     },
     async runOnceForTests() {
       await tick();

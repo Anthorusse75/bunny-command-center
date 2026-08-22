@@ -29,10 +29,24 @@ import type { Kysely } from "kysely";
 import type { FastifyBaseLogger } from "fastify";
 import type { DB } from "../db/codegen-types.js";
 import { mapOperatorCommandStateToDeliveryState } from "./deliveryStateMapping.js";
-import { findOperatorCommandStateById, findPendingDiscordDmDeliveries, updateDiscordDmDeliveryState } from "./repo.js";
+import {
+  findOperatorCommandStateById,
+  findPendingDiscordDmDeliveries,
+  updateDiscordDmDeliveryState,
+} from "./repo.js";
 
 export interface NotificationReconciliationWatcherHandle {
-  stop(): void;
+  /**
+   * Stops scheduling future ticks AND waits for any tick CURRENTLY in
+   * flight to fully settle before resolving — mirrors
+   * `SsePollerHandle.stop`'s identical fix (external-review item 3's
+   * `health.test.ts` investigation: an in-flight tick's `db` query against
+   * an unreachable host could previously outlive `stop()` returning, and if
+   * the caller then destroyed the underlying pool while that connection
+   * attempt was still pending, its eventual timeout fired with no listener
+   * left — an unhandled rejection that crashed the whole test process).
+   */
+  stop(): Promise<void>;
   /** Test hook: run exactly one tick synchronously (mirrors `SsePollerHandle.runOnceForTests`). */
   runOnceForTests(): Promise<void>;
 }
@@ -45,6 +59,8 @@ export function startNotificationReconciliationWatcher(params: {
 }): NotificationReconciliationWatcherHandle {
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
+  /** The currently-in-flight tick's promise, if any — `stop()` awaits this (see `NotificationReconciliationWatcherHandle.stop`'s doc comment). */
+  let inFlightTick: Promise<void> | null = null;
 
   async function tick(): Promise<void> {
     let pending: Awaited<ReturnType<typeof findPendingDiscordDmDeliveries>>;
@@ -98,7 +114,12 @@ export function startNotificationReconciliationWatcher(params: {
       if (stopped) {
         return;
       }
-      void tick().finally(() => {
+      const running = tick();
+      inFlightTick = running;
+      void running.finally(() => {
+        if (inFlightTick === running) {
+          inFlightTick = null;
+        }
         scheduleNext();
       });
     }, params.pollIntervalMs);
@@ -107,12 +128,16 @@ export function startNotificationReconciliationWatcher(params: {
   scheduleNext();
 
   return {
-    stop() {
+    async stop() {
       stopped = true;
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
+      // Wait for a tick that had ALREADY started before `stop()` was called
+      // to fully settle — `tick()` itself never throws (every DB call is
+      // individually try/caught), so this can't hang or reject.
+      await inFlightTick;
     },
     async runOnceForTests() {
       await tick();

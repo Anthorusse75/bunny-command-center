@@ -16,4 +16,11 @@ describe("bindBigIntUnsigned — never runs a Snowflake through Number()", () =>
     expect(() => bindBigIntUnsigned("-5")).toThrow();
     expect(() => bindBigIntUnsigned("5.5")).toThrow();
   });
+
+  it("range: accepts exactly BIGINT UNSIGNED's max, rejects one past it (BigInt comparison, never Number())", () => {
+    const max = "18446744073709551615"; // 2^64-1
+    const overMax = "18446744073709551616";
+    expect(String(bindBigIntUnsigned(max))).toBe(max);
+    expect(() => bindBigIntUnsigned(overMax)).toThrow();
+  });
 });

@@ -27,7 +27,40 @@ export interface CreateNotificationRowInput {
   readonly deeplinkPath: string;
 }
 
-/** Idempotent — a retry with the SAME `id` never overwrites an existing row (the composite "ensure" semantics this step's task brief calls for: "if provided, reuse it (retry-safe)"). */
+/**
+ * Thrown when a retried `createNotification()` call reuses an existing
+ * `notificationId` but with a DIFFERENT logical identity (recipient
+ * `userId`, `eventType`/`messageKey`, or `parameters`) — external-review
+ * item 6: this aliases a different logical notification under a reused
+ * stable id, which `onDuplicateKeyUpdate`'s own no-op below would otherwise
+ * let slip through silently (neither creating a second row nor erroring).
+ * Fail-closed: the whole `createNotification()` transaction rolls back —
+ * never a silent duplicate, never a silent overwrite of the original
+ * identity fields.
+ */
+export class NotificationIdentityConflictError extends Error {
+  constructor(id: string, reason: string) {
+    super(
+      `createNotification: notificationId=${id} already exists with a DIFFERENT identity (${reason}) — retrying with different content under a reused id is rejected`,
+    );
+    this.name = "NotificationIdentityConflictError";
+  }
+}
+
+/** Deep, key-order-independent structural equality for two JSON-serializable values — used only to compare `parameters` on a retried `createNotification()` call (see `NotificationIdentityConflictError`), never for anything security-sensitive. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => canonicalJson(v)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(record[k])}`).join(",")}}`;
+}
+
+/** Idempotent — a retry with the SAME `id` never overwrites an existing row (the composite "ensure" semantics this step's task brief calls for: "if provided, reuse it (retry-safe)"), but a retry whose CONTENT genuinely differs (different recipient/eventType/parameters) is rejected fail-closed rather than silently aliased or silently overwritten — see `NotificationIdentityConflictError`. */
 export async function ensureNotificationRow(db: Executor, input: CreateNotificationRowInput): Promise<void> {
   await db
     .insertInto("dashboard_notifications")
@@ -42,6 +75,35 @@ export async function ensureNotificationRow(db: Executor, input: CreateNotificat
     })
     .onDuplicateKeyUpdate({ id: sql`id` })
     .execute();
+
+  const existing = await db
+    .selectFrom("dashboard_notifications")
+    .select(["user_id", "event_type", "message_key", "parameters_json"])
+    .where("id", "=", input.id)
+    .executeTakeFirstOrThrow(
+      () => new Error("ensureNotificationRow: row missing immediately after upsert — should be unreachable"),
+    );
+  if (existing.user_id !== input.userId) {
+    throw new NotificationIdentityConflictError(
+      input.id,
+      `recipient userId ${existing.user_id} != ${input.userId}`,
+    );
+  }
+  if (existing.event_type !== input.eventType) {
+    throw new NotificationIdentityConflictError(
+      input.id,
+      `eventType ${existing.event_type} != ${input.eventType}`,
+    );
+  }
+  if (existing.message_key !== input.messageKey) {
+    throw new NotificationIdentityConflictError(
+      input.id,
+      `messageKey ${existing.message_key} != ${input.messageKey}`,
+    );
+  }
+  if (canonicalJson(existing.parameters_json) !== canonicalJson(input.parameters)) {
+    throw new NotificationIdentityConflictError(input.id, "parameters differ");
+  }
 }
 
 export type NotificationDeliveryChannel = "IN_APP" | "DISCORD_DM";
@@ -82,6 +144,32 @@ export async function setDeliveryOperatorCommandId(
     .where("channel", "=", "DISCORD_DM")
     .where("operator_command_id", "is", null)
     .execute();
+}
+
+/**
+ * Whether the `DISCORD_DM` delivery row for `notificationId` is ALREADY
+ * bound to a real `operator_commands` row (external-review item 6): a
+ * retried `createNotification()` call with the SAME `notificationId` but a
+ * DIFFERENT `triggeredBy` actor would otherwise slip past the composite
+ * `UNIQUE(requested_by_discord_id, target_service, idempotency_key)`
+ * constraint entirely — that constraint includes `requested_by_discord_id`,
+ * so a different actor on retry does NOT collide with the first insert and
+ * would enqueue a genuine SECOND `SEND_DM` command. The caller
+ * (`service.ts`) checks this BEFORE attempting to build/enqueue anything on
+ * retry: if already bound, the first durable association wins and no
+ * second command is ever created or actor mutated.
+ */
+export async function getDiscordDmDeliveryOperatorCommandId(
+  db: Executor,
+  notificationId: string,
+): Promise<string | null> {
+  const row = await db
+    .selectFrom("dashboard_notification_deliveries")
+    .select("operator_command_id")
+    .where("notification_id", "=", notificationId)
+    .where("channel", "=", "DISCORD_DM")
+    .executeTakeFirst();
+  return row?.operator_command_id ?? null;
 }
 
 /**
@@ -134,7 +222,10 @@ export async function ensureSendDmOperatorCommand(
     .where("target_service", "=", "bunny_ocr")
     .where("idempotency_key", "=", params.idempotencyKey)
     .executeTakeFirstOrThrow(
-      () => new Error("ensureSendDmOperatorCommand: row missing immediately after upsert — should be unreachable"),
+      () =>
+        new Error(
+          "ensureSendDmOperatorCommand: row missing immediately after upsert — should be unreachable",
+        ),
     );
   return row.command_id;
 }
@@ -167,7 +258,11 @@ export async function resolvePreference(
 export async function resolveAllPreferences(
   db: Executor,
   userId: number,
-): Promise<ReadonlyArray<{ eventType: NotificationEventType; group: NotificationPreferenceGroup | null } & ResolvedPreference>> {
+): Promise<
+  ReadonlyArray<
+    { eventType: NotificationEventType; group: NotificationPreferenceGroup | null } & ResolvedPreference
+  >
+> {
   const rows = await db
     .selectFrom("dashboard_notification_preferences")
     .select(["event_type", "in_app_enabled", "discord_dm_enabled"])
@@ -223,7 +318,20 @@ export interface NotificationListRow {
   readonly discord_dm_state: string | null;
 }
 
-/** IDOR-safe (WHERE user_id = :userId in the predicate) cursor-paginated list, newest first (ULID `id` is time-sortable). */
+/**
+ * IDOR-safe (WHERE user_id = :userId in the predicate) cursor-paginated
+ * list, newest first (ULID `id` is time-sortable).
+ *
+ * External-review item 2/8: INNER-joins `dashboard_notification_deliveries`
+ * on `channel='IN_APP' AND state='SENT'` — a notification whose recipient
+ * had `in_app_enabled=false` at creation time gets an `IN_APP` delivery row
+ * permanently stuck at `SKIPPED_PREFERENCE` (`service.ts`'s
+ * `createNotification`, step 4). That row is durable truth (never deleted —
+ * `18_NOTIFICATIONS_AND_DISCORD_DM.md`'s durable-row-first contract), but
+ * per that same contract it must never render as a Notification Center
+ * item — the INNER join (not a LEFT join) excludes it structurally, the
+ * same way the query already excludes dismissed rows by default.
+ */
 export async function listNotificationsForUser(
   db: Executor,
   userId: number,
@@ -231,6 +339,12 @@ export async function listNotificationsForUser(
 ): Promise<NotificationListRow[]> {
   let query = db
     .selectFrom("dashboard_notifications as n")
+    .innerJoin("dashboard_notification_deliveries as in_app", (join) =>
+      join
+        .onRef("in_app.notification_id", "=", "n.id")
+        .on("in_app.channel", "=", "IN_APP")
+        .on("in_app.state", "=", "SENT"),
+    )
     .leftJoin("dashboard_notification_deliveries as d", (join) =>
       join.onRef("d.notification_id", "=", "n.id").on("d.channel", "=", "DISCORD_DM"),
     )
@@ -258,13 +372,27 @@ export async function listNotificationsForUser(
   return query.execute();
 }
 
+/**
+ * Unread count = `read_at IS NULL AND dismissed_at IS NULL AND` the
+ * `IN_APP` delivery's state is `SENT` (never `SKIPPED_PREFERENCE` —
+ * external-review item 2/8's exact documented predicate). The `INNER JOIN`
+ * mirrors `listNotificationsForUser`'s own IN_APP-visibility gate so the
+ * nav badge and the Notification Center list can never disagree about
+ * which rows are "visible."
+ */
 export async function countUnreadForUser(db: Executor, userId: number): Promise<number> {
   const row = await db
-    .selectFrom("dashboard_notifications")
+    .selectFrom("dashboard_notifications as n")
+    .innerJoin("dashboard_notification_deliveries as in_app", (join) =>
+      join
+        .onRef("in_app.notification_id", "=", "n.id")
+        .on("in_app.channel", "=", "IN_APP")
+        .on("in_app.state", "=", "SENT"),
+    )
     .select((eb) => eb.fn.countAll<number>().as("count"))
-    .where("user_id", "=", userId)
-    .where("read_at", "is", null)
-    .where("dismissed_at", "is", null)
+    .where("n.user_id", "=", userId)
+    .where("n.read_at", "is", null)
+    .where("n.dismissed_at", "is", null)
     .executeTakeFirstOrThrow();
   return Number(row.count);
 }
@@ -312,20 +440,67 @@ export async function markAllReadForUser(db: Executor, userId: number): Promise<
     .execute();
 }
 
-/** SSE `SourceAdapter.fetchSince` backing query — global (not user-scoped); the caller (`sseAdapter.ts`) derives each row's channel scope from `user_id` per row, never trusts a query-level filter to do authorization. */
+/**
+ * SSE `SourceAdapter.fetchSince` backing query — global (not user-scoped);
+ * the caller (`sseAdapter.ts`) derives each row's channel scope from
+ * `user_id` per row, never trusts a query-level filter to do authorization.
+ *
+ * External-review item 2: LEFT-joins the `IN_APP` delivery row to report
+ * `in_app_visible` (`state = 'SENT'`) per row, WITHOUT excluding any row
+ * from the returned set — every `dashboard_notifications` row newer than
+ * `sinceOrdinal` is still returned here regardless of preference, so the
+ * SSE poller's own cursor-advancement logic (`sse/poller.ts`: `maxOrdinal`
+ * is computed from `fetchSince`'s RETURNED rows) keeps advancing past a
+ * `SKIPPED_PREFERENCE` row exactly like any other row — filtering it out of
+ * this array instead would starve the cursor: the next tick would refetch
+ * the SAME skipped row forever and never reach anything newer.
+ * `sseAdapter.ts` uses `in_app_visible` to decide the SSE payload's
+ * `inAppVisible` flag; the frontend uses that flag (never a raw
+ * `notification.created` arrival) to decide whether to render a list
+ * item/increment the badge/announce via `aria-live`.
+ */
 export async function fetchNotificationsSinceSseSeq(
   db: Kysely<DB>,
   sinceOrdinal: number,
   limit: number,
-): Promise<Array<{ sse_seq: number; id: string; user_id: number; message_key: string; parameters_json: unknown; created_at: Date }>> {
+): Promise<
+  Array<{
+    sse_seq: number;
+    id: string;
+    user_id: number;
+    message_key: string;
+    parameters_json: unknown;
+    created_at: Date;
+    in_app_visible: boolean;
+  }>
+> {
   const rows = await db
-    .selectFrom("dashboard_notifications")
-    .select(["sse_seq", "id", "user_id", "message_key", "parameters_json", "created_at"])
-    .where("sse_seq", ">", sinceOrdinal)
-    .orderBy("sse_seq", "asc")
+    .selectFrom("dashboard_notifications as n")
+    .leftJoin("dashboard_notification_deliveries as in_app", (join) =>
+      join.onRef("in_app.notification_id", "=", "n.id").on("in_app.channel", "=", "IN_APP"),
+    )
+    .select([
+      "n.sse_seq",
+      "n.id",
+      "n.user_id",
+      "n.message_key",
+      "n.parameters_json",
+      "n.created_at",
+      "in_app.state as in_app_state",
+    ])
+    .where("n.sse_seq", ">", sinceOrdinal)
+    .orderBy("n.sse_seq", "asc")
     .limit(limit)
     .execute();
-  return rows;
+  return rows.map((row) => ({
+    sse_seq: row.sse_seq,
+    id: row.id,
+    user_id: row.user_id,
+    message_key: row.message_key,
+    parameters_json: row.parameters_json,
+    created_at: row.created_at,
+    in_app_visible: row.in_app_state === "SENT",
+  }));
 }
 
 export async function oldestNotificationSseSeq(db: Kysely<DB>): Promise<number | null> {
