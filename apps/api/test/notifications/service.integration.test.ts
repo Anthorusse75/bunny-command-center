@@ -327,6 +327,59 @@ describe("createNotification() + reconciliation watcher — real MySQL", () => {
     expect(await operatorCommandCountForIdempotencyKey(result.notificationId)).toBe(0); // never enqueued
   });
 
+  it("'Separate admin alert notification preferences' correction: enabling DM for the ADMIN_ALERTS group makes a real operator_commands SEND_DM row for the next ADMIN_ALERT notification", async () => {
+    const user = await makeUser();
+    // ADMIN_ALERT defaults DM OFF — explicitly enable it via the SAME
+    // per-event-type row the grouped PUT /api/notifications/preferences
+    // route writes (upsertPreferenceGroup expands ADMIN_ALERTS ->
+    // [ADMIN_ALERT] and writes exactly this row).
+    await fastify
+      .authTestHooks!.db.insertInto("dashboard_notification_preferences")
+      .values({
+        user_id: user.id,
+        event_type: "ADMIN_ALERT",
+        in_app_enabled: 1,
+        discord_dm_enabled: 1,
+      })
+      .execute();
+
+    const result = await createNotification(fastify.authTestHooks!.db, config, {
+      userId: user.id,
+      eventType: "ADMIN_ALERT",
+      parameters: { guildName: "Alpha", issue: "bot offline" },
+      deeplinkPath: "/guild/x/technical",
+    });
+    expect(result.inAppEnabled).toBe(true);
+    expect(result.discordDmEnabled).toBe(true);
+
+    const dm = await deliveryRow(result.notificationId, "DISCORD_DM");
+    expect(dm!.state).toBe("PENDING");
+    expect(dm!.operator_command_id).not.toBeNull();
+
+    const command = await operatorCommandRow(dm!.operator_command_id as string);
+    expect(command).toBeDefined();
+    expect(command!.command_type).toBe("SEND_DM");
+    expect(command!.target_service).toBe("bunny_ocr");
+    expect(command!.idempotency_key).toBe(result.notificationId);
+  });
+
+  it("ADMIN_ALERT with its documented default preference (DM OFF) enqueues no operator_commands row, only IN_APP SENT", async () => {
+    const user = await makeUser();
+    const result = await createNotification(fastify.authTestHooks!.db, config, {
+      userId: user.id,
+      eventType: "ADMIN_ALERT",
+      parameters: { guildName: "Bravo", issue: "quota misconfigured" },
+      deeplinkPath: "/guild/y/technical",
+    });
+    expect(result.inAppEnabled).toBe(true);
+    expect(result.discordDmEnabled).toBe(false);
+    const inApp = await deliveryRow(result.notificationId, "IN_APP");
+    expect(inApp!.state).toBe("SENT");
+    const dm = await deliveryRow(result.notificationId, "DISCORD_DM");
+    expect(dm!.state).toBe("SKIPPED_PREFERENCE");
+    expect(await operatorCommandCountForIdempotencyKey(result.notificationId)).toBe(0);
+  });
+
   it("changing a preference affects only FUTURE notifications, never history — proven without any app reload", async () => {
     const user = await makeUser();
     const before = await createNotification(fastify.authTestHooks!.db, config, {

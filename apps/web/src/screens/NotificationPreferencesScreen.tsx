@@ -1,20 +1,33 @@
 // `/notifications/preferences` (SCREENS/NOTIFICATIONS.md §Preferences).
-// Grouped toggles — 5 documented groups (18_NOTIFICATIONS_AND_DISCORD_DM.md
-// §Preferences UX), data-driven via
+// Grouped toggles — data-driven via
 // `packages/shared/src/constants/notifications.ts`'s
 // `NOTIFICATION_GROUP_EVENT_TYPES`, never a raw per-event matrix.
 //
+// ROLE-AWARE VISIBILITY (the "Separate admin alert notification
+// preferences" correction, Step 09): this screen renders exactly
+// `data.visibleGroups` — the subset of `NOTIFICATION_PREFERENCE_GROUPS`
+// `GET /api/notifications/preferences` reports as visible for THIS caller
+// (`apps/api/src/notifications/routes.ts`'s `resolveVisibleGroups`, which
+// gates `ADMIN_ONLY_PREFERENCE_GROUPS` — currently only `ADMIN_ALERTS` —
+// behind `isGuildAdminCapableAnywhere`) — never the full static
+// `NOTIFICATION_PREFERENCE_GROUPS` array directly, and never a
+// second/duplicated role check here. An ordinary caller who cannot
+// administer any guild simply never receives `ADMIN_ALERTS` in
+// `visibleGroups` and so never sees an "Admin alerts" row at all.
+//
 // GROUP-DEFAULT NON-UNIFORMITY, flagged explicitly
-// (00_GLOBAL_IMPLEMENTATION_RULES.md #1): within "Guild needs", `ADMIN_ALERT`'s
-// documented Discord-DM default is OFF while `URGENT_GUILD_NEED`/
-// `GUILD_APPROVAL_STATE_CHANGE` default ON (18_NOTIFICATIONS_AND_DISCORD_DM.md's
-// own matrix) — the grouped UI necessarily collapses these into ONE visible
-// toggle pair per group (the documented UX, SCREENS/NOTIFICATIONS.md's
-// literal 5-row mock). This screen shows a group's toggle as ON if ANY
-// member event type currently has that channel enabled (an accurate "you
-// still get at least one thing from this group" signal), and toggling it
-// writes uniformly across every member event type in the group — a
-// deliberate, documented simplification, not a silently narrower one.
+// (00_GLOBAL_IMPLEMENTATION_RULES.md #1): within "Guild needs", `URGENT_GUILD_NEED`
+// and `GUILD_APPROVAL_STATE_CHANGE` both default Discord-DM ON
+// (18_NOTIFICATIONS_AND_DISCORD_DM.md's own matrix), while single-event
+// groups like "Admin alerts" (`ADMIN_ALERT` alone, DM default OFF) don't
+// exhibit this at all — the grouped UI necessarily collapses a MULTI-event
+// group's members into ONE visible toggle pair per group (the documented
+// UX, SCREENS/NOTIFICATIONS.md's original mock). This screen shows a
+// group's toggle as ON if ANY member event type currently has that channel
+// enabled (an accurate "you still get at least one thing from this group"
+// signal), and toggling it writes uniformly across every member event type
+// in the group — a deliberate, documented simplification, not a silently
+// narrower one.
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Button from "@mui/material/Button";
@@ -27,11 +40,7 @@ import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import { useTranslation } from "react-i18next";
-import {
-  NOTIFICATION_PREFERENCE_GROUPS,
-  NOTIFICATION_GROUP_EVENT_TYPES,
-  type NotificationPreferenceGroup,
-} from "@bunny-command-center/shared";
+import { NOTIFICATION_GROUP_EVENT_TYPES, type NotificationPreferenceGroup } from "@bunny-command-center/shared";
 import { PageHeading } from "../navigation/PageHeading.js";
 import {
   useNotificationPreferences,
@@ -97,7 +106,7 @@ export function NotificationPreferencesScreen(): React.JSX.Element {
             </TableRow>
           </TableHead>
           <TableBody>
-            {NOTIFICATION_PREFERENCE_GROUPS.map((group) => (
+            {data.visibleGroups.map((group) => (
               <TableRow key={group}>
                 <TableCell component="th" scope="row">
                   {t(`notifications.preferences.groups.${group}`)}

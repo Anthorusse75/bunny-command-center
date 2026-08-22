@@ -64,8 +64,24 @@ export const notificationPreferenceRowSchema = z
   .strict();
 export type NotificationPreferenceRow = z.infer<typeof notificationPreferenceRowSchema>;
 
+/**
+ * `visibleGroups` — exactly the subset of `NOTIFICATION_PREFERENCE_GROUPS`
+ * the CALLER should be shown as a togglable Preferences-screen row, resolved
+ * server-side against the caller's live RBAC state (role-aware visibility
+ * correction, "Separate admin alert notification preferences" —
+ * `ADMIN_ONLY_PREFERENCE_GROUPS` in `../constants/notifications.js`). The
+ * `preferences` array itself is UNCHANGED by this — it still reports every
+ * event type's full effective resolution regardless of group visibility
+ * (this is a presentation/authorization-gating concern only, never a
+ * narrowing of the underlying per-event-type data). `apps/web`'s Preferences
+ * screen renders exactly `visibleGroups`, never the full static
+ * `NOTIFICATION_PREFERENCE_GROUPS` list directly.
+ */
 export const notificationPreferencesResponseSchema = z
-  .object({ preferences: z.array(notificationPreferenceRowSchema) })
+  .object({
+    preferences: z.array(notificationPreferenceRowSchema),
+    visibleGroups: z.array(notificationPreferenceGroupSchema),
+  })
   .strict();
 export type NotificationPreferencesResponse = z.infer<typeof notificationPreferencesResponseSchema>;
 

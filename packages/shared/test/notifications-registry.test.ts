@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ADMIN_ONLY_PREFERENCE_GROUPS,
   NOTIFICATION_EVENT_REGISTRY,
   NOTIFICATION_EVENT_TYPES,
   NOTIFICATION_GROUP_EVENT_TYPES,
@@ -7,6 +8,8 @@ import {
   getNotificationEventDefinition,
 } from "../src/constants/notifications.js";
 import en from "../src/i18n/en.json" with { type: "json" };
+import fr from "../src/i18n/fr.json" with { type: "json" };
+import de from "../src/i18n/de.json" with { type: "json" };
 
 function hasNestedKey(obj: unknown, dottedPath: string): boolean {
   const parts = dottedPath.split(".");
@@ -70,5 +73,60 @@ describe("NOTIFICATION_EVENT_REGISTRY — completeness (Step 09 task brief's req
     expect(NOTIFICATION_EVENT_REGISTRY.BADGE_EARNED).toMatchObject({ defaultInAppEnabled: true, defaultDiscordDmEnabled: false });
     expect(NOTIFICATION_EVENT_REGISTRY.WEEKLY_SUMMARY).toMatchObject({ defaultInAppEnabled: false, defaultDiscordDmEnabled: false });
     expect(NOTIFICATION_EVENT_REGISTRY.ADMIN_ALERT).toMatchObject({ defaultInAppEnabled: true, defaultDiscordDmEnabled: false });
+  });
+});
+
+describe("PRODUCT CORRECTION — 'Separate admin alert notification preferences' (dashboard/step-09-notifications-system)", () => {
+  it("NOTIFICATION_PREFERENCE_GROUPS now has 6 groups, including the new ADMIN_ALERTS", () => {
+    expect(NOTIFICATION_PREFERENCE_GROUPS).toHaveLength(6);
+    expect(NOTIFICATION_PREFERENCE_GROUPS).toContain("ADMIN_ALERTS");
+  });
+
+  it("ADMIN_ALERT maps to ADMIN_ALERTS, its own dedicated group", () => {
+    expect(NOTIFICATION_EVENT_REGISTRY.ADMIN_ALERT.group).toBe("ADMIN_ALERTS");
+    expect(NOTIFICATION_GROUP_EVENT_TYPES.ADMIN_ALERTS).toEqual(["ADMIN_ALERT"]);
+  });
+
+  it("ADMIN_ALERT no longer maps to GUILD_NEEDS", () => {
+    expect(NOTIFICATION_EVENT_REGISTRY.ADMIN_ALERT.group).not.toBe("GUILD_NEEDS");
+    expect(NOTIFICATION_GROUP_EVENT_TYPES.GUILD_NEEDS).not.toContain("ADMIN_ALERT");
+  });
+
+  it("ADMIN_ALERT's documented defaults (in-app ON, Discord DM OFF) are preserved exactly across the group-mapping correction", () => {
+    expect(NOTIFICATION_EVENT_REGISTRY.ADMIN_ALERT).toMatchObject({
+      defaultInAppEnabled: true,
+      defaultDiscordDmEnabled: false,
+    });
+  });
+
+  it("ADMIN_ALERTS is the only role-gated (admin-only) preference group", () => {
+    expect(ADMIN_ONLY_PREFERENCE_GROUPS).toEqual(["ADMIN_ALERTS"]);
+  });
+
+  it("REGRESSION: the 5 pre-existing groups and their event-type mappings are completely unchanged by this correction", () => {
+    expect(NOTIFICATION_GROUP_EVENT_TYPES.UPLOADS).toEqual(["UPLOAD_COMPLETED", "UPLOAD_PROBLEM"]);
+    expect(NOTIFICATION_GROUP_EVENT_TYPES.GUILD_NEEDS).toEqual(["URGENT_GUILD_NEED", "GUILD_APPROVAL_STATE_CHANGE"]);
+    expect(NOTIFICATION_GROUP_EVENT_TYPES.PREMIUMPLUS).toEqual(["PREMIUMPLUS_REACHED"]);
+    expect(NOTIFICATION_GROUP_EVENT_TYPES.LEADERBOARD_BADGES).toEqual(["BADGE_EARNED", "RANKING_TOP3_CHANGE"]);
+    expect(NOTIFICATION_GROUP_EVENT_TYPES.WEEKLY_SUMMARY).toEqual(["WEEKLY_SUMMARY"]);
+  });
+
+  it("FR/EN/DE labels for every preference group (including the new ADMIN_ALERTS) exist and are non-empty", () => {
+    const catalogs = { en, fr, de } as const;
+    for (const group of NOTIFICATION_PREFERENCE_GROUPS) {
+      for (const [locale, catalog] of Object.entries(catalogs)) {
+        const label: unknown = (catalog as { notifications: { preferences: { groups: Record<string, string> } } })
+          .notifications.preferences.groups[group];
+        expect(typeof label, `${locale}'s label for ${group}`).toBe("string");
+        expect((label as string).trim().length, `${locale}'s label for ${group}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("the ADMIN_ALERTS label is distinct across FR/EN/DE (a genuine translation, not a copy-pasted placeholder)", () => {
+    const enLabel = en.notifications.preferences.groups.ADMIN_ALERTS;
+    const frLabel = fr.notifications.preferences.groups.ADMIN_ALERTS;
+    const deLabel = de.notifications.preferences.groups.ADMIN_ALERTS;
+    expect(new Set([enLabel, frLabel, deLabel]).size).toBe(3);
   });
 });

@@ -305,7 +305,8 @@
         "GUILD_NEEDS": "Besoins de la guilde",
         "PREMIUMPLUS": "PremiumPlus",
         "LEADERBOARD_BADGES": "Classement et badges",
-        "WEEKLY_SUMMARY": "Résumé hebdomadaire"
+        "WEEKLY_SUMMARY": "Résumé hebdomadaire",
+        "ADMIN_ALERTS": "Alertes administrateur"
       }
     },
     "events": {

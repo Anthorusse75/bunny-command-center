@@ -303,7 +303,8 @@
         "GUILD_NEEDS": "Gildenbedarf",
         "PREMIUMPLUS": "PremiumPlus",
         "LEADERBOARD_BADGES": "Rangliste & Abzeichen",
-        "WEEKLY_SUMMARY": "Wochenzusammenfassung"
+        "WEEKLY_SUMMARY": "Wochenzusammenfassung",
+        "ADMIN_ALERTS": "Admin-Warnungen"
       }
     },
     "events": {

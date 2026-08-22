@@ -189,7 +189,11 @@ export async function buildServer(config = loadAppConfig()) {
   // -only, maps `operator_commands.state`/`last_error_code` onto
   // `dashboard_notification_deliveries.state`, never re-enqueues) reuses the
   // exact same poll-interval/scheduling convention as the SSE poller above.
-  await fastify.register(buildNotificationRoutes(db, config));
+  // Shares the SAME `guildAuthDeps` instance as `buildGuildRoutes` above
+  // (role-aware "Admin alerts" preferences-group visibility correction —
+  // `isGuildAdminCapableAnywhere` reuses the one 60s `GuildAuthCache`, never
+  // a second independent one).
+  await fastify.register(buildNotificationRoutes(db, config, guildAuthDeps));
   const notificationReconciliationWatcher: NotificationReconciliationWatcherHandle =
     startNotificationReconciliationWatcher({
       db,

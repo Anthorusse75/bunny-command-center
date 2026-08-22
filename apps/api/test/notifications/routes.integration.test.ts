@@ -296,4 +296,100 @@ describe("/api/notifications* — real MySQL, IDOR checklist", () => {
     });
     expect(response.statusCode).toBe(400);
   });
+
+  // ==========================================================================
+  // "Separate admin alert notification preferences" correction —
+  // ADMIN_ALERT now has its own ADMIN_ALERTS group, independent of
+  // GUILD_NEEDS (which still holds URGENT_GUILD_NEED/GUILD_APPROVAL_STATE_CHANGE).
+  // ==========================================================================
+
+  it("default ADMIN_ALERT preference (no prior override): in_app_enabled=true, discord_dm_enabled=false", async () => {
+    const a = await makeSession();
+    const response = await fastify.inject({
+      method: "GET",
+      url: "/api/notifications/preferences",
+      headers: { cookie: a.cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = preferencesBody(response);
+    const adminAlert = body.data.preferences.find((p) => p.eventType === "ADMIN_ALERT");
+    expect(adminAlert).toMatchObject({ discordDmEnabled: false });
+    // inAppEnabled isn't in the narrow PreferencesBody type above — read the raw JSON.
+    const raw = response.json() as { data: { preferences: { eventType: string; inAppEnabled: boolean }[] } };
+    expect(raw.data.preferences.find((p) => p.eventType === "ADMIN_ALERT")?.inAppEnabled).toBe(true);
+  });
+
+  it("disabling 'Guild needs' does NOT alter ADMIN_ALERT's own preference state — the two groups are independent", async () => {
+    const a = await makeSession();
+    const response = await fastify.inject({
+      method: "PUT",
+      url: "/api/notifications/preferences",
+      headers: { cookie: a.cookie, ...CSRF_HEADERS, "content-type": "application/json" },
+      payload: { groups: [{ group: "GUILD_NEEDS", inAppEnabled: false, discordDmEnabled: false }] },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = preferencesBody(response);
+    // GUILD_NEEDS members changed...
+    expect(body.data.preferences.find((p) => p.eventType === "URGENT_GUILD_NEED")?.discordDmEnabled).toBe(false);
+    expect(body.data.preferences.find((p) => p.eventType === "GUILD_APPROVAL_STATE_CHANGE")?.discordDmEnabled).toBe(
+      false,
+    );
+    // ...but ADMIN_ALERT is UNTOUCHED, still at its registry default (DM OFF, unaffected either way here,
+    // so assert against the in-app column too since a DM-only assertion couldn't distinguish "still default" from
+    // "coincidentally also flipped to false").
+    const raw = response.json() as { data: { preferences: { eventType: string; inAppEnabled: boolean }[] } };
+    expect(raw.data.preferences.find((p) => p.eventType === "ADMIN_ALERT")?.inAppEnabled).toBe(true);
+  });
+
+  it("disabling 'Admin alerts' DOES alter ADMIN_ALERT's own delivery preference", async () => {
+    const a = await makeSession();
+    // First flip discordDmEnabled ON for ADMIN_ALERTS (documented default is OFF) to prove the write
+    // path actually changes ADMIN_ALERT's state, not just that it stays at its already-OFF default.
+    const enableDm = await fastify.inject({
+      method: "PUT",
+      url: "/api/notifications/preferences",
+      headers: { cookie: a.cookie, ...CSRF_HEADERS, "content-type": "application/json" },
+      payload: { groups: [{ group: "ADMIN_ALERTS", inAppEnabled: true, discordDmEnabled: true }] },
+    });
+    expect(enableDm.statusCode).toBe(200);
+    expect(preferencesBody(enableDm).data.preferences.find((p) => p.eventType === "ADMIN_ALERT")?.discordDmEnabled).toBe(
+      true,
+    );
+
+    // Now disable the whole group (both channels) — ADMIN_ALERT must reflect it.
+    const disableAll = await fastify.inject({
+      method: "PUT",
+      url: "/api/notifications/preferences",
+      headers: { cookie: a.cookie, ...CSRF_HEADERS, "content-type": "application/json" },
+      payload: { groups: [{ group: "ADMIN_ALERTS", inAppEnabled: false, discordDmEnabled: false }] },
+    });
+    expect(disableAll.statusCode).toBe(200);
+    const raw = disableAll.json() as {
+      data: { preferences: { eventType: string; inAppEnabled: boolean; discordDmEnabled: boolean }[] };
+    };
+    const adminAlert = raw.data.preferences.find((p) => p.eventType === "ADMIN_ALERT");
+    expect(adminAlert).toMatchObject({ inAppEnabled: false, discordDmEnabled: false });
+  });
+
+  it("REGRESSION: the 5 pre-existing groups still update their own event types via PUT, unaffected by the ADMIN_ALERTS addition", async () => {
+    const a = await makeSession();
+    const response = await fastify.inject({
+      method: "PUT",
+      url: "/api/notifications/preferences",
+      headers: { cookie: a.cookie, ...CSRF_HEADERS, "content-type": "application/json" },
+      payload: {
+        groups: [
+          { group: "UPLOADS", inAppEnabled: true, discordDmEnabled: false },
+          { group: "PREMIUMPLUS", inAppEnabled: false, discordDmEnabled: false },
+          { group: "WEEKLY_SUMMARY", inAppEnabled: true, discordDmEnabled: true },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = preferencesBody(response);
+    expect(body.data.preferences.find((p) => p.eventType === "UPLOAD_COMPLETED")?.discordDmEnabled).toBe(false);
+    expect(body.data.preferences.find((p) => p.eventType === "UPLOAD_PROBLEM")?.discordDmEnabled).toBe(false);
+    expect(body.data.preferences.find((p) => p.eventType === "PREMIUMPLUS_REACHED")?.discordDmEnabled).toBe(false);
+    expect(body.data.preferences.find((p) => p.eventType === "WEEKLY_SUMMARY")?.discordDmEnabled).toBe(true);
+  });
 });

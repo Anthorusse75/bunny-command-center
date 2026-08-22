@@ -30,9 +30,31 @@
 // `group` is `null` — NOT rendered as a togglable row on this step's
 // Preferences screen. A real Superadmin preferences surface, if ever
 // needed, is left for whichever later step actually builds Superadmin
-// settings UI. `ADMIN_ALERT` and `GUILD_APPROVAL_STATE_CHANGE` DO map
-// unambiguously — both are guild-admin-facing, guild-operational-health
-// notifications, placed under "Guild needs" alongside `URGENT_GUILD_NEED`.
+// settings UI. `GUILD_APPROVAL_STATE_CHANGE` DOES map unambiguously — it is
+// a guild-admin-facing, guild-operational-health notification, placed under
+// "Guild needs" alongside `URGENT_GUILD_NEED`.
+//
+// POST-REVIEW PRODUCT CORRECTION (dashboard/step-09-notifications-system,
+// "Separate admin alert notification preferences"): `ADMIN_ALERT` was
+// ORIGINALLY placed under "Guild needs" alongside `URGENT_GUILD_NEED` (see
+// git history) — that mapping is REJECTED. `ADMIN_ALERT` (a configuration
+// issue / degraded guild-bot health signal) is semantically distinct from
+// `URGENT_GUILD_NEED` (the guild needs more captures / a priority-category
+// deficit) — a user disabling "Guild needs" must NOT silently disable
+// technical/admin health alerts too. `ADMIN_ALERT` now gets its OWN
+// dedicated group, `ADMIN_ALERTS` ("Admin alerts"), the 6th Preferences-screen
+// group. This is a group-membership change ONLY — `ADMIN_ALERT`'s documented
+// defaults (in-app ON, Discord DM OFF) are unchanged, and no other event
+// type is affected. Because `ADMIN_ALERT` is only ever meaningfully
+// receivable by a Guild-Admin-capable caller, this group is additionally
+// gated by role-aware visibility (`ADMIN_ONLY_PREFERENCE_GROUPS` below) — a
+// caller who cannot administer any guild never sees an "Admin alerts" row
+// at all (apps/api/src/notifications/routes.ts computes this per-request,
+// apps/web's Preferences screen renders exactly the groups the API reports
+// as visible — this registry stays the single static source of which
+// GROUPS EXIST and what they contain; per-caller visibility is computed
+// against the caller's live RBAC state, never duplicated as static data
+// here).
 import { z } from "zod";
 
 export const NOTIFICATION_EVENT_TYPES = [
@@ -51,16 +73,40 @@ export const NOTIFICATION_EVENT_TYPES = [
 export const notificationEventTypeSchema = z.enum(NOTIFICATION_EVENT_TYPES);
 export type NotificationEventType = z.infer<typeof notificationEventTypeSchema>;
 
-/** The 5 documented Preferences-screen groups (18_NOTIFICATIONS_AND_DISCORD_DM.md §Preferences UX). */
+/**
+ * The 6 Preferences-screen groups: the 5 originally documented in
+ * 18_NOTIFICATIONS_AND_DISCORD_DM.md §Preferences UX plus `ADMIN_ALERTS`,
+ * added by the "Separate admin alert notification preferences" correction
+ * (see this file's header comment) — `DASHBOARD/18_NOTIFICATIONS_AND_DISCORD_DM.md`
+ * itself still describes 5 groups as of this correction and needs a doc
+ * update to match (flagged in this change's HANDOVER, not silently fixed
+ * here — DASHBOARD/ docs are out of scope for this change).
+ */
 export const NOTIFICATION_PREFERENCE_GROUPS = [
   "UPLOADS",
   "GUILD_NEEDS",
   "PREMIUMPLUS",
   "LEADERBOARD_BADGES",
   "WEEKLY_SUMMARY",
+  "ADMIN_ALERTS",
 ] as const;
 export const notificationPreferenceGroupSchema = z.enum(NOTIFICATION_PREFERENCE_GROUPS);
 export type NotificationPreferenceGroup = z.infer<typeof notificationPreferenceGroupSchema>;
+
+/**
+ * Groups that must only be shown to a caller who can actually receive at
+ * least one member event type — computed per-request against the caller's
+ * live RBAC state (apps/api/src/auth/guildAuthorization.ts's
+ * `isGuildAdminCapableAnywhere`, reusing Step 05's existing Guild Admin
+ * Resolution machinery), never a second, parallel authorization model. This
+ * array is the ONE static, data-driven list of WHICH groups need that
+ * gating — `apps/api/src/notifications/routes.ts` is the only place that
+ * resolves it against an actual caller into a concrete `visibleGroups` list
+ * for `GET`/`PUT /api/notifications/preferences`'s response; `apps/web`'s
+ * Preferences screen renders exactly the groups the API reports as visible,
+ * never re-deriving visibility itself and never hardcoding `ADMIN_ALERTS`.
+ */
+export const ADMIN_ONLY_PREFERENCE_GROUPS: readonly NotificationPreferenceGroup[] = ["ADMIN_ALERTS"];
 
 /** Descriptive only — see file header. Never enforced by `createNotification()` itself. */
 export type NotificationCooldownMetadata =
@@ -171,9 +217,11 @@ export const NOTIFICATION_EVENT_REGISTRY: Readonly<
   ADMIN_ALERT: {
     eventType: "ADMIN_ALERT",
     messageKey: "notifications.events.adminAlert.message",
+    // Defaults preserved EXACTLY across the group-mapping correction (this
+    // file's header comment) — the group changed, the defaults did not.
     defaultInAppEnabled: true,
     defaultDiscordDmEnabled: false,
-    group: "GUILD_NEEDS",
+    group: "ADMIN_ALERTS",
     cooldown: { kind: "PER_INCIDENT_OPEN" },
     deeplinkCategory: "GUILD_TECHNICAL",
   },

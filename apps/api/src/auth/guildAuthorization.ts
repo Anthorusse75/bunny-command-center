@@ -202,6 +202,57 @@ export async function getCallerGuildsForListing(
 }
 
 /**
+ * Whether the caller is Guild-Admin-capable in AT LEAST ONE guild they
+ * belong to (Superadmin always counts) — added for the "Separate admin
+ * alert notification preferences" correction (Step 09), which needs to
+ * decide whether to show the "Admin alerts" notification-preferences group
+ * at all to a given caller. Notification preferences are a per-user
+ * (GLOBAL, not per-guild) resource (`dashboard_notification_preferences`
+ * has no `guild_id` column) — there is no single `guildId` route param to
+ * hand `requireTier`/`resolveGuildAuthorization`, so this reuses the SAME
+ * "owner OR Discord ADMINISTRATOR permission bit" signal
+ * `apps/api/src/guilds/guildsService.ts`'s `canAdminister` already computes
+ * per guild-list entry, applied across the caller's WHOLE live guild list,
+ * rather than inventing a second authorization model.
+ *
+ * DOCUMENTED SIMPLIFICATION vs. the full per-guild `resolveGuildAuthorization`
+ * flow: this does NOT additionally consult a guild's configured custom
+ * admin role (`dashboard_guild_policy`) or `ADMIN_DISABLED` override —
+ * doing so precisely would require ANOTHER live Discord guild-member fetch
+ * PER guild the caller belongs to (resolveGuildAuthorization's per-guild
+ * role-fetch branch), which does not scale to "check every guild this
+ * caller is in" the way a single guild-scoped route's one-guild check does.
+ * This is intentionally used ONLY for this kind of presentation/authorization
+ * -gating decision (never as a substitute for `requireTier` on an actual
+ * guild-scoped mutation route) — a caller with a custom-role-only admin
+ * grant in every one of their guilds (no Owner status, no raw
+ * ADMINISTRATOR bit anywhere) would under-count as "not admin-capable" here
+ * and simply not see the "Admin alerts" toggle, which is a UX gap, not a
+ * security one (nothing about actual preference persistence or delivery
+ * depends on this check).
+ *
+ * Fails CLOSED (returns `false`, never throws) on any error resolving the
+ * caller's guild list (expired/garbage token material, Discord outage,
+ * `DiscordReauthRequiredError`, ...) — a presentation-only gate must never
+ * turn an otherwise-healthy preferences read into a hard failure.
+ */
+export async function isGuildAdminCapableAnywhere(
+  deps: GuildAuthDeps,
+  caller: AuthorizedCaller,
+  freshness: AuthorizationFreshness = "READ",
+): Promise<boolean> {
+  if (isSuperadmin(caller.discordUserId, deps.config)) {
+    return true;
+  }
+  try {
+    const guilds = await getCallerGuilds(deps, caller, freshness);
+    return guilds.some((g) => g.owner || hasAdministratorPermission(g.permissions));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Guild Admin Resolution (08_AUTHORIZATION_AND_RBAC.md's flowchart, minus
  * the Bunny role-deletion-detection branch -- see this module's header
  * comment). MUST only be called after `assertGuildMembership` has already

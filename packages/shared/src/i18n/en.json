@@ -303,7 +303,8 @@
         "GUILD_NEEDS": "Guild needs",
         "PREMIUMPLUS": "PremiumPlus",
         "LEADERBOARD_BADGES": "Leaderboard & badges",
-        "WEEKLY_SUMMARY": "Weekly summary"
+        "WEEKLY_SUMMARY": "Weekly summary",
+        "ADMIN_ALERTS": "Admin alerts"
       }
     },
     "events": {
