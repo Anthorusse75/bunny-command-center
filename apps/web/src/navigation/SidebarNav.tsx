@@ -16,11 +16,16 @@ import { useTranslation } from "react-i18next";
 import { NavLink, useLocation } from "react-router";
 import { sidebarGroups, type NavItem } from "./navConfig.js";
 import { useNavContext } from "./useNavContext.js";
+import { useUnreadNotificationsCount } from "../features/notifications/useNotifications.js";
 
 export function SidebarNav({ collapsed }: { collapsed: boolean }): React.JSX.Element {
   const ctx = useNavContext();
   const location = useLocation();
   const groups = sidebarGroups(ctx);
+  // Step 09: real unread count (was hardcoded 0 — see SidebarRow's own
+  // comment on this history).
+  const unreadQuery = useUnreadNotificationsCount();
+  const unreadCount = unreadQuery.data ?? 0;
 
   // "Profile pinned at the bottom" — every other group flows normally above
   // it inside the flex-grow slot AppShell already provides; the profile
@@ -42,6 +47,7 @@ export function SidebarNav({ collapsed }: { collapsed: boolean }): React.JSX.Ele
                 ctx={ctx}
                 collapsed={collapsed}
                 currentPath={location.pathname}
+                unreadCount={unreadCount}
               />
             ))}
           </List>
@@ -58,6 +64,7 @@ export function SidebarNav({ collapsed }: { collapsed: boolean }): React.JSX.Ele
                 ctx={ctx}
                 collapsed={collapsed}
                 currentPath={location.pathname}
+                unreadCount={unreadCount}
               />
             ))}
           </List>
@@ -72,11 +79,13 @@ function SidebarRow({
   ctx,
   collapsed,
   currentPath,
+  unreadCount,
 }: {
   item: NavItem;
   ctx: ReturnType<typeof useNavContext>;
   collapsed: boolean;
   currentPath: string;
+  unreadCount: number;
 }): React.JSX.Element {
   const { t } = useTranslation();
   const Icon = item.icon;
@@ -86,13 +95,13 @@ function SidebarRow({
 
   const iconNode =
     item.key === "notifications" ? (
-      // 24_API_CONTRACTS.md/IMPLEMENTATION file: "badge count placeholder on
-      // notifications bell (real count arrives Step 09)" — the badge exists
-      // and is wired to render a count, but no real unread-count data
-      // source exists yet in this step, so it's deliberately never shown
-      // (badgeContent=0 -> MUI hides it) rather than displaying a fabricated
-      // number.
-      <Badge badgeContent={0} color="error" aria-label={t("a11y.nav.notificationsBadge", { count: 0 })}>
+      // Step 09: real unread count (previously always `badgeContent={0}` —
+      // "the badge exists and is wired to render a count, but no real
+      // unread-count data source exists yet" — `useUnreadNotificationsCount`,
+      // `features/notifications/useNotifications.ts`, is that real source
+      // now). `badgeContent={0}` still correctly hides the badge (MUI's own
+      // behavior) whenever the count is genuinely zero.
+      <Badge badgeContent={unreadCount} color="error" aria-label={t("a11y.nav.notificationsBadge", { count: unreadCount })}>
         <Icon fontSize="small" />
       </Badge>
     ) : (

@@ -18,6 +18,7 @@ import { GuildAdminScreen } from "../screens/GuildAdminScreen.js";
 import { TechnicalScreen } from "../screens/TechnicalScreen.js";
 import { ContributionsScreen } from "../screens/ContributionsScreen.js";
 import { NotificationsScreen } from "../screens/NotificationsScreen.js";
+import { NotificationPreferencesScreen } from "../screens/NotificationPreferencesScreen.js";
 import { SuperadminScreen } from "../screens/SuperadminScreen.js";
 import { HeroDiscoveryScreen } from "../screens/HeroDiscoveryScreen.js";
 import { ProfileScreen } from "../screens/ProfileScreen.js";
@@ -47,6 +48,7 @@ export function createAppRouter(): ReturnType<typeof createBrowserRouter> {
         { path: "/__showcase__", element: <DesignSystemShowcase /> },
         { path: "/contributions", element: <ContributionsScreen /> },
         { path: "/notifications", element: <NotificationsScreen /> },
+        { path: "/notifications/preferences", element: <NotificationPreferencesScreen /> },
         { path: "/profile", element: <ProfileScreen /> },
         {
           path: "/guild/:guildId",
