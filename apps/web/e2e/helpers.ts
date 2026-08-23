@@ -129,7 +129,21 @@ export interface HorizontalOverflowResult {
  */
 export async function checkHorizontalOverflow(page: Page): Promise<HorizontalOverflowResult> {
   return page.evaluate(async (tolerance) => {
-    function widestOffender(): string {
+    // Two DISTINCT signals, deliberately not conflated (found chasing a real German/960px CI-only
+    // false positive on `.MuiBadge-root`, an `overflow: visible` + absolutely-positioned-child
+    // shape - see this function's own header comment for the closely related, previously-fixed
+    // Windows-vs-Ubuntu `scrollWidth`/`clientWidth` measurement quirk this is another instance of):
+    //
+    // - `positioned`: an element's OWN BOX (`getBoundingClientRect()`) actually breaches the
+    //   viewport - this is real, user-visible overflow no matter what causes it.
+    // - `internal`: an element's OWN CONTENT overflows its OWN box (`scrollWidth > clientWidth`)
+    //   while the element's own box stays fully inside the viewport. This is NOT by itself
+    //   evidence of a viewport breach - an `overflow: visible` container's absolutely-positioned
+    //   child (exactly what MUI's `Badge` is) intentionally paints outside the parent's content
+    //   box while both elements can remain entirely on-screen, and some Chromium builds report a
+    //   nonzero `scrollWidth` delta for this shape that others don't, independent of anything
+    //   actually being visually wrong.
+    function widestOffender(): { positioned: string; internal: string } {
       const limit = document.documentElement.clientWidth;
       let worstPositioned = "";
       let worstRight = limit;
@@ -138,7 +152,7 @@ export async function checkHorizontalOverflow(page: Page): Promise<HorizontalOve
       // clientWidth). Unclipped overflow propagates upward, so an ancestor near the root will
       // almost always show this too once any descendant does - collected in document order
       // (parents before children) and reported as only the last few (deepest, most specific)
-      // matches, not the whole propagated chain.
+      // matches, not the whole propagated chain. Diagnostic only - see header comment above.
       const internalOverflow: string[] = [];
       // `html`/`body` themselves, not just their descendants: a mismatch between an element's
       // own position (getBoundingClientRect) and its own internal overflow (scrollWidth vs
@@ -163,19 +177,16 @@ export async function checkHorizontalOverflow(page: Page): Promise<HorizontalOve
         // An element's own box can sit fully inside the viewport while its CONTENT still
         // overflows it (e.g. an `overflow: visible` flex/grid container whose children don't
         // individually breach the viewport either) - scrollWidth vs clientWidth on the element
-        // itself catches that shape of bug, which position alone cannot.
+        // itself catches that shape of bug, which position alone cannot. Kept as a diagnostic
+        // (see `detail` below) - not, by itself, sufficient to fail this check (header comment).
         if (element instanceof HTMLElement && element.scrollWidth > element.clientWidth + tolerance) {
           internalOverflow.push(`${label}(scroll=${element.scrollWidth} own-client=${element.clientWidth})`);
         }
       }
-      const deepestInternalOverflow = internalOverflow.slice(-5).join(" < ");
-      return [
-        worstPositioned && `positioned: ${worstPositioned}`,
-        deepestInternalOverflow &&
-          `internal-overflow chain (root..deepest, last 5): ${deepestInternalOverflow}`,
-      ]
-        .filter(Boolean)
-        .join(" || ");
+      return {
+        positioned: worstPositioned,
+        internal: internalOverflow.slice(-5).join(" < "),
+      };
     }
 
     const doc = document.documentElement;
@@ -205,15 +216,26 @@ export async function checkHorizontalOverflow(page: Page): Promise<HorizontalOve
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
     const reallyScrollable = scrollXAfterProbe > tolerance || scrollLeftAfterProbe > tolerance;
-    const offender = widestOffender();
-    const overflow = reallyScrollable || offender !== "";
+    const { positioned, internal } = widestOffender();
+    // The boolean gate follows its documented contract exactly: real user-reachable horizontal
+    // scroll, OR a real element whose OWN BOX breaches the viewport. Internal-only overflow
+    // (`internal` populated, `positioned` empty) is surfaced in `detail` for diagnosis but never
+    // flips this to `true` on its own.
+    const overflow = reallyScrollable || positioned !== "";
+
+    const offenderSummary = [
+      positioned && `positioned: ${positioned}`,
+      internal && `internal-overflow chain (root..deepest, last 5, diagnostic only): ${internal}`,
+    ]
+      .filter(Boolean)
+      .join(" || ");
 
     const detail =
       `documentElement(client=${metrics.documentElementClientWidth} scroll=${metrics.documentElementScrollWidth}) ` +
       `scrollingElement(client=${metrics.scrollingElementClientWidth} scroll=${metrics.scrollingElementScrollWidth}) ` +
       `windowInnerWidth=${metrics.windowInnerWidth} visualViewportWidth=${metrics.visualViewportWidth} ` +
       `scrollProbe(scrollX=${scrollXAfterProbe} scrollLeft=${scrollLeftAfterProbe} reallyScrollable=${reallyScrollable}) ` +
-      `widestOffender=${offender || "(none)"}`;
+      `widestOffender=${offenderSummary || "(none)"}`;
 
     return { overflow, detail };
   }, GEOMETRIC_TOLERANCE_PX);
