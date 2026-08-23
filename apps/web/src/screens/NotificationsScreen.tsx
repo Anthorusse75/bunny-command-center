@@ -27,15 +27,7 @@ import {
   useMarkNotificationReadMutation,
   useNotificationList,
 } from "../features/notifications/useNotifications.js";
-import type { NotificationListItem } from "@bunny-command-center/shared";
-
-interface NotificationCreatedPayload {
-  notificationId: string;
-  messageKey: string;
-  parameters: Record<string, unknown>;
-  /** External-review item 2 — `false` for a durable row whose IN_APP delivery is SKIPPED_PREFERENCE; must never be announced. */
-  inAppVisible: boolean;
-}
+import type { NotificationCreatedData, NotificationListItem } from "@bunny-command-center/shared";
 
 export function NotificationsScreen(): React.JSX.Element {
   const { t } = useTranslation();
@@ -56,7 +48,7 @@ export function NotificationsScreen(): React.JSX.Element {
   // itself, using the SAME i18next catalog `apps/api`'s server-side
   // `renderMessage` reads (`messageKey`+`parameters` — no server round-trip
   // needed for the announcement string).
-  useRealtimeChannel<NotificationCreatedPayload>("notification.created", (payload) => {
+  useRealtimeChannel<NotificationCreatedData>("notification.created", (payload) => {
     // External-review item 2: a durable row whose IN_APP delivery was
     // SKIPPED_PREFERENCE (recipient turned in-app off for this event type)
     // still wakes the client via SSE (the server-side cursor must advance
