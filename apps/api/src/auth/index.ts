@@ -38,6 +38,7 @@ export {
   assertGuildMembership,
   resolveGuildAuthorization,
   getCallerGuildsForListing,
+  isGuildAdminCapableAnywhere,
   createGuildAuthDeps,
   GUILD_TIER_RANK,
   type GuildTier,

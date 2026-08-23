@@ -108,6 +108,9 @@
     "guilds": {
       "notFound": "Wir konnten diesen Server für dein Konto nicht finden."
     },
+    "notifications": {
+      "notFound": "Wir konnten diese Benachrichtigung für Ihr Konto nicht finden."
+    },
     "notFoundPage": {
       "title": "Diese Seite gibt es nicht",
       "body": "Der Link ist möglicherweise veraltet oder die Adresse falsch eingegeben.",
@@ -148,6 +151,10 @@
       "inviteBunny": "Bunny auf einen Server einladen, den du administrierst",
       "moreMenu": "Weitere Navigationsziele",
       "notificationsBadge": "{{count}} ungelesene Benachrichtigungen"
+    },
+    "notifications": {
+      "unreadItem": "Ungelesene Benachrichtigung: {{message}}",
+      "readItem": "Gelesene Benachrichtigung: {{message}}"
     }
   },
   "showcase": {
@@ -273,9 +280,73 @@
     }
   },
   "notifications": {
-    "placeholder": {
+    "center": {
       "title": "Benachrichtigungen",
-      "body": "Dein Benachrichtigungscenter ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+      "markAllRead": "Alle als gelesen markieren",
+      "preferencesLink": "Einstellungen",
+      "empty": "Noch keine Benachrichtigungen",
+      "loading": "Benachrichtigungen werden geladen…",
+      "errorTitle": "Ihre Benachrichtigungen konnten nicht geladen werden",
+      "errorBody": "Ihre Daten sind sicher — bitte versuchen Sie es erneut.",
+      "dismiss": "Verwerfen",
+      "open": "Öffnen",
+      "listLabel": "Ihre Benachrichtigungen",
+      "newAnnouncement": "Neue Benachrichtigung: {{message}}"
+    },
+    "preferences": {
+      "title": "Benachrichtigungseinstellungen",
+      "inAppColumn": "In der App",
+      "dmColumn": "Discord-DM",
+      "saved": "Einstellungen gespeichert",
+      "groups": {
+        "UPLOADS": "Uploads",
+        "GUILD_NEEDS": "Gildenbedarf",
+        "PREMIUMPLUS": "PremiumPlus",
+        "LEADERBOARD_BADGES": "Rangliste & Abzeichen",
+        "WEEKLY_SUMMARY": "Wochenzusammenfassung",
+        "ADMIN_ALERTS": "Admin-Warnungen"
+      }
+    },
+    "events": {
+      "uploadCompleted": {
+        "message_one": "Upload abgeschlossen: {{count}} Screenshot",
+        "message_other": "Upload abgeschlossen: {{count}} Screenshots"
+      },
+      "uploadProblem": {
+        "message_one": "Bei Ihrem Upload gab es ein Problem — {{count}} Screenshot konnte nicht verarbeitet werden",
+        "message_other": "Bei Ihrem Upload gab es ein Problem — {{count}} Screenshots konnten nicht verarbeitet werden"
+      },
+      "urgentGuildNeed": {
+        "message": "{{guildName}} benötigt dringend weitere Aufnahmen"
+      },
+      "premiumPlusReached": {
+        "message": "{{guildName}} hat PremiumPlus in dieser Saison erreicht"
+      },
+      "badgeEarned": {
+        "message": "Sie haben ein neues Abzeichen erhalten: {{badgeName}}"
+      },
+      "rankingTop3Change": {
+        "message": "Ihr Rang in der Rangliste von {{guildName}} hat sich geändert: jetzt #{{rank}}"
+      },
+      "weeklySummary": {
+        "message_one": "Ihre Wochenzusammenfassung ist bereit: {{count}} Screenshot diese Woche",
+        "message_other": "Ihre Wochenzusammenfassung ist bereit: {{count}} Screenshots diese Woche"
+      },
+      "guildApprovalStateChange": {
+        "message": "Der Freigabestatus von {{guildName}} hat sich geändert zu {{state}}"
+      },
+      "newGuildPending": {
+        "message": "{{guildName}} wartet auf Freigabe"
+      },
+      "adminAlert": {
+        "message": "{{guildName}} benötigt Ihre Aufmerksamkeit: {{issue}}"
+      },
+      "heroDiscoveryCandidateReady": {
+        "message": "Ein neuer Hero-Discovery-Kandidat ist bereit zur Überprüfung"
+      }
+    },
+    "dm": {
+      "footer": "Verwalten Sie Ihre Benachrichtigungseinstellungen → {{url}}"
     }
   },
   "onboarding": {

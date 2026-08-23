@@ -23,15 +23,37 @@
 const SNOWFLAKE_PATTERN = /^\d{15,20}$/;
 
 /**
+ * MySQL `BIGINT UNSIGNED`'s real maximum (2^64-1) -- itself 20 decimal
+ * digits, same as `SNOWFLAKE_PATTERN`'s upper length bound. A 20-digit
+ * decimal string is NOT guaranteed to fit: any value in
+ * `(18446744073709551615, 99999999999999999999]` is still 20 digits but
+ * overflows the column type every real caller of this function eventually
+ * writes the value into (`operator_commands.requested_by_discord_id`/
+ * `guild_id`, `db/bigIntParam.ts`'s own `bindBigIntUnsigned`). Compared via
+ * `BigInt` -- exact, arbitrary-precision, and safe here specifically
+ * because this comparison's boolean RESULT is all that ever leaves this
+ * function; the `BigInt` value itself is discarded immediately and never
+ * forwarded to a `JSON.stringify`/serialization path that would
+ * quote/convert the original digit string (this module's own header
+ * comment's invariant: no function here ever turns an ID into a `Number`
+ * that could lose or reshape precision on some OTHER path).
+ */
+const BIGINT_UNSIGNED_MAX = 18446744073709551615n;
+
+/**
  * Syntactic validity only -- this does NOT check the ID against Discord,
  * only that it is SHAPED like a real Snowflake (digits-only, plausible
- * length). Used both for `PLATFORM_SUPERADMIN_DISCORD_ID` startup
+ * length) AND fits the real numeric range every downstream BIGINT UNSIGNED
+ * column requires. Used both for `PLATFORM_SUPERADMIN_DISCORD_ID` startup
  * validation (ADR-008: "production startup fails loudly ... if unset or
  * not a syntactically valid Discord snowflake") and as a defensive guard
  * anywhere an externally-supplied ID-shaped string enters the RBAC path.
  */
 export function isSyntacticallyValidSnowflake(value: string): boolean {
-  return SNOWFLAKE_PATTERN.test(value);
+  if (!SNOWFLAKE_PATTERN.test(value)) {
+    return false;
+  }
+  return BigInt(value) <= BIGINT_UNSIGNED_MAX;
 }
 
 /**

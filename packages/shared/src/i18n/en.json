@@ -108,6 +108,9 @@
     "guilds": {
       "notFound": "We couldn't find that guild for your account."
     },
+    "notifications": {
+      "notFound": "We couldn't find that notification for your account."
+    },
     "notFoundPage": {
       "title": "This page doesn't exist",
       "body": "The link may be out of date, or the address may be mistyped.",
@@ -148,6 +151,10 @@
       "inviteBunny": "Invite Bunny to a server you administer",
       "moreMenu": "More navigation destinations",
       "notificationsBadge": "{{count}} unread notifications"
+    },
+    "notifications": {
+      "unreadItem": "Unread notification: {{message}}",
+      "readItem": "Read notification: {{message}}"
     }
   },
   "showcase": {
@@ -273,9 +280,73 @@
     }
   },
   "notifications": {
-    "placeholder": {
+    "center": {
       "title": "Notifications",
-      "body": "Your notification center isn't built yet — this is a placeholder for the route and its navigation."
+      "markAllRead": "Mark all read",
+      "preferencesLink": "Preferences",
+      "empty": "No notifications yet",
+      "loading": "Loading notifications…",
+      "errorTitle": "Couldn't load your notifications",
+      "errorBody": "Your data is safe — please try again.",
+      "dismiss": "Dismiss",
+      "open": "Open",
+      "listLabel": "Your notifications",
+      "newAnnouncement": "New notification: {{message}}"
+    },
+    "preferences": {
+      "title": "Notification preferences",
+      "inAppColumn": "In-app",
+      "dmColumn": "Discord DM",
+      "saved": "Preferences saved",
+      "groups": {
+        "UPLOADS": "Uploads",
+        "GUILD_NEEDS": "Guild needs",
+        "PREMIUMPLUS": "PremiumPlus",
+        "LEADERBOARD_BADGES": "Leaderboard & badges",
+        "WEEKLY_SUMMARY": "Weekly summary",
+        "ADMIN_ALERTS": "Admin alerts"
+      }
+    },
+    "events": {
+      "uploadCompleted": {
+        "message_one": "Upload completed: {{count}} screenshot",
+        "message_other": "Upload completed: {{count}} screenshots"
+      },
+      "uploadProblem": {
+        "message_one": "Your upload had a problem — {{count}} screenshot couldn't be processed",
+        "message_other": "Your upload had a problem — {{count}} screenshots couldn't be processed"
+      },
+      "urgentGuildNeed": {
+        "message": "{{guildName}} urgently needs more captures"
+      },
+      "premiumPlusReached": {
+        "message": "{{guildName}} reached PremiumPlus this season"
+      },
+      "badgeEarned": {
+        "message": "You earned a new badge: {{badgeName}}"
+      },
+      "rankingTop3Change": {
+        "message": "Your rank changed in {{guildName}}'s leaderboard: now #{{rank}}"
+      },
+      "weeklySummary": {
+        "message_one": "Your weekly summary is ready: {{count}} screenshot this week",
+        "message_other": "Your weekly summary is ready: {{count}} screenshots this week"
+      },
+      "guildApprovalStateChange": {
+        "message": "{{guildName}}'s approval status changed to {{state}}"
+      },
+      "newGuildPending": {
+        "message": "{{guildName}} is pending approval"
+      },
+      "adminAlert": {
+        "message": "{{guildName}} needs attention: {{issue}}"
+      },
+      "heroDiscoveryCandidateReady": {
+        "message": "A new Hero Discovery candidate is ready for review"
+      }
+    },
+    "dm": {
+      "footer": "Manage your notification preferences → {{url}}"
     }
   },
   "onboarding": {

@@ -110,6 +110,9 @@
     "guilds": {
       "notFound": "Nous n'avons pas trouvé ce serveur pour votre compte."
     },
+    "notifications": {
+      "notFound": "Nous n'avons pas trouvé cette notification pour votre compte."
+    },
     "notFoundPage": {
       "title": "Cette page n'existe pas",
       "body": "Le lien est peut-être obsolète, ou l'adresse mal saisie.",
@@ -150,6 +153,10 @@
       "inviteBunny": "Inviter Bunny sur un serveur que vous administrez",
       "moreMenu": "Autres destinations de navigation",
       "notificationsBadge": "{{count}} notifications non lues"
+    },
+    "notifications": {
+      "unreadItem": "Notification non lue : {{message}}",
+      "readItem": "Notification lue : {{message}}"
     }
   },
   "showcase": {
@@ -275,9 +282,76 @@
     }
   },
   "notifications": {
-    "placeholder": {
+    "center": {
       "title": "Notifications",
-      "body": "Votre centre de notifications n'est pas encore construit — ceci est un espace réservé pour la route et sa navigation."
+      "markAllRead": "Tout marquer comme lu",
+      "preferencesLink": "Préférences",
+      "empty": "Aucune notification pour l'instant",
+      "loading": "Chargement des notifications…",
+      "errorTitle": "Impossible de charger vos notifications",
+      "errorBody": "Vos données sont intactes — veuillez réessayer.",
+      "dismiss": "Ignorer",
+      "open": "Ouvrir",
+      "listLabel": "Vos notifications",
+      "newAnnouncement": "Nouvelle notification : {{message}}"
+    },
+    "preferences": {
+      "title": "Préférences de notification",
+      "inAppColumn": "Dans l'application",
+      "dmColumn": "MP Discord",
+      "saved": "Préférences enregistrées",
+      "groups": {
+        "UPLOADS": "Envois",
+        "GUILD_NEEDS": "Besoins de la guilde",
+        "PREMIUMPLUS": "PremiumPlus",
+        "LEADERBOARD_BADGES": "Classement et badges",
+        "WEEKLY_SUMMARY": "Résumé hebdomadaire",
+        "ADMIN_ALERTS": "Alertes administrateur"
+      }
+    },
+    "events": {
+      "uploadCompleted": {
+        "message_one": "Envoi terminé : {{count}} capture d'écran",
+        "message_many": "Envoi terminé : {{count}} captures d'écran",
+        "message_other": "Envoi terminé : {{count}} captures d'écran"
+      },
+      "uploadProblem": {
+        "message_one": "Votre envoi a rencontré un problème — {{count}} capture d'écran n'a pas pu être traitée",
+        "message_many": "Votre envoi a rencontré un problème — {{count}} captures d'écran n'ont pas pu être traitées",
+        "message_other": "Votre envoi a rencontré un problème — {{count}} captures d'écran n'ont pas pu être traitées"
+      },
+      "urgentGuildNeed": {
+        "message": "{{guildName}} a un besoin urgent de captures supplémentaires"
+      },
+      "premiumPlusReached": {
+        "message": "{{guildName}} a atteint PremiumPlus cette saison"
+      },
+      "badgeEarned": {
+        "message": "Vous avez obtenu un nouveau badge : {{badgeName}}"
+      },
+      "rankingTop3Change": {
+        "message": "Votre rang a changé dans le classement de {{guildName}} : désormais #{{rank}}"
+      },
+      "weeklySummary": {
+        "message_one": "Votre résumé hebdomadaire est prêt : {{count}} capture d'écran cette semaine",
+        "message_many": "Votre résumé hebdomadaire est prêt : {{count}} captures d'écran cette semaine",
+        "message_other": "Votre résumé hebdomadaire est prêt : {{count}} captures d'écran cette semaine"
+      },
+      "guildApprovalStateChange": {
+        "message": "Le statut d'approbation de {{guildName}} est passé à {{state}}"
+      },
+      "newGuildPending": {
+        "message": "{{guildName}} est en attente d'approbation"
+      },
+      "adminAlert": {
+        "message": "{{guildName}} nécessite votre attention : {{issue}}"
+      },
+      "heroDiscoveryCandidateReady": {
+        "message": "Un nouveau candidat Hero Discovery est prêt à être examiné"
+      }
+    },
+    "dm": {
+      "footer": "Gérez vos préférences de notification → {{url}}"
     }
   },
   "onboarding": {

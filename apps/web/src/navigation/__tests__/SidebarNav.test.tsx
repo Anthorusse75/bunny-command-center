@@ -20,6 +20,7 @@ async function renderSidebar(opts: {
   path?: string;
   tier?: "USER" | "GUILD_ADMIN" | "SUPERADMIN";
   isSuperadmin?: boolean;
+  unreadCount?: number;
 }): Promise<void> {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   mockAuthenticatedSession();
@@ -75,6 +76,9 @@ async function renderSidebar(opts: {
           displayName: "Alpha",
         },
       });
+    }
+    if (url.includes("/api/notifications")) {
+      return jsonResponse(200, { data: { items: [], nextCursor: null, unreadCount: opts.unreadCount ?? 0 } });
     }
     return jsonResponse(404, {});
   });
@@ -138,5 +142,17 @@ describe("SidebarNav", () => {
   it("Profile renders last (pinned group)", async () => {
     await renderSidebar({});
     expect(screen.getByTestId("sidebar-item-profile")).toBeInTheDocument();
+  });
+
+  it("notifications bell shows the real unread count from GET /api/notifications (external-review item 1)", async () => {
+    await renderSidebar({ unreadCount: 5 });
+    await waitFor(() => expect(screen.getByLabelText(/5 unread notifications/)).toBeInTheDocument());
+  });
+
+  it("notifications bell shows no VISIBLE badge dot when unread count is genuinely zero (MUI's own badgeContent={0} behavior — the accessible label itself still correctly reports zero)", async () => {
+    await renderSidebar({ unreadCount: 0 });
+    await waitFor(() => expect(screen.getByLabelText(/0 unread notifications/)).toBeInTheDocument());
+    const badgeDot = screen.getByText("0", { selector: ".MuiBadge-badge" });
+    expect(badgeDot).toHaveClass("MuiBadge-invisible");
   });
 });

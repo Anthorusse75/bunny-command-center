@@ -22,8 +22,10 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import mysql from "mysql2/promise";
-import { STEP_03_TEST_SCOPE } from "@bunny-command-center/shared";
+import { STEP_03_TEST_SCOPE, notificationEventTypeSchema } from "@bunny-command-center/shared";
 import { buildServer } from "../src/server.js";
+import { createNotification } from "../src/notifications/index.js";
+import { buildRequireAuth } from "../src/auth/requireAuth.js";
 import type { AppConfig } from "../src/config.js";
 import { runUp } from "../migrations/runner.js";
 import type { MigratorDbConfig } from "../migrations/config.js";
@@ -240,6 +242,50 @@ async function main(): Promise<void> {
       return reply.send({ data: { success: true } });
     },
   );
+  // TEST-ONLY (this file only — mission §35: "a way for Playwright to
+  // invoke the real createNotification() service through a test-only seam
+  // that is NOT present in production builds and NOT a raw DB insert from
+  // the test"). Reuses this SAME pattern's established shape (`/api/__test__/
+  // login`/`/api/__test__/seed-guild` above): a route registered ONLY on
+  // this dedicated E2E-harness script's fastify instance (never
+  // `src/server.ts`/`buildServer()` itself, so it is genuinely absent from
+  // both the production build and the Vitest integration suite's own
+  // server instances), calling the REAL `createNotification()` service
+  // function — the exact same one `apps/api/src/notifications/routes.ts`'s
+  // production `GET /api/notifications` list reads back from, never a
+  // second, test-only insert path. `apps/web/e2e/notifications.spec.ts` is
+  // the only consumer. Requires the caller to already be authenticated
+  // (via `/api/__test__/login` above) — the notification is created for
+  // THAT session's own `dashboard_users` row, never an arbitrary
+  // client-supplied userId.
+  fastify.get<{ Querystring: { eventType?: string; guildId?: string; deeplinkPath?: string } }>(
+    "/api/__test__/trigger-notification",
+    { preHandler: [buildRequireAuth(testOnlyDb, config)] },
+    async (request, reply) => {
+      const parsedEventType = notificationEventTypeSchema.safeParse(
+        request.query.eventType ?? "UPLOAD_COMPLETED",
+      );
+      if (!parsedEventType.success) {
+        return reply
+          .code(400)
+          .send({ error_code: "VALIDATION_ERROR", message_key: "errors.validation", parameters: {} });
+      }
+      const result = await createNotification(
+        testOnlyDb,
+        config,
+        {
+          userId: request.authUser!.id,
+          eventType: parsedEventType.data,
+          parameters: { count: 3, guildName: "Test Guild" },
+          guildId: request.query.guildId ?? null,
+          deeplinkPath: request.query.deeplinkPath ?? "/contributions",
+        },
+        request.log,
+      );
+      return { data: result };
+    },
+  );
+
   await fastify.listen({ port: config.port, host: "127.0.0.1" });
   console.log(`[e2e-server] listening on http://127.0.0.1:${config.port}`);
 

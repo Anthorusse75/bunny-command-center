@@ -28,6 +28,12 @@ import {
   type SessionSweepHandle,
 } from "./auth/index.js";
 import { buildGuildRoutes } from "./guilds/index.js";
+import {
+  buildNotificationRoutes,
+  registerNotificationsSse,
+  startNotificationReconciliationWatcher,
+  type NotificationReconciliationWatcherHandle,
+} from "./notifications/index.js";
 import type { Kysely } from "kysely";
 import type { DB } from "./db/codegen-types.js";
 
@@ -65,10 +71,16 @@ export interface AuthTestHooks {
   requireAuth: ReturnType<typeof buildRequireAuth>;
 }
 
+/** Same in-process-only test seam convention as `SseTestHooks`/`AuthTestHooks` above — lets an integration test force one reconciliation-watcher tick synchronously (`runOnceForTests()`) instead of waiting on the real poll interval. */
+export interface NotificationTestHooks {
+  watcher: NotificationReconciliationWatcherHandle;
+}
+
 declare module "fastify" {
   interface FastifyInstance {
     sseTestHooks?: SseTestHooks;
     authTestHooks?: AuthTestHooks;
+    notificationTestHooks?: NotificationTestHooks;
   }
 }
 
@@ -122,9 +134,17 @@ export async function buildServer(config = loadAppConfig()) {
   // leaves a dangling pool, timer, or socket. Step 04 reuses this SAME pool
   // for dashboard_users/dashboard_sessions access - one runtime connection
   // pool for the whole process, per ADR-022.
-  const db = createKyselyClient(config.db);
+  const db = createKyselyClient(config.db, logger);
   const cursorRepo = createSseCursorRepo(db);
   const hub = new SseHub();
+  // Step 09 (Notifications): registers `notification.created` via Step 03's
+  // documented extension points (`registerEventType`/`registerSourceAdapter`)
+  // — this step's task brief: "registered at real server startup (not just
+  // defined in a file), do not build a second SSE endpoint/mechanism". Must
+  // run before the poller's first tick (which `startSsePoller` below
+  // schedules `config.sse.pollIntervalMs` in the future, never immediately),
+  // so registering here is safely ahead of it.
+  registerNotificationsSse(db);
   const poller = startSsePoller({
     hub,
     cursorRepo,
@@ -163,6 +183,26 @@ export async function buildServer(config = loadAppConfig()) {
   // GET /api/guilds/:guildId (the real production requireTier-guarded route).
   await fastify.register(buildGuildRoutes(db, config, guildAuthDeps));
 
+  // Step 09 (Notifications): GET/PUT /api/notifications*, the real
+  // production `createNotification()`-backed routes (24_API_CONTRACTS.md
+  // §Notifications). The reconciliation watcher (correction #2 — observation
+  // -only, maps `operator_commands.state`/`last_error_code` onto
+  // `dashboard_notification_deliveries.state`, never re-enqueues) reuses the
+  // exact same poll-interval/scheduling convention as the SSE poller above.
+  // Shares the SAME `guildAuthDeps` instance as `buildGuildRoutes` above
+  // (role-aware "Admin alerts" preferences-group visibility correction —
+  // `isGuildAdminCapableAnywhere` reuses the one 60s `GuildAuthCache`, never
+  // a second independent one).
+  await fastify.register(buildNotificationRoutes(db, config, guildAuthDeps));
+  const notificationReconciliationWatcher: NotificationReconciliationWatcherHandle =
+    startNotificationReconciliationWatcher({
+      db,
+      logger,
+      pollIntervalMs: config.sse.pollIntervalMs,
+      maxRowsPerTick: config.sse.maxRowsPerSourcePerTick,
+    });
+  fastify.decorate("notificationTestHooks", { watcher: notificationReconciliationWatcher });
+
   await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db }));
   fastify.decorate("sseTestHooks", { hub, cursorRepo, poller });
 
@@ -177,7 +217,22 @@ export async function buildServer(config = loadAppConfig()) {
   // this as `onClose` instead deadlocks `fastify.close()` forever (verified
   // empirically; see the Step-03 HANDOVER's Deviations/lessons section).
   fastify.addHook("preClose", async () => {
-    poller.stop();
+    // `poller.stop()`/`notificationReconciliationWatcher.stop()` are now
+    // AWAITED (external-review item 3's `health.test.ts` "DB DOWN"
+    // investigation, reproduced deterministically outside Vitest too): each
+    // one waits for any tick it had ALREADY started to fully settle before
+    // resolving, so `db.destroy()` below can never run while one of these
+    // background pollers still has an in-flight query/connection attempt
+    // against `db`'s pool — previously, a tick's connection attempt could
+    // outlive `db.destroy()`, and its eventual (correctly try/caught, but
+    // now ORPHANED) timeout fired against an already-destroyed pool with no
+    // listener left, surfacing as an unhandled rejection that crashed the
+    // whole process. `sessionSweep`/`oauthTransactionSweep` remain
+    // synchronous `stop()`s (Step 04, pre-existing, unrelated to this
+    // investigation — their poll interval is minutes-to-hours, never
+    // exercised within a single test's lifetime).
+    await poller.stop();
+    await notificationReconciliationWatcher.stop();
     sessionSweep.stop();
     oauthTransactionSweep.stop();
     hub.closeAll("server_shutting_down");

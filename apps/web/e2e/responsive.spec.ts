@@ -123,6 +123,69 @@ test.describe("overflow detector regression proof", () => {
     const result = await checkHorizontalOverflow(page);
     expect(result.overflow, result.detail).toBe(true);
   });
+
+  test("the detector does NOT fail for an element whose own content overflows its own box (scrollWidth > clientWidth) while every visible pixel of that content still stays inside the viewport", async ({
+    page,
+  }) => {
+    // Companion to the test above, proving the OTHER failure mode this detector must avoid: found
+    // chasing a real CI-only (Windows-vs-Ubuntu Chromium) false positive on `.MuiBadge-root`, an
+    // `overflow: visible` container with an absolutely-positioned child that intentionally paints
+    // a little outside the container's own content box while remaining fully on-screen - see
+    // `checkHorizontalOverflow`'s own header comment. This fixture reproduces the SAME generic
+    // shape (a small `overflow: visible` box containing a larger absolutely-positioned child)
+    // without naming any MUI class - it is a structural property of the DOM, not a Badge special
+    // case, and the detector must treat it the same way regardless of what produced it.
+    await page.setViewportSize({ width: MIN_WIDTH, height: 900 });
+    await page.goto("/__showcase__");
+    const probeGeometry = await page.evaluate(() => {
+      const container = document.createElement("div");
+      container.setAttribute("data-testid", "internal-overflow-only-probe");
+      container.className = "internal-overflow-only-probe";
+      container.style.position = "fixed";
+      container.style.top = "40px";
+      container.style.left = "20px";
+      // A small, fully on-screen container - well clear of every viewport edge.
+      container.style.width = "18px";
+      container.style.height = "18px";
+      container.style.overflow = "visible";
+
+      const child = document.createElement("span");
+      // Larger than the container and offset via a transform, exactly like MuiBadge-badge's
+      // `position: absolute` + `transform: translate(...)` shape - contributes to the parent's
+      // `scrollWidth` (the bug class under test) while its own painted box stays on-screen.
+      child.style.position = "absolute";
+      child.style.top = "0";
+      child.style.left = "0";
+      child.style.width = "20px";
+      child.style.height = "20px";
+      child.style.background = "red";
+      container.appendChild(child);
+      document.body.appendChild(container);
+
+      const childRect = child.getBoundingClientRect();
+      return {
+        containerScrollWidth: container.scrollWidth,
+        containerClientWidth: container.clientWidth,
+        childRight: childRect.right,
+        childLeft: childRect.left,
+        viewportWidth: document.documentElement.clientWidth,
+      };
+    });
+
+    // Sanity-check the fixture itself actually reproduces the shape under test before trusting
+    // the detector's verdict on it - otherwise a passing assertion below would prove nothing.
+    expect(probeGeometry.containerScrollWidth).toBeGreaterThan(probeGeometry.containerClientWidth);
+    expect(probeGeometry.childLeft).toBeGreaterThanOrEqual(0);
+    expect(probeGeometry.childRight).toBeLessThanOrEqual(probeGeometry.viewportWidth);
+
+    const result = await checkHorizontalOverflow(page);
+    expect(result.overflow, result.detail).toBe(false);
+    // The internal-overflow diagnostic must still be present in `detail` - this is a false
+    // POSITIVE fix, not a deletion of the useful diagnostic information (00_GLOBAL_IMPLEMENTATION
+    // rule: report contradictions/evidence, never silently discard it).
+    expect(result.detail).toContain("internal-overflow-only-probe");
+    expect(result.detail).toContain("diagnostic only");
+  });
 });
 
 test.describe("touch targets and mobile chrome", () => {

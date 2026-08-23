@@ -28,6 +28,7 @@ import { RealtimeTestProbe, realtimeTestProbeEnabled } from "../realtime/Realtim
 import { AuthProvider, AuthGate } from "../features/auth/index.js";
 import { createAppRouter } from "../navigation/routes.js";
 import { initGuildRealtimeWiring } from "../features/guilds/index.js";
+import { initNotificationsRealtimeWiring } from "../features/notifications/realtimeWiring.js";
 
 // Step 06 addition (03_realtime_infrastructure.md's Step-06+ extension
 // point) — registers the multi-guild model's SSE -> invalidation mapping
@@ -36,6 +37,10 @@ import { initGuildRealtimeWiring } from "../features/guilds/index.js";
 // registration's honest current status (inert until a later step emits the
 // `permissions_changed` event).
 initGuildRealtimeWiring();
+// Step 09 addition — see features/notifications/realtimeWiring.ts's own doc
+// comment. Unlike the guild wiring above, this one has a real server-side
+// emitter as of this step.
+initNotificationsRealtimeWiring();
 
 // STEP 04 UPDATE (04_discord_oauth_sessions.md): `AuthProvider` sits inside
 // `QueryClientProvider`/`BccI18nProvider` (its Login/error screens are

@@ -126,7 +126,7 @@ describe("SSE poller (real MySQL, real adapter)", () => {
     try {
       await poller.runOnceForTests();
     } finally {
-      poller.stop();
+      await poller.stop();
     }
 
     expect(received).toHaveLength(1);
@@ -173,7 +173,7 @@ describe("SSE poller (real MySQL, real adapter)", () => {
       await poller.runOnceForTests();
       expect(received).toHaveLength(3);
     } finally {
-      poller.stop();
+      await poller.stop();
     }
   });
 
@@ -198,7 +198,7 @@ describe("SSE poller (real MySQL, real adapter)", () => {
     });
     await insertTestRow(rawPool as never, "before-restart");
     await pollerA.runOnceForTests();
-    pollerA.stop();
+    await pollerA.stop();
     expect(received1).toHaveLength(1);
 
     // "Restart": brand-new SseHub + poller objects (simulates a new process),
@@ -223,7 +223,7 @@ describe("SSE poller (real MySQL, real adapter)", () => {
     });
     await insertTestRow(rawPool as never, "after-restart");
     await pollerB.runOnceForTests();
-    pollerB.stop();
+    await pollerB.stop();
 
     // pollerB never redelivers "before-restart" - only the genuinely new row.
     expect(received2).toHaveLength(1);
@@ -264,7 +264,7 @@ describe("SSE poller (real MySQL, real adapter)", () => {
       // file) - it will never block later rows.
       expect(await cursorRepo.getLastSequence("dashboard_sse_test_source", "sse_hub")).toBe(insertedId);
     } finally {
-      poller.stop();
+      await poller.stop();
     }
   });
 
@@ -340,7 +340,7 @@ describe("SSE poller (real MySQL, real adapter)", () => {
         // 250ms adapter latency + 20ms gap).
         await new Promise((resolve) => setTimeout(resolve, 900));
       } finally {
-        poller.stop();
+        await poller.stop();
         // Drain any tick that was already in-flight the instant stop() was
         // called (stop() cannot cancel work already in progress) so no
         // dangling async work crosses into the next test.
