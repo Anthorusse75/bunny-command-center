@@ -80,7 +80,9 @@ function stringifyParam(value: unknown): string {
 }
 
 function interpolate(template: string, params: Readonly<Record<string, unknown>>): string {
-  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, name: string) => stringifyParam(params[name]));
+  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, name: string) =>
+    stringifyParam(params[name]),
+  );
 }
 
 /**
@@ -99,7 +101,8 @@ export function renderMessage(
 ): string {
   const catalog = CATALOGS[locale] ?? CATALOGS[FALLBACK_LOCALE];
   const template =
-    resolveKey(locale, catalog, key, params) ?? resolveKey(FALLBACK_LOCALE, CATALOGS[FALLBACK_LOCALE], key, params);
+    resolveKey(locale, catalog, key, params) ??
+    resolveKey(FALLBACK_LOCALE, CATALOGS[FALLBACK_LOCALE], key, params);
   if (template === undefined) {
     return key;
   }

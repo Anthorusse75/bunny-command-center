@@ -49,13 +49,23 @@ describe("buildSendDmPayloadJsonText — matches the real Bunny validator's exac
 
   it("throws (never silently coerces) for a syntactically invalid discordUserId", () => {
     expect(() =>
-      buildSendDmPayloadJsonText({ discordUserId: "not-a-snowflake", content: "x", footer: "", correlationId: "id" }),
+      buildSendDmPayloadJsonText({
+        discordUserId: "not-a-snowflake",
+        content: "x",
+        footer: "",
+        correlationId: "id",
+      }),
     ).toThrow();
   });
 
   it("throws for empty content (Bunny's own validator: :1207-1209, non-empty required)", () => {
     expect(() =>
-      buildSendDmPayloadJsonText({ discordUserId: HUGE_SNOWFLAKE, content: "", footer: "", correlationId: "id" }),
+      buildSendDmPayloadJsonText({
+        discordUserId: HUGE_SNOWFLAKE,
+        content: "",
+        footer: "",
+        correlationId: "id",
+      }),
     ).toThrow();
   });
 

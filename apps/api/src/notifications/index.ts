@@ -1,4 +1,8 @@
-export { createNotification, type CreateNotificationParams, type CreateNotificationResult } from "./service.js";
+export {
+  createNotification,
+  type CreateNotificationParams,
+  type CreateNotificationResult,
+} from "./service.js";
 export { buildNotificationRoutes } from "./routes.js";
 export {
   registerNotificationsSse,

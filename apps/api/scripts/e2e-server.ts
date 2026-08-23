@@ -266,7 +266,9 @@ async function main(): Promise<void> {
         request.query.eventType ?? "UPLOAD_COMPLETED",
       );
       if (!parsedEventType.success) {
-        return reply.code(400).send({ error_code: "VALIDATION_ERROR", message_key: "errors.validation", parameters: {} });
+        return reply
+          .code(400)
+          .send({ error_code: "VALIDATION_ERROR", message_key: "errors.validation", parameters: {} });
       }
       const result = await createNotification(
         testOnlyDb,

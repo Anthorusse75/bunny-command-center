@@ -72,7 +72,12 @@ describe("GET/PUT /api/notifications/preferences — role-aware 'Admin alerts' g
       logLevel: "silent",
       appVersion: "test",
       db: dbConfig,
-      sse: { heartbeatSeconds: 30, pollIntervalMs: 60_000, maxQueuedFramesPerConnection: 200, maxRowsPerSourcePerTick: 500 },
+      sse: {
+        heartbeatSeconds: 30,
+        pollIntervalMs: 60_000,
+        maxQueuedFramesPerConnection: 200,
+        maxRowsPerSourcePerTick: 500,
+      },
       discord: {
         clientId: "x",
         clientSecret: "x",

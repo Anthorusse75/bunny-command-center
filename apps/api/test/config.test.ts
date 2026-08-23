@@ -146,7 +146,10 @@ describe("apps/api config: DASHBOARD_PUBLIC_URL (Step 09) — optional, never a 
   });
 
   it("accepts a well-formed absolute http(s) URL and strips a trailing slash", () => {
-    const config = loadAppConfig({ ...REQUIRED_DB_ENV, DASHBOARD_PUBLIC_URL: "https://dashboard.example.com/" });
+    const config = loadAppConfig({
+      ...REQUIRED_DB_ENV,
+      DASHBOARD_PUBLIC_URL: "https://dashboard.example.com/",
+    });
     expect(config.publicUrl).toBe("https://dashboard.example.com");
   });
 

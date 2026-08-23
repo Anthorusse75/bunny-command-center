@@ -7,8 +7,12 @@ describe("renderMessage — server-side i18n rendering for the notification mess
     expect(renderMessage("en", "notifications.events.urgentGuildNeed.message", params)).toBe(
       "Test Guild urgently needs more captures",
     );
-    expect(renderMessage("fr", "notifications.events.urgentGuildNeed.message", params)).toContain("Test Guild");
-    expect(renderMessage("de", "notifications.events.urgentGuildNeed.message", params)).toContain("Test Guild");
+    expect(renderMessage("fr", "notifications.events.urgentGuildNeed.message", params)).toContain(
+      "Test Guild",
+    );
+    expect(renderMessage("de", "notifications.events.urgentGuildNeed.message", params)).toContain(
+      "Test Guild",
+    );
   });
 
   it("resolves the correct plural form per locale at count=0/1/2+ (19_I18N_FR_EN_DE.md's required interpolation/pluralization smoke test)", () => {
@@ -40,7 +44,9 @@ describe("renderMessage — server-side i18n rendering for the notification mess
   });
 
   it("no raw {{placeholder}} ever leaks into rendered output for a supplied parameter", () => {
-    const rendered = renderMessage("en", "notifications.events.badgeEarned.message", { badgeName: "500 shots" });
+    const rendered = renderMessage("en", "notifications.events.badgeEarned.message", {
+      badgeName: "500 shots",
+    });
     expect(rendered).not.toContain("{{");
     expect(rendered).toContain("500 shots");
   });
@@ -58,7 +64,11 @@ describe("renderMessage — server-side i18n rendering for the notification mess
   });
 
   it("renders the shared DM footer key with a url parameter", () => {
-    const rendered = renderMessage("en", "notifications.dm.footer", { url: "https://example.com/notifications/preferences" });
-    expect(rendered).toBe("Manage your notification preferences → https://example.com/notifications/preferences");
+    const rendered = renderMessage("en", "notifications.dm.footer", {
+      url: "https://example.com/notifications/preferences",
+    });
+    expect(rendered).toBe(
+      "Manage your notification preferences → https://example.com/notifications/preferences",
+    );
   });
 });

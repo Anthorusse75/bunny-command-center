@@ -5,7 +5,10 @@
 // schemas, `apps/web` uses the inferred types instead of a second,
 // independently-maintained copy.
 import { z } from "zod";
-import { notificationEventTypeSchema, notificationPreferenceGroupSchema } from "../constants/notifications.js";
+import {
+  notificationEventTypeSchema,
+  notificationPreferenceGroupSchema,
+} from "../constants/notifications.js";
 import { discordSnowflakeSchema } from "./guilds.js";
 
 /** CHAR26 id shape (`apps/api/src/notifications/id.ts`'s ULID generator) — reused for both notification and (value-referenced) `operator_commands` command ids. */

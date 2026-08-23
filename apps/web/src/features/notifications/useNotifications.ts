@@ -11,7 +11,10 @@ import {
   putNotificationPreferences,
   putNotificationRead,
 } from "./api.js";
-import type { NotificationListResponse, NotificationPreferencesUpdateRequest } from "@bunny-command-center/shared";
+import type {
+  NotificationListResponse,
+  NotificationPreferencesUpdateRequest,
+} from "@bunny-command-center/shared";
 
 export const NOTIFICATIONS_LIST_QUERY_KEY = ["notifications", "list"] as const;
 export const NOTIFICATIONS_UNREAD_COUNT_QUERY_KEY = ["notifications", "unreadCount"] as const;
@@ -26,7 +29,9 @@ export function useNotificationList() {
       {
         queryKey: NOTIFICATIONS_LIST_QUERY_KEY,
         queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
-          fetchNotifications(pageParam === undefined ? { limit: PAGE_SIZE } : { cursor: pageParam, limit: PAGE_SIZE }),
+          fetchNotifications(
+            pageParam === undefined ? { limit: PAGE_SIZE } : { cursor: pageParam, limit: PAGE_SIZE },
+          ),
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage: NotificationListResponse) => lastPage.nextCursor ?? undefined,
         staleTime: 15_000,

@@ -58,7 +58,9 @@ async function resolveVisibleGroups(
 }
 
 async function validationError(reply: FastifyReply): Promise<void> {
-  await reply.code(400).send({ error_code: "VALIDATION_ERROR", message_key: "errors.validation", parameters: {} });
+  await reply
+    .code(400)
+    .send({ error_code: "VALIDATION_ERROR", message_key: "errors.validation", parameters: {} });
 }
 
 async function notFound(reply: FastifyReply): Promise<void> {
@@ -108,7 +110,11 @@ export function buildNotificationRoutes(
       const items = rows.map((row) => ({
         id: row.id,
         eventType: row.event_type,
-        message: renderMessage(locale, row.message_key, (row.parameters_json ?? {}) as Record<string, unknown>),
+        message: renderMessage(
+          locale,
+          row.message_key,
+          (row.parameters_json ?? {}) as Record<string, unknown>,
+        ),
         guildId: row.guild_id,
         deeplinkPath: row.deeplink_path,
         readAt: row.read_at ? row.read_at.toISOString() : null,

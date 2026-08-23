@@ -101,7 +101,11 @@ function SidebarRow({
       // `features/notifications/useNotifications.ts`, is that real source
       // now). `badgeContent={0}` still correctly hides the badge (MUI's own
       // behavior) whenever the count is genuinely zero.
-      <Badge badgeContent={unreadCount} color="error" aria-label={t("a11y.nav.notificationsBadge", { count: unreadCount })}>
+      <Badge
+        badgeContent={unreadCount}
+        color="error"
+        aria-label={t("a11y.nav.notificationsBadge", { count: unreadCount })}
+      >
         <Icon fontSize="small" />
       </Badge>
     ) : (

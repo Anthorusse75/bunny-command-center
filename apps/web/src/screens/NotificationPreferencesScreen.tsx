@@ -40,7 +40,10 @@ import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import { useTranslation } from "react-i18next";
-import { NOTIFICATION_GROUP_EVENT_TYPES, type NotificationPreferenceGroup } from "@bunny-command-center/shared";
+import {
+  NOTIFICATION_GROUP_EVENT_TYPES,
+  type NotificationPreferenceGroup,
+} from "@bunny-command-center/shared";
 import { PageHeading } from "../navigation/PageHeading.js";
 import {
   useNotificationPreferences,
@@ -73,11 +76,20 @@ export function NotificationPreferencesScreen(): React.JSX.Element {
 
   const byEventType = new Map(data.preferences.map((row) => [row.eventType, row]));
 
-  function groupValue(group: NotificationPreferenceGroup, channel: "inAppEnabled" | "discordDmEnabled"): boolean {
-    return NOTIFICATION_GROUP_EVENT_TYPES[group].some((eventType) => byEventType.get(eventType)?.[channel] === true);
+  function groupValue(
+    group: NotificationPreferenceGroup,
+    channel: "inAppEnabled" | "discordDmEnabled",
+  ): boolean {
+    return NOTIFICATION_GROUP_EVENT_TYPES[group].some(
+      (eventType) => byEventType.get(eventType)?.[channel] === true,
+    );
   }
 
-  function onToggle(group: NotificationPreferenceGroup, channel: "inAppEnabled" | "discordDmEnabled", value: boolean): void {
+  function onToggle(
+    group: NotificationPreferenceGroup,
+    channel: "inAppEnabled" | "discordDmEnabled",
+    value: boolean,
+  ): void {
     update.mutate({
       groups: [
         {
@@ -150,7 +162,13 @@ export function NotificationPreferencesScreen(): React.JSX.Element {
           </TableBody>
         </Table>
       </Box>
-      <Typography role="status" aria-live="polite" variant="body2" color="text.secondary" sx={{ marginBlockStart: 2 }}>
+      <Typography
+        role="status"
+        aria-live="polite"
+        variant="body2"
+        color="text.secondary"
+        sx={{ marginBlockStart: 2 }}
+      >
         {update.isSuccess ? t("notifications.preferences.saved") : ""}
       </Typography>
     </Box>
