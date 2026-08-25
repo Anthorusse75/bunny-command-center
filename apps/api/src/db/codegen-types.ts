@@ -312,6 +312,39 @@ export interface DashboardAdminOverrides {
   user_id: string;
 }
 
+export interface DashboardAuditLog {
+  action: string;
+  actor_user_id: number | null;
+  after_json: Json | null;
+  before_json: Json | null;
+  correlation_id: string | null;
+  created_at: Generated<Date>;
+  guild_id: string | null;
+  id: Generated<number>;
+  result: string;
+}
+
+export interface DashboardGuildActivationRequests {
+  decision_reason: string | null;
+  guild_id: string;
+  request_id: string;
+  requested_at: Generated<Date>;
+  requested_by: string;
+  reviewed_at: Date | null;
+  reviewed_by: string | null;
+  state: Generated<string>;
+  submitted_config_checksum: Buffer;
+  submitted_config_version_id: number;
+}
+
+export interface DashboardGuildOnboardingProgress {
+  created_at: Generated<Date>;
+  draft_config_version_id: number | null;
+  guild_id: string;
+  sections_json: Json;
+  updated_at: Generated<Date>;
+}
+
 export interface DashboardGuildPolicy {
   admin_role_discord_id: string | null;
   created_at: Generated<Date>;
@@ -469,7 +502,10 @@ export interface DiscordSubmissions {
   author_name_cache: string | null;
   author_user_id: number | null;
   content_type: string | null;
-  discord_created_at: Date;
+  /**
+   * NULL for submission_source=WEB rows: there is no Discord message creation time for content that was never a Discord message. Use received_at (unchanged, always NOT NULL) for when did this arrive regardless of source. Relaxed 2026-08-11, ADR-010 third pass.
+   */
+  discord_created_at: Date | null;
   guild_id: number;
   original_filename: string;
   processed_channel_id: number | null;
@@ -478,15 +514,18 @@ export interface DiscordSubmissions {
   received_at: Date;
   reception_source: string;
   row_version: Generated<number>;
-  source_attachment_id: number;
-  source_channel_id: number;
+  source_attachment_id: number | null;
+  source_channel_id: number | null;
   source_deleted_at: Date | null;
-  source_message_id: number;
+  source_message_id: number | null;
   status: string;
   submission_id: Generated<number>;
+  submission_source: string | null;
   updated_at: Generated<Date>;
   url_expired_at: Date | null;
   url_snapshot: string | null;
+  web_upload_item_id: string | null;
+  web_uploader_user_id: number | null;
 }
 
 export interface ForecastEvaluations {
@@ -658,8 +697,11 @@ export interface Guilds {
   display_name_cache: string | null;
   enabled: Generated<number>;
   guild_id: number;
+  lifecycle_state: Generated<string>;
+  lifecycle_state_changed_at: Generated<Date>;
   priority: Generated<number>;
   row_version: Generated<number>;
+  suspended_from_state: string | null;
   updated_at: Generated<Date>;
 }
 
@@ -1596,6 +1638,35 @@ export interface SubmissionSeasons {
   updated_at: Generated<Date>;
 }
 
+export interface WebUploadIntake {
+  attempt_count: Generated<number>;
+  created_at: Generated<Date>;
+  guild_id: number;
+  height_px: number | null;
+  intake_id: string;
+  last_error_code: string | null;
+  last_error_detail: string | null;
+  mime_type: string;
+  next_retry_at: Date;
+  original_filename: string;
+  promoted_submission_id: number | null;
+  received_at: Date;
+  row_version: Generated<number>;
+  sha256: Buffer;
+  state: string;
+  updated_at: Generated<Date>;
+  upload_item_id: string;
+  uploader_user_id: number;
+  width_px: number | null;
+}
+
+export interface WebUploadStagingBlobs {
+  created_at: Generated<Date>;
+  image_data: Buffer;
+  stored_sha256: Buffer;
+  upload_item_id: string;
+}
+
 export interface DB {
   asset_retention_holds: AssetRetentionHolds;
   automation_run_events: AutomationRunEvents;
@@ -1614,6 +1685,9 @@ export interface DB {
   configuration_validation_results: ConfigurationValidationResults;
   contributors: Contributors;
   dashboard_admin_overrides: DashboardAdminOverrides;
+  dashboard_audit_log: DashboardAuditLog;
+  dashboard_guild_activation_requests: DashboardGuildActivationRequests;
+  dashboard_guild_onboarding_progress: DashboardGuildOnboardingProgress;
   dashboard_guild_policy: DashboardGuildPolicy;
   dashboard_notification_deliveries: DashboardNotificationDeliveries;
   dashboard_notification_preferences: DashboardNotificationPreferences;
@@ -1689,4 +1763,6 @@ export interface DB {
   singleton_leases: SingletonLeases;
   statistics_projection_checkpoints: StatisticsProjectionCheckpoints;
   submission_seasons: SubmissionSeasons;
+  web_upload_intake: WebUploadIntake;
+  web_upload_staging_blobs: WebUploadStagingBlobs;
 }

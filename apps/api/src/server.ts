@@ -28,6 +28,7 @@ import {
   type SessionSweepHandle,
 } from "./auth/index.js";
 import { buildGuildRoutes } from "./guilds/index.js";
+import { buildLifecycleRoutes } from "./lifecycle/index.js";
 import {
   buildNotificationRoutes,
   registerNotificationsSse,
@@ -194,6 +195,13 @@ export async function buildServer(config = loadAppConfig()) {
   // `isGuildAdminCapableAnywhere` reuses the one 60s `GuildAuthCache`, never
   // a second independent one).
   await fastify.register(buildNotificationRoutes(db, config, guildAuthDeps));
+  // Step 10 (guild lifecycle, onboarding, snapshot-based approval workflow):
+  // GET/PATCH /api/guilds/:guildId/onboarding, POST .../request-activation,
+  // POST .../{pause,resume,reopen}, POST /api/admin/guilds/:guildId/{suspend,
+  // lift-suspension}, POST /api/admin/activation-requests/:requestId/*.
+  // Shares the SAME guildAuthDeps instance as the routes above (one 60s
+  // GuildAuthCache for the whole process, per ADR/Step 05's own convention).
+  await fastify.register(buildLifecycleRoutes(db, config, guildAuthDeps));
   const notificationReconciliationWatcher: NotificationReconciliationWatcherHandle =
     startNotificationReconciliationWatcher({
       db,

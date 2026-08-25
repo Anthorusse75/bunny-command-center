@@ -111,6 +111,18 @@
     "notifications": {
       "notFound": "We couldn't find that notification for your account."
     },
+    "lifecycle": {
+      "illegalTransition": "This action isn't available for the guild's current status.",
+      "corruptSuspensionState": "Something went wrong restoring this guild's status. It has been logged for support.",
+      "concurrentModification": "Someone else changed this guild's status while you were working. Reload to see the latest version.",
+      "notEditable": "This guild's configuration is read-only while it's suspended.",
+      "requestNotFound": "We couldn't find that activation request.",
+      "requestAlreadyDecided": "This activation request has already been decided.",
+      "checksumMismatch": "The submitted configuration changed since it was reviewed. Ask the Guild Admin to re-submit."
+    },
+    "onboarding": {
+      "checklistNotPassed": "Complete the incoming channel, Hero channel, and at least one quota category before requesting activation."
+    },
     "notFoundPage": {
       "title": "This page doesn't exist",
       "body": "The link may be out of date, or the address may be mistyped.",
@@ -350,10 +362,97 @@
     }
   },
   "onboarding": {
-    "placeholder": {
-      "title": "Guild Onboarding",
-      "body": "The onboarding stepper isn't built yet — this is a placeholder for the route and its navigation."
-    }
+    "title": "Set up {{guildName}}",
+    "checklist": {
+      "sectionsComplete": "{{completed}}/{{total}} sections complete",
+      "heading": "Sections"
+    },
+    "sections": {
+      "bunnyPermissions": {
+        "title": "Bunny & permissions",
+        "description": "Confirm Bunny's Discord permissions in this server are sufficient (read message history, attach files where needed). Fix any gaps from Discord's Integrations settings, then confirm below.",
+        "fixItLink": "Open Discord's permission settings",
+        "acknowledge": "Bunny's permissions look correct"
+      },
+      "incomingChannel": {
+        "title": "Incoming channel",
+        "description": "Select the Discord channel Bunny watches for screenshots.",
+        "channelIdLabel": "Channel ID"
+      },
+      "heroChannel": {
+        "title": "Hero channel",
+        "description": "Select the channel Self-bot uses to dialogue with Hero Warbot.",
+        "channelIdLabel": "Channel ID"
+      },
+      "communityChannel": {
+        "title": "Community channel",
+        "description": "Select the channel for status and reminder publications (optional).",
+        "channelIdLabel": "Channel ID (optional)"
+      },
+      "seasonQuotas": {
+        "title": "Season & quotas",
+        "description": "Set initial category quotas, or accept the platform defaults.",
+        "categoriesLabel": "Quota categories (comma-separated)",
+        "acceptDefaults": "Accept platform defaults"
+      },
+      "notifications": {
+        "title": "Notifications",
+        "description": "Set this guild's default notification policy.",
+        "inApp": "In-app notifications",
+        "discordDm": "Discord DM notifications"
+      },
+      "adminRolePolicy": {
+        "title": "Admin role policy",
+        "description": "Optionally designate a Discord role as Dashboard admin for this guild. Leave blank to default to Discord Administrator.",
+        "roleIdLabel": "Admin role ID (optional)"
+      }
+    },
+    "actions": {
+      "requestActivation": "Request activation",
+      "requestActivationPending": "Pending…",
+      "requestActivationDisabledHint": "Complete the incoming channel, Hero channel, and at least one quota category (or accept platform defaults) to request activation.",
+      "pause": "Pause",
+      "resume": "Resume",
+      "editAndResubmit": "Edit and re-submit"
+    },
+    "toast": {
+      "sectionSaved": "Section saved",
+      "activationRequested": "Activation requested"
+    },
+    "pending": {
+      "title": "Your guild is awaiting approval",
+      "body": "Once approved, you'll unlock:",
+      "unlocks": {
+        "bulkUpload": "Bulk upload",
+        "ocr": "OCR",
+        "statistics": "Statistics",
+        "premiumPlus": "PremiumPlus",
+        "stockAcrossSeasons": "Stock across seasons",
+        "automation": "Automation",
+        "leaderboards": "Leaderboards",
+        "notifications": "Notifications",
+        "forecasts": "Forecasts",
+        "historyAndBadges": "History & badges"
+      },
+      "editConfiguration": "Edit configuration"
+    },
+    "rejected": {
+      "title": "Your request was rejected",
+      "reasonLabel": "Superadmin's reason"
+    },
+    "changesRequested": {
+      "title": "Changes requested",
+      "reasonLabel": "Superadmin's reason"
+    },
+    "suspended": {
+      "title": "This guild is platform-suspended",
+      "body": "Configuration is read-only while the platform suspension is in effect."
+    },
+    "activePaused": {
+      "title": "This guild is paused",
+      "body": "Bunny isn't scanning while this guild is paused. Resume to continue."
+    },
+    "titleFallback": "Set up this guild"
   },
   "adminGuild": {
     "placeholder": {

@@ -4,3 +4,4 @@
 // model) — see `./guilds.js`.
 export * from "./guilds.js";
 export * from "./notifications.js";
+export * from "./lifecycle.js";

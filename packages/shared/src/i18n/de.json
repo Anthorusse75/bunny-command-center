@@ -111,6 +111,18 @@
     "notifications": {
       "notFound": "Wir konnten diese Benachrichtigung für Ihr Konto nicht finden."
     },
+    "lifecycle": {
+      "illegalTransition": "Diese Aktion ist für den aktuellen Status des Servers nicht verfügbar.",
+      "corruptSuspensionState": "Beim Wiederherstellen des Serverstatus ist ein Problem aufgetreten. Es wurde für den Support protokolliert.",
+      "concurrentModification": "Jemand anderes hat den Status dieses Servers während Ihrer Bearbeitung geändert. Laden Sie neu, um die aktuelle Version zu sehen.",
+      "notEditable": "Die Konfiguration dieses Servers ist schreibgeschützt, solange er gesperrt ist.",
+      "requestNotFound": "Wir konnten diese Aktivierungsanfrage nicht finden.",
+      "requestAlreadyDecided": "Über diese Aktivierungsanfrage wurde bereits entschieden.",
+      "checksumMismatch": "Die eingereichte Konfiguration hat sich seit der Prüfung geändert. Bitten Sie den Server-Administrator, sie erneut einzureichen."
+    },
+    "onboarding": {
+      "checklistNotPassed": "Vervollständigen Sie den Eingangskanal, den Hero-Kanal und mindestens eine Quotenkategorie, bevor Sie die Aktivierung beantragen."
+    },
     "notFoundPage": {
       "title": "Diese Seite gibt es nicht",
       "body": "Der Link ist möglicherweise veraltet oder die Adresse falsch eingegeben.",
@@ -350,10 +362,97 @@
     }
   },
   "onboarding": {
-    "placeholder": {
-      "title": "Gilden-Einführung",
-      "body": "Der Einführungsassistent ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
-    }
+    "title": "{{guildName}} einrichten",
+    "checklist": {
+      "sectionsComplete": "{{completed}}/{{total}} Abschnitte abgeschlossen",
+      "heading": "Abschnitte"
+    },
+    "sections": {
+      "bunnyPermissions": {
+        "title": "Bunny & Berechtigungen",
+        "description": "Bestätigen Sie, dass Bunnys Discord-Berechtigungen auf diesem Server ausreichend sind (Nachrichtenverlauf lesen, Dateien anhängen, falls erforderlich). Beheben Sie etwaige Lücken über die Discord-Integrationseinstellungen und bestätigen Sie anschließend unten.",
+        "fixItLink": "Discord-Berechtigungseinstellungen öffnen",
+        "acknowledge": "Bunnys Berechtigungen sind korrekt"
+      },
+      "incomingChannel": {
+        "title": "Eingangskanal",
+        "description": "Wählen Sie den Discord-Kanal, den Bunny auf Screenshots überwacht.",
+        "channelIdLabel": "Kanal-ID"
+      },
+      "heroChannel": {
+        "title": "Hero-Kanal",
+        "description": "Wählen Sie den Kanal, in dem Self-bot mit Hero Warbot kommuniziert.",
+        "channelIdLabel": "Kanal-ID"
+      },
+      "communityChannel": {
+        "title": "Community-Kanal",
+        "description": "Wählen Sie den Kanal für Status- und Erinnerungsveröffentlichungen (optional).",
+        "channelIdLabel": "Kanal-ID (optional)"
+      },
+      "seasonQuotas": {
+        "title": "Saison & Quoten",
+        "description": "Legen Sie anfängliche Kategoriequoten fest oder übernehmen Sie die Plattform-Standardwerte.",
+        "categoriesLabel": "Quotenkategorien (kommagetrennt)",
+        "acceptDefaults": "Plattform-Standardwerte übernehmen"
+      },
+      "notifications": {
+        "title": "Benachrichtigungen",
+        "description": "Legen Sie die Standard-Benachrichtigungsrichtlinie dieser Gilde fest.",
+        "inApp": "In-App-Benachrichtigungen",
+        "discordDm": "Discord-DM-Benachrichtigungen"
+      },
+      "adminRolePolicy": {
+        "title": "Admin-Rollenrichtlinie",
+        "description": "Bestimmen Sie optional eine Discord-Rolle als Dashboard-Admin für diese Gilde. Leer lassen, um standardmäßig die Discord-Administrator-Rolle zu verwenden.",
+        "roleIdLabel": "Admin-Rollen-ID (optional)"
+      }
+    },
+    "actions": {
+      "requestActivation": "Aktivierung beantragen",
+      "requestActivationPending": "Ausstehend…",
+      "requestActivationDisabledHint": "Vervollständigen Sie den Eingangskanal, den Hero-Kanal und mindestens eine Quotenkategorie (oder übernehmen Sie die Standardwerte), um die Aktivierung zu beantragen.",
+      "pause": "Pausieren",
+      "resume": "Fortsetzen",
+      "editAndResubmit": "Bearbeiten und erneut einreichen"
+    },
+    "toast": {
+      "sectionSaved": "Abschnitt gespeichert",
+      "activationRequested": "Aktivierung beantragt"
+    },
+    "pending": {
+      "title": "Ihre Gilde wartet auf Genehmigung",
+      "body": "Nach der Genehmigung schalten Sie frei:",
+      "unlocks": {
+        "bulkUpload": "Massen-Upload",
+        "ocr": "OCR",
+        "statistics": "Statistiken",
+        "premiumPlus": "PremiumPlus",
+        "stockAcrossSeasons": "Bestand über Saisons hinweg",
+        "automation": "Automatisierung",
+        "leaderboards": "Ranglisten",
+        "notifications": "Benachrichtigungen",
+        "forecasts": "Prognosen",
+        "historyAndBadges": "Verlauf & Abzeichen"
+      },
+      "editConfiguration": "Konfiguration bearbeiten"
+    },
+    "rejected": {
+      "title": "Ihr Antrag wurde abgelehnt",
+      "reasonLabel": "Begründung des Superadmins"
+    },
+    "changesRequested": {
+      "title": "Änderungen angefordert",
+      "reasonLabel": "Begründung des Superadmins"
+    },
+    "suspended": {
+      "title": "Diese Gilde ist von der Plattform gesperrt",
+      "body": "Die Konfiguration ist schreibgeschützt, solange die Plattformsperre aktiv ist."
+    },
+    "activePaused": {
+      "title": "Diese Gilde ist pausiert",
+      "body": "Bunny scannt nicht, solange diese Gilde pausiert ist. Setzen Sie fort, um weiterzumachen."
+    },
+    "titleFallback": "Diesen Server einrichten"
   },
   "adminGuild": {
     "placeholder": {

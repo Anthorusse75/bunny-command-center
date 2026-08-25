@@ -98,6 +98,29 @@ export async function findDashboardUserById(
 }
 
 /**
+ * Step 10 addition — resolves a real Discord user id to their
+ * `dashboard_users` row, if they have ever logged in. Used to find the
+ * Superadmin's (`auth/superadmin.ts`'s single configured
+ * `PLATFORM_SUPERADMIN_DISCORD_ID`) internal recipient id for
+ * `createNotification()` — deliberately returns `undefined` rather than
+ * throwing when absent (a Superadmin who has never logged in has no
+ * `dashboard_users` row yet; `activationRequestsService.ts` treats this as
+ * "skip the in-app notification, never block the activation-request write
+ * on it" — the durable `dashboard_guild_activation_requests` row and audit
+ * log entry are the source of truth regardless).
+ */
+export async function findDashboardUserByDiscordId(
+  db: Kysely<DB>,
+  discordUserId: string,
+): Promise<DashboardUserRow | undefined> {
+  return db
+    .selectFrom("dashboard_users")
+    .selectAll()
+    .where("discord_user_id", "=", discordUserId)
+    .executeTakeFirst();
+}
+
+/**
  * Step 06 addition — records "which guild did this user last upload to"
  * (09_MULTI_GUILD_MODEL.md §Last-used guild), on `dashboard_users` per this
  * step's documented deviation (migration 0007). **Honest wiring status
