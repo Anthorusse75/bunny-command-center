@@ -564,7 +564,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     // Superadmin platform-suspends the already-paused guild.
     const suspendRes = await fastify.inject({
       method: "POST",
-      url: `/api/admin/guilds/${guildId}/suspend`,
+      url: `/api/admin/platform/guilds/${guildId}/suspend`,
       headers: csrf(superadmin.cookie),
     });
     expect(suspendRes.statusCode).toBe(200);
@@ -580,7 +580,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     // Lifting the suspension restores USER_PAUSED, NOT ACTIVE.
     const liftRes = await fastify.inject({
       method: "POST",
-      url: `/api/admin/guilds/${guildId}/lift-suspension`,
+      url: `/api/admin/platform/guilds/${guildId}/unsuspend`,
       headers: csrf(superadmin.cookie),
     });
     expect(liftRes.statusCode).toBe(200);
@@ -621,12 +621,12 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     // Superadmin suspends directly from ACTIVE (no pause first).
     await fastify.inject({
       method: "POST",
-      url: `/api/admin/guilds/${guildId}/suspend`,
+      url: `/api/admin/platform/guilds/${guildId}/suspend`,
       headers: csrf(superadmin.cookie),
     });
     const liftRes = await fastify.inject({
       method: "POST",
-      url: `/api/admin/guilds/${guildId}/lift-suspension`,
+      url: `/api/admin/platform/guilds/${guildId}/unsuspend`,
       headers: csrf(superadmin.cookie),
     });
     expect(liftRes.statusCode).toBe(200);
@@ -1381,7 +1381,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
         fastify.inject({ method: "POST", url: `/api/guilds/${guildId}/pause`, headers: csrf(admin.cookie) }),
         fastify.inject({
           method: "POST",
-          url: `/api/admin/guilds/${guildId}/suspend`,
+          url: `/api/admin/platform/guilds/${guildId}/suspend`,
           headers: csrf(superadmin.cookie),
         }),
       ]);
@@ -1437,7 +1437,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
         fastify.inject({ method: "POST", url: `/api/guilds/${guildId}/resume`, headers: csrf(admin.cookie) }),
         fastify.inject({
           method: "POST",
-          url: `/api/admin/guilds/${guildId}/suspend`,
+          url: `/api/admin/platform/guilds/${guildId}/suspend`,
           headers: csrf(superadmin.cookie),
         }),
       ]);

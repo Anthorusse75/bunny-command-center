@@ -1,6 +1,6 @@
 /**
  * `/api/guilds/:guildId/{onboarding,request-activation,pause,resume,reopen}`
- * and `/api/admin/{guilds/:guildId/{suspend,lift-suspension},activation-requests/:requestId/*}`
+ * and `/api/admin/{platform/guilds/:guildId/{suspend,unsuspend},activation-requests/:requestId/*}`
  * (IMPLEMENTATION/10_onboarding_approval.md). Session auth + CSRF header on
  * every mutation, Zod-validated params/body, `{ data }` success envelope —
  * same conventions as `apps/api/src/notifications/routes.ts`/`guilds/routes.ts`.
@@ -9,7 +9,7 @@
  * "SENSITIVE_MUTATION" }` to `requireTier` (auth/tier.ts's own documented
  * list explicitly includes "pause/resume, approval decision, admin role
  * policy change ... Steps 10/12"). Platform-scoped Superadmin actions
- * (suspend/lift-suspension, activation-request review) use the
+ * (suspend/unsuspend, activation-request review) use the
  * single-argument `requireTier("SUPERADMIN")` form — no guild-membership
  * check, matching `10_GUILD_ONBOARDING_AND_APPROVAL.md`'s "PLATFORM_SUSPENDED:
  * Superadmin only" (a Superadmin need not be a Discord member of the guild
@@ -399,16 +399,23 @@ export function buildLifecycleRoutes(
     );
 
     // -----------------------------------------------------------------
-    // POST /api/admin/guilds/:guildId/{suspend,lift-suspension} — platform-
-    // scoped Superadmin actions, no guild-membership check.
+    // POST /api/admin/platform/guilds/:guildId/{suspend,unsuspend} —
+    // platform-scoped Superadmin actions, no guild-membership check.
+    //
+    // Step 10 external-review correction round, Section 17 (API contract
+    // cleanup): renamed from the prior `/api/admin/guilds/:guildId/{suspend,
+    // lift-suspension}` to the canonical shape — both segments changed (adds
+    // `/platform/`, renames `lift-suspension` -> `unsuspend`). This branch is
+    // unpublished (no PR, no consumer yet) so there is no backward-compat
+    // concern; no alias/redirect is kept.
     // -----------------------------------------------------------------
     const superadminActions: Record<string, "SUSPEND" | "LIFT_SUSPENSION"> = {
       suspend: "SUSPEND",
-      "lift-suspension": "LIFT_SUSPENSION",
+      unsuspend: "LIFT_SUSPENSION",
     };
     for (const [path, action] of Object.entries(superadminActions)) {
       fastify.post(
-        `/api/admin/guilds/:guildId/${path}`,
+        `/api/admin/platform/guilds/:guildId/${path}`,
         { preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireSuperadmin] },
         async (request, reply) => {
           if (reply.sent) return undefined;

@@ -162,7 +162,7 @@ export const requestActivationResponseSchema = z
   .strict();
 export type RequestActivationResponse = z.infer<typeof requestActivationResponseSchema>;
 
-/** `POST /api/guilds/:guildId/{pause,resume}` and the Superadmin-only `POST /api/admin/guilds/:guildId/{suspend,lift-suspension}`. */
+/** `POST /api/guilds/:guildId/{pause,resume}` and the Superadmin-only `POST /api/admin/platform/guilds/:guildId/{suspend,unsuspend}`. */
 export const lifecycleTransitionResponseSchema = z
   .object({
     guildId: discordSnowflakeSchema,
