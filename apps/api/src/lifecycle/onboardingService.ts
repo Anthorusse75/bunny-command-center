@@ -250,26 +250,39 @@ export async function saveOnboardingSection(
 
       // Step 10 external-review correction round, Sections 6/9: "Season &
       // quotas" materializes into the REAL `guild_config_selfbot.nb_*`
-      // columns immediately on save — but ONLY once a draft version already
-      // exists (i.e. `incomingChannel`/`heroChannel` were already saved in an
-      // earlier call, so `guild_config_bunny`/`guild_config_selfbot`'s NOT
-      // NULL channel columns can already be validly populated). If no draft
-      // version exists yet, the value simply stays in the `sections_json`
-      // buffer for now (this section's real destination genuinely is NOT
-      // YET determinable) — `materializeDraftConfigVersion`'s own
-      // request-activation-time call already re-applies whatever is in the
-      // buffer once the checklist requires both channels to be known, so
-      // nothing here is ever lost, only deferred exactly as far as the
-      // ordering constraint requires. ** Documented scope limitation **: this
-      // does NOT generalize immediate materialization to the CHANNEL
-      // sections themselves (they still materialize only at
-      // request-activation, unchanged) — that broader change was judged too
-      // large/risky to make safely within this correction round's remaining
-      // scope and is flagged for a follow-up pass.
+      // columns immediately on save — but ONLY once BOTH `incomingChannel`
+      // and `heroChannel` are already known in the buffer (whether from an
+      // earlier save, or this very save happens to complete the pair —
+      // doesn't matter which, `materializeDraftConfigVersion` itself
+      // already handles "create the first version" vs. "rotate/update an
+      // existing one" uniformly), because `guild_config_bunny`/
+      // `guild_config_selfbot`'s NOT NULL channel columns cannot be validly
+      // populated until both are known. If not yet both known, the value
+      // simply stays in the `sections_json` buffer for now (this section's
+      // real destination genuinely is NOT YET determinable) —
+      // `materializeDraftConfigVersion`'s own request-activation-time call
+      // already re-applies whatever is in the buffer once the checklist
+      // requires both channels to be known, so nothing here is ever lost,
+      // only deferred exactly as far as the ordering constraint requires.
+      // ** Documented scope limitation **: this does NOT generalize
+      // immediate materialization to the CHANNEL sections themselves (they
+      // still materialize only at request-activation, unchanged) — that
+      // broader change was judged too large/risky to make safely within
+      // this correction round's remaining scope and is flagged for a
+      // follow-up pass.
       if (params.request.section === "seasonQuotas") {
         const progress = await getOnboardingProgressOrEmpty(trx, params.guildId);
-        if (progress.draftConfigVersionId !== null) {
-          const currentDraftIsImmutable = await isVersionImmutable(trx, progress.draftConfigVersionId);
+        const incomingKnown = Boolean(
+          (progress.sections.incomingChannel?.data as { channelId?: string } | undefined)?.channelId,
+        );
+        const heroKnown = Boolean(
+          (progress.sections.heroChannel?.data as { channelId?: string } | undefined)?.channelId,
+        );
+        if (incomingKnown && heroKnown) {
+          const currentDraftIsImmutable =
+            progress.draftConfigVersionId !== null
+              ? await isVersionImmutable(trx, progress.draftConfigVersionId)
+              : false;
           const { versionId, effectiveQuotas } = await materializeDraftConfigVersion(trx, {
             guildId: params.guildId,
             authorDiscordId: params.actorDiscordId,

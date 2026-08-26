@@ -1688,4 +1688,199 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       }
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Step 10 EXTERNAL-REVIEW correction round, Section 9: real 5-value
+  // season quota model — materialization into guild_config_selfbot.nb_*,
+  // and guild_season_plans create-or-update against a real
+  // submission_seasons row.
+  // -----------------------------------------------------------------------
+  describe("season & quotas real model (Section 9)", () => {
+    async function insertOpenSeason(seasonId: string, periodKey: string, targetKey: string): Promise<void> {
+      await pool.query(
+        `INSERT INTO submission_seasons (
+          season_id, submission_period_key, premiumplus_target_key,
+          opens_at_utc, planned_closes_at_utc, operational_closes_at_utc,
+          boundary_source, boundary_confidence, state
+        ) VALUES (?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), DATE_ADD(NOW(), INTERVAL 31 DAY), 'MANUAL', 0.99000, 'OPEN')`,
+        [seasonId, periodKey, targetKey],
+      );
+    }
+
+    async function nbColumns(versionId: number) {
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT nb_gc_hero, nb_gc_titan, nb_hol, nb_hero, nb_titan FROM guild_config_selfbot WHERE configuration_version_id = ?",
+        [versionId],
+      );
+      return rows[0] as {
+        nb_gc_hero: number;
+        nb_gc_titan: number;
+        nb_hol: number;
+        nb_hero: number;
+        nb_titan: number;
+      };
+    }
+
+    it("accepting platform defaults materializes the canonical 912/380/600/1200/600 values into guild_config_selfbot.nb_*", async () => {
+      const guildId = "600000000000000030";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000090");
+
+      const { requestId } = activationCreatedBody(
+        await fastify.inject({
+          method: "POST",
+          url: `/api/guilds/${guildId}/request-activation`,
+          headers: csrf(admin.cookie),
+        }),
+      ).data;
+      const [requestRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT submitted_config_version_id FROM dashboard_guild_activation_requests WHERE request_id = ?",
+        [requestId],
+      );
+      const versionId = (requestRows[0] as { submitted_config_version_id: number }).submitted_config_version_id;
+      const nb = await nbColumns(versionId);
+      expect(nb).toEqual({ nb_gc_hero: 912, nb_gc_titan: 380, nb_hol: 600, nb_hero: 1200, nb_titan: 600 });
+    });
+
+    it("a seasonQuotas save with acceptPlatformDefaults=false and no override is rejected 400 QUOTA_OVERRIDE_REQUIRED", async () => {
+      const guildId = "600000000000000031";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      const res = await patchOnboarding(admin.cookie, guildId, {
+        section: "seasonQuotas",
+        data: { acceptPlatformDefaults: false, quotaOverrides: {} },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(errorBody(res).error_code).toBe("QUOTA_OVERRIDE_REQUIRED");
+    });
+
+    it("an explicit override materializes the overridden value while every other quota stays at its canonical default", async () => {
+      const guildId = "600000000000000032";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "incomingChannel",
+            data: { channelId: "500000000000000001" },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "heroChannel",
+            data: { channelId: "500000000000000091" },
+          })
+        ).statusCode,
+      ).toBe(200);
+      // A draft version now exists (both channels known) — this save must
+      // materialize IMMEDIATELY (Section 6 partial win), not wait until
+      // request-activation.
+      const patchRes = await patchOnboarding(admin.cookie, guildId, {
+        section: "seasonQuotas",
+        data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 950 } },
+      });
+      expect(patchRes.statusCode).toBe(200);
+
+      const [progressRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT draft_config_version_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+        [guildId],
+      );
+      const versionId = (progressRows[0] as { draft_config_version_id: number }).draft_config_version_id;
+      expect(versionId).not.toBeNull();
+      const nb = await nbColumns(versionId);
+      expect(nb).toEqual({ nb_gc_hero: 950, nb_gc_titan: 380, nb_hol: 600, nb_hero: 1200, nb_titan: 600 });
+    });
+
+    it("no eligible season exists: the nb_* values just sit as the version's durable per-guild default, no guild_season_plans row is created", async () => {
+      const guildId = "600000000000000033";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000092");
+
+      await fastify.inject({
+        method: "POST",
+        url: `/api/guilds/${guildId}/request-activation`,
+        headers: csrf(admin.cookie),
+      });
+
+      // No submission_seasons row was ever created in this test's database
+      // state for this guild's flow (freshDatabase() starts empty) — this
+      // proves "no season yet" does NOT invent one, and does NOT create a
+      // guild_season_plans row; the nb_* values (already proven materialized
+      // above) simply remain the version's own durable columns.
+      const [planRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT plan_id FROM guild_season_plans WHERE guild_id = ?",
+        [guildId],
+      );
+      expect(planRows).toHaveLength(0);
+    });
+
+    it("an eligible open season creates a real guild_season_plans row with the effective quotas, and a re-save UPDATEs it rather than violating UNIQUE(guild_id, season_id)", async () => {
+      const guildId = "600000000000000034";
+      const seasonId = "01SEASON0000000000000TEST1";
+      await seedGuild(guildId);
+      await insertOpenSeason(seasonId, "SEA0001", "PPT0001");
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      // First save: creates the draft version + a NEW guild_season_plans row.
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "incomingChannel",
+        data: { channelId: "500000000000000001" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000093" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "seasonQuotas",
+        data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 1000 } },
+      });
+
+      const [firstPlanRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT plan_id, quota_gc_hero, operational_state, row_version FROM guild_season_plans WHERE guild_id = ? AND season_id = ?",
+        [guildId, seasonId],
+      );
+      expect(firstPlanRows).toHaveLength(1);
+      const firstPlan = firstPlanRows[0] as {
+        plan_id: string;
+        quota_gc_hero: number;
+        operational_state: string;
+        row_version: number;
+      };
+      expect(firstPlan.quota_gc_hero).toBe(1000);
+      expect(firstPlan.operational_state).toBe("ACTIVE");
+      expect(firstPlan.row_version).toBe(1);
+
+      // A paired guild_season_progress row exists, all counters 0.
+      const [progressRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT status, official_gc_hero, estimated_gc_hero FROM guild_season_progress WHERE plan_id = ?",
+        [firstPlan.plan_id],
+      );
+      expect(progressRows).toHaveLength(1);
+      expect((progressRows[0] as { status: string }).status).toBe("PENDING");
+      expect((progressRows[0] as { official_gc_hero: number }).official_gc_hero).toBe(0);
+
+      // Re-save with a DIFFERENT override: must UPDATE the existing row
+      // (same plan_id), never violate UNIQUE(guild_id, season_id) with a
+      // second INSERT.
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "seasonQuotas",
+        data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 1050 } },
+      });
+      const [secondPlanRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT plan_id, quota_gc_hero, row_version FROM guild_season_plans WHERE guild_id = ? AND season_id = ?",
+        [guildId, seasonId],
+      );
+      expect(secondPlanRows).toHaveLength(1);
+      const secondPlan = secondPlanRows[0] as { plan_id: string; quota_gc_hero: number; row_version: number };
+      expect(secondPlan.plan_id).toBe(firstPlan.plan_id);
+      expect(secondPlan.quota_gc_hero).toBe(1050);
+      expect(secondPlan.row_version).toBe(2);
+    });
+  });
 });
