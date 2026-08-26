@@ -1344,6 +1344,106 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       return results.map((r) => r.statusCode).sort();
     }
 
+    // -----------------------------------------------------------------
+    // Step 10 EXTERNAL-REVIEW correction round, Section 7: autosave
+    // lost-update race. The prior save path read the WHOLE sections_json,
+    // merged one key in JS, wrote the WHOLE JSON back — two concurrent
+    // section saves (different keys) could lose one of the two writes.
+    // Fixed with a single atomic `JSON_SET` UPDATE. Proves BOTH concurrent
+    // writes survive against REAL MySQL (two genuinely simultaneous
+    // connections, via Promise.all — not sequential fastify.inject calls).
+    // -----------------------------------------------------------------
+    it("two concurrent onboarding section saves (different keys) both survive — no lost update", async () => {
+      const guildId = "600000000000000025";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      // One save first, sequentially, to move the guild past the
+      // DISCOVERED->CONFIGURING implicit lifecycle transition — that
+      // transition is ITSELF guarded by a SEPARATE row_version optimistic
+      // lock (a different, already-covered concurrency concern, Gap 5),
+      // which would otherwise race independently of the JSON_SET atomicity
+      // this test targets and make the outcome depend on two unrelated
+      // races at once.
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "communityChannel",
+        data: { channelId: null },
+      });
+
+      const [incomingRes, heroRes] = await Promise.all([
+        patchOnboarding(admin.cookie, guildId, {
+          section: "incomingChannel",
+          data: { channelId: "500000000000000073" },
+        }),
+        patchOnboarding(admin.cookie, guildId, {
+          section: "heroChannel",
+          data: { channelId: "500000000000000074" },
+        }),
+      ]);
+      expect(incomingRes.statusCode).toBe(200);
+      expect(heroRes.statusCode).toBe(200);
+
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT sections_json FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+        [guildId],
+      );
+      const sectionsRaw = (rows[0] as { sections_json: unknown }).sections_json;
+      const sections =
+        typeof sectionsRaw === "string"
+          ? (JSON.parse(sectionsRaw) as Record<string, unknown>)
+          : (sectionsRaw as Record<string, unknown>);
+      // BOTH keys must be present — neither concurrent write silently
+      // clobbered the other's key (the old whole-JSON read-merge-write
+      // path would non-deterministically drop one of these two).
+      expect(sections.incomingChannel).toMatchObject({ data: { channelId: "500000000000000073" } });
+      expect(sections.heroChannel).toMatchObject({ data: { channelId: "500000000000000074" } });
+    });
+
+    // -----------------------------------------------------------------
+    // Section 7's other required proof: repeated saves of the SAME section
+    // have deterministic semantics. Documented choice: last-COMMITTED-write
+    // wins (see onboardingRepo.ts's saveOnboardingSectionData doc comment)
+    // — never a lost update, since MySQL serializes the two statements via
+    // the row's lock and neither ever reads the column beforehand.
+    // -----------------------------------------------------------------
+    it("repeated saves of the SAME section are deterministic: the row always ends up holding exactly one of the two values, never a merge/corruption", async () => {
+      const guildId = "600000000000000026";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      // See the previous test's comment — moves past the DISCOVERED-only
+      // implicit-transition race first, sequentially.
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "communityChannel",
+        data: { channelId: null },
+      });
+
+      const [firstRes, secondRes] = await Promise.all([
+        patchOnboarding(admin.cookie, guildId, {
+          section: "incomingChannel",
+          data: { channelId: "500000000000000075" },
+        }),
+        patchOnboarding(admin.cookie, guildId, {
+          section: "incomingChannel",
+          data: { channelId: "500000000000000076" },
+        }),
+      ]);
+      expect(firstRes.statusCode).toBe(200);
+      expect(secondRes.statusCode).toBe(200);
+
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT sections_json FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+        [guildId],
+      );
+      const sectionsRaw = (rows[0] as { sections_json: unknown }).sections_json;
+      const sections =
+        typeof sectionsRaw === "string"
+          ? (JSON.parse(sectionsRaw) as Record<string, unknown>)
+          : (sectionsRaw as Record<string, unknown>);
+      const incoming = sections.incomingChannel as { data: { channelId: string } };
+      // Exactly one of the two full, well-formed values survived — never a
+      // corrupted/partial merge of the two.
+      expect(["500000000000000075", "500000000000000076"]).toContain(incoming.data.channelId);
+    });
+
     it("two concurrent request-activation calls for the same guild: exactly one succeeds, never two live activation requests", async () => {
       const guildId = "600000000000000010";
       await seedGuild(guildId);

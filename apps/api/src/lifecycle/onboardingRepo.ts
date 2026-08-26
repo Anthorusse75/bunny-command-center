@@ -155,23 +155,73 @@ export async function ensureOnboardingProgressRow(
   };
 }
 
-/** Writes exactly one section's payload into the live edit buffer — never touches the real SHARED sub-tables (see this module's header comment). */
+/**
+ * Step 10 external-review correction round, Section 7: writes exactly one
+ * section's payload into the live edit buffer — never touches the real
+ * SHARED sub-tables (see this module's header comment). Real bug fixed
+ * here: the prior implementation read the WHOLE `sections_json` (via
+ * `ensureOnboardingProgressRow`), merged one key in JS, and wrote the WHOLE
+ * JSON back — a classic lost-update race: two concurrent section saves
+ * (e.g. `incomingChannel` and `heroChannel`) each read the same
+ * pre-mutation snapshot, and whichever UPDATE commits last silently
+ * clobbers the other's key.
+ *
+ * Fixed with a SINGLE atomic statement — `INSERT ... ON DUPLICATE KEY
+ * UPDATE sections_json = JSON_SET(sections_json, '$.<key>', CAST(? AS JSON))`
+ * (MySQL 8) — which never reads the column into the application at all:
+ * the merge happens SERVER-SIDE, inside the same statement that holds the
+ * row's lock for its duration, so two concurrent saves of DIFFERENT keys
+ * can never lose each other's write (proven by a real 2-connection MySQL
+ * test, `routes.test.ts`). This same statement also handles the
+ * first-touch "row doesn't exist yet" case atomically (the `INSERT`
+ * branch), so this function no longer needs `ensureOnboardingProgressRow`
+ * at all.
+ *
+ * **Documented concurrency semantics for the SAME section key** (task's
+ * explicit "your choice, document which"): repeated saves of the SAME
+ * section have deterministic **last-COMMITTED-write-wins** semantics — MySQL
+ * serializes the two `INSERT ... ON DUPLICATE KEY UPDATE` statements via the
+ * row's lock, and whichever one commits second simply overwrites the
+ * column with ITS OWN incoming value (never a function of a stale prior
+ * read, since neither statement ever reads the column into the
+ * application) — this is NOT a lost-update race (there is nothing to
+ * "lose": both writers' intended final values are fully known upfront, and
+ * exactly one of them deterministically becomes durable), it is the
+ * ordinary, expected outcome of two genuinely concurrent writes to the same
+ * logical field, identical in spirit to any other last-write-wins column
+ * update in this codebase.
+ *
+ * Every onboarding section key is a fixed, server-controlled enum value
+ * (`ONBOARDING_SECTION_KEYS`, already Zod-validated upstream at the route) —
+ * re-validated here defensively before it is ever embedded into the raw
+ * SQL JSON path text (`$.<key>`), since an unvalidated key could otherwise
+ * inject an arbitrary JSON path expression.
+ */
 export async function saveOnboardingSectionData(
   db: Executor,
   guildId: string,
   request: OnboardingSectionSaveRequest,
 ): Promise<OnboardingProgressRow> {
-  const current = await ensureOnboardingProgressRow(db, guildId);
-  const nextSections: SectionsJson = {
-    ...current.sections,
-    [request.section]: { data: request.data, completedAt: new Date().toISOString() },
-  };
+  if (!(ONBOARDING_SECTION_KEYS as readonly string[]).includes(request.section)) {
+    throw new Error(`saveOnboardingSectionData: unknown section key ${JSON.stringify(request.section)}`);
+  }
+  const entry: SectionEntry = { data: request.data, completedAt: new Date().toISOString() };
+  const jsonPath = `$.${request.section}`;
+  const entryJsonText = JSON.stringify(entry);
+
   await db
-    .updateTable("dashboard_guild_onboarding_progress")
-    .set({ sections_json: JSON.stringify(nextSections) })
-    .where("guild_id", "=", guildId)
+    .insertInto("dashboard_guild_onboarding_progress")
+    .values({
+      guild_id: guildId,
+      draft_config_version_id: null,
+      sections_json: JSON.stringify({ [request.section]: entry }),
+    })
+    .onDuplicateKeyUpdate({
+      sections_json: sql`JSON_SET(sections_json, ${jsonPath}, CAST(${entryJsonText} AS JSON))`,
+    })
     .execute();
-  return { ...current, sections: nextSections };
+
+  return getOnboardingProgressOrEmpty(db, guildId);
 }
 
 export async function setDraftConfigVersionId(
