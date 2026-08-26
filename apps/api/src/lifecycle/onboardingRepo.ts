@@ -40,12 +40,15 @@
  * `ONBOARDING_NOTIFICATION_POLICY_IS_PROVISIONAL` below and migration
  * 0013's own header comment).
  */
-import { createHash } from "node:crypto";
 import { sql, type Kysely, type Transaction } from "kysely";
 import type { DB } from "../db/codegen-types.js";
 import { bindBigIntUnsigned } from "../db/bigIntParam.js";
 import type { OnboardingSectionKey, OnboardingSectionSaveRequest } from "@bunny-command-center/shared";
 import { ONBOARDING_SECTION_KEYS } from "@bunny-command-center/shared";
+import {
+  computeMaterializedConfigChecksum,
+  type MaterializedConfigValues,
+} from "./configChecksum.js";
 
 export type Executor = Kysely<DB> | Transaction<DB>;
 
@@ -177,12 +180,31 @@ export function sectionStatuses(
   return result;
 }
 
-/** Deterministic SHA-256 over the onboarding buffer's canonical, sorted-key JSON serialization — `guild_configuration_versions.checksum` (BINARY(32)). Content identity only, never used for anything security-sensitive beyond TOCTOU defense-in-depth (10_GUILD_ONBOARDING_AND_APPROVAL.md's "re-verify submitted_config_checksum still matches"). */
-export function computeConfigChecksum(sections: SectionsJson): Buffer {
-  const keys = Object.keys(sections).sort();
-  const canonical: Record<string, unknown> = {};
-  for (const k of keys) canonical[k] = sections[k as OnboardingSectionKey]?.data ?? null;
-  return createHash("sha256").update(JSON.stringify(canonical)).digest();
+/**
+ * Step 10 external-review correction round, Section 5: the checksum MUST
+ * represent the real materialized `{common, bunny, selfbot, orchestrator}`
+ * content that was/will be written to the real sub-tables — NEVER the
+ * onboarding form buffer (`sections_json`). The old
+ * `computeConfigChecksum(sections)` (hashed the buffer via plain
+ * `JSON.stringify`) has been REMOVED — every checksum in this module now
+ * goes through `computeMaterializedConfigChecksum` (`configChecksum.ts`),
+ * which byte-for-byte matches the canonical Self-bot writer's
+ * `guild_config.py::_checksum()`. See that module's header comment for the
+ * full rationale (BigInt-precision / ensure_ascii traps a naive
+ * `JSON.stringify` port would fall into).
+ */
+
+/** Parses a MySQL `JSON` column's value defensively — mysql2 sometimes hands back an already-parsed object/array, sometimes a raw string, depending on driver/version configuration; mirrors `parseSectionsJson`'s own defensive pattern above rather than assuming one shape. */
+function parseJsonColumn<T>(raw: unknown, fallback: T): T {
+  if (raw === null || raw === undefined) return fallback;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  return raw as T;
 }
 
 /**
@@ -201,6 +223,13 @@ export function computeConfigChecksum(sections: SectionsJson): Buffer {
  * product decision about tuning. Flagged for Step 12's owner (the real
  * versioned-config editor) to ratify, override, or supersede with a real
  * platform-defaults mechanism.
+ *
+ * Step 10 external-review correction round, Section 10: every
+ * `guild_config_selfbot` default below is now cited against its REAL
+ * canonical source — `01_NEW_SELF_BOTS/src/core/config.py`'s
+ * `ConfigManager.DEFAULT_CONFIG` (verified live, lines ~122-142) via its
+ * `_JSON_TO_DB_SELFBOT_KEYS` mapping (lines ~55-73) — and 3 real bugs found
+ * against that source are fixed (see the individual field comments below).
  */
 const GUILD_CONFIG_COMMON_DEFAULTS = {
   timezone: "Europe/Paris",
@@ -222,27 +251,352 @@ const GUILD_CONFIG_BUNNY_DEFAULTS = {
   allowed_mime_json: JSON.stringify(["image/png", "image/jpeg", "image/webp"]),
 };
 const GUILD_CONFIG_SELFBOT_DEFAULTS = {
+  // = config.py DEFAULT_CONFIG['automation_enabled'] (False).
   automation_enabled: 0,
+  // No legacy JSON/SQL-level default exists anywhere for this field
+  // (confirmed absent from _JSON_TO_DB_SELFBOT_KEYS; migration 0002's
+  // guild_config_selfbot CREATE TABLE has no SQL DEFAULT either) — this is
+  // Step 10's own reasoned choice, not a sourced value.
   profile_enabled: 0,
-  profile_timeout_seconds: 30,
+  // = config.py DEFAULT_CONFIG['auto_profile_timeout_seconds'] (60).
+  // FIXED (Section 10): was 30, a real bug against the canonical source.
+  profile_timeout_seconds: 60,
+  // No legacy JSON/SQL-level default exists for this field (same
+  // verification as profile_enabled above) — Step 10's own reasoned choice.
   profile_stale_seconds: 3600,
-  hero_response_timeout_seconds: 60,
+  // = config.py DEFAULT_CONFIG['auto_response_timeout_seconds'] (180).
+  // FIXED (Section 10): was 60, a real bug against the canonical source.
+  hero_response_timeout_seconds: 180,
+  // = config.py DEFAULT_CONFIG['auto_retry_limit'] (3) — already correct.
   max_delivery_attempts: 3,
+  // = config.py DEFAULT_CONFIG['community_updates_enabled'] (True) —
+  // already correct.
   community_updates_enabled: 1,
-  everyone_mentions_enabled: 0,
+  // = config.py DEFAULT_CONFIG['community_mentions_enabled'] (True).
+  // FIXED (Section 10): was 0 — a real behavioral default flip against the
+  // canonical source (the old value silently disabled @everyone mentions
+  // by default, the opposite of the legacy self-bot's own default).
+  everyone_mentions_enabled: 1,
+  // No legacy JSON/SQL-level default exists for this field (same
+  // verification as profile_enabled above) — Step 10's own reasoned choice.
   reminder_enabled: 1,
 };
+
+/** All 16 `guild_config_orchestrator` override columns, `null` (Python's `orchestrator={}` case — no per-guild override yet, matching the bootstrap DB row's own all-NULL shape). */
+const ORCHESTRATOR_BOOTSTRAP_DEFAULTS = {
+  max_guild_inflight: null,
+  max_channel_inflight: null,
+  risk_eval_min_seconds: null,
+  risk_eval_max_seconds: null,
+  send_min_seconds: null,
+  send_max_seconds: null,
+  profile_min_seconds: null,
+  profile_max_seconds: null,
+  reminder_min_seconds: null,
+  reminder_max_seconds: null,
+  critical_hours_remaining: null,
+  hero_latency_circuit_seconds: null,
+  error_rate_circuit: null,
+  min_sample_size: null,
+  fairness_weight: null,
+  starvation_seconds: null,
+  decision_rules_json: null,
+} as const;
+
+/** The bootstrap `MaterializedConfigValues` for a guild's very first onboarding-created version — every field is either a cited canonical default (Section 10) or an explicitly-disclosed Step 10 choice; no orchestrator overrides. */
+function bootstrapMaterializedConfigValues(): MaterializedConfigValues {
+  return {
+    common: {
+      timezone: GUILD_CONFIG_COMMON_DEFAULTS.timezone,
+      operationalEnabled: GUILD_CONFIG_COMMON_DEFAULTS.operational_enabled === 1,
+      locale: GUILD_CONFIG_COMMON_DEFAULTS.locale,
+      guildWeight: GUILD_CONFIG_COMMON_DEFAULTS.guild_weight,
+    },
+    bunny: {
+      incomingChannelId: "0",
+      processedChannelId: null,
+      ingestionEnabled: GUILD_CONFIG_BUNNY_DEFAULTS.ingestion_enabled === 1,
+      sourceDeletePolicy: GUILD_CONFIG_BUNNY_DEFAULTS.source_delete_policy,
+      saveProcessedCopy: GUILD_CONFIG_BUNNY_DEFAULTS.save_processed_copy === 1,
+      ocrEngine: GUILD_CONFIG_BUNNY_DEFAULTS.ocr_engine,
+      ocrProfile: GUILD_CONFIG_BUNNY_DEFAULTS.ocr_profile,
+      perGuildConcurrency: GUILD_CONFIG_BUNNY_DEFAULTS.per_guild_concurrency,
+      maxOcrAttempts: GUILD_CONFIG_BUNNY_DEFAULTS.max_ocr_attempts,
+      retryBaseSeconds: GUILD_CONFIG_BUNNY_DEFAULTS.retry_base_seconds,
+      catchupIntervalSeconds: GUILD_CONFIG_BUNNY_DEFAULTS.catchup_interval_seconds,
+      maxAttachmentBytes: String(GUILD_CONFIG_BUNNY_DEFAULTS.max_attachment_bytes),
+      allowedMime: JSON.parse(GUILD_CONFIG_BUNNY_DEFAULTS.allowed_mime_json) as string[],
+    },
+    selfbot: {
+      herowarbotChannelId: "0",
+      screenshotsChannelId: null,
+      communityChannelId: null,
+      automationEnabled: GUILD_CONFIG_SELFBOT_DEFAULTS.automation_enabled === 1,
+      profileEnabled: GUILD_CONFIG_SELFBOT_DEFAULTS.profile_enabled === 1,
+      profileTimeoutSeconds: GUILD_CONFIG_SELFBOT_DEFAULTS.profile_timeout_seconds,
+      profileStaleSeconds: GUILD_CONFIG_SELFBOT_DEFAULTS.profile_stale_seconds,
+      heroResponseTimeoutSeconds: GUILD_CONFIG_SELFBOT_DEFAULTS.hero_response_timeout_seconds,
+      maxDeliveryAttempts: GUILD_CONFIG_SELFBOT_DEFAULTS.max_delivery_attempts,
+      communityUpdatesEnabled: GUILD_CONFIG_SELFBOT_DEFAULTS.community_updates_enabled === 1,
+      everyoneMentionsEnabled: GUILD_CONFIG_SELFBOT_DEFAULTS.everyone_mentions_enabled === 1,
+      reminderEnabled: GUILD_CONFIG_SELFBOT_DEFAULTS.reminder_enabled === 1,
+      nbGcHero: 912,
+      nbGcTitan: 380,
+      nbHol: 600,
+      nbHero: 1200,
+      nbTitan: 600,
+      autoProfileIntervalSeconds: 1800,
+      autoMaxPerCycle: 10,
+    },
+    orchestrator: {
+      maxGuildInflight: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.max_guild_inflight,
+      maxChannelInflight: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.max_channel_inflight,
+      riskEvalMinSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.risk_eval_min_seconds,
+      riskEvalMaxSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.risk_eval_max_seconds,
+      sendMinSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.send_min_seconds,
+      sendMaxSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.send_max_seconds,
+      profileMinSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.profile_min_seconds,
+      profileMaxSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.profile_max_seconds,
+      reminderMinSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.reminder_min_seconds,
+      reminderMaxSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.reminder_max_seconds,
+      criticalHoursRemaining: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.critical_hours_remaining,
+      heroLatencyCircuitSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.hero_latency_circuit_seconds,
+      errorRateCircuit: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.error_rate_circuit,
+      minSampleSize: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.min_sample_size,
+      fairnessWeight: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.fairness_weight,
+      starvationSeconds: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.starvation_seconds,
+      decisionRulesJson: ORCHESTRATOR_BOOTSTRAP_DEFAULTS.decision_rules_json,
+    },
+  };
+}
+
+/**
+ * Reads a `guild_configuration_versions` row's REAL, currently-stored
+ * content from its 4 real sub-tables — every `BIGINT UNSIGNED` column is
+ * explicitly `CAST(... AS CHAR)` in the SQL (never left to Kysely's
+ * generated `number` type, which would silently truncate a real Snowflake
+ * above `Number.MAX_SAFE_INTEGER` the moment mysql2 parsed it into a JS
+ * number — the exact trap this step's checksum work exists to avoid).
+ * Returns `null` if `versionId` has no `guild_config_common` row at all
+ * (never created, or genuinely nonexistent) — the 3 other sub-tables are
+ * then assumed to be in the same state (they are always written together,
+ * see `materializeDraftConfigVersion`) and are not separately queried.
+ *
+ * Used for BOTH (a) carrying forward every unchanged field when
+ * materializing a new version based on an existing one (Section 10), and
+ * (b) the approval-time checksum recompute against the REAL sub-table rows
+ * (Section 5.1) — the same reader for both call sites, so the two can never
+ * silently disagree about what "the real row content" means.
+ */
+export async function loadMaterializedConfigValues(
+  db: Executor,
+  versionId: number,
+): Promise<MaterializedConfigValues | null> {
+  const common = await db
+    .selectFrom("guild_config_common")
+    .select(["timezone", "operational_enabled", "locale", sql<string>`CAST(guild_weight AS CHAR)`.as("guild_weight")])
+    .where("configuration_version_id", "=", versionId)
+    .executeTakeFirst();
+  if (!common) return null;
+
+  const bunny = await db
+    .selectFrom("guild_config_bunny")
+    .select([
+      sql<string>`CAST(incoming_channel_id AS CHAR)`.as("incoming_channel_id"),
+      sql<string | null>`CAST(processed_channel_id AS CHAR)`.as("processed_channel_id"),
+      "ingestion_enabled",
+      "source_delete_policy",
+      "save_processed_copy",
+      "ocr_engine",
+      "ocr_profile",
+      "per_guild_concurrency",
+      "max_ocr_attempts",
+      "retry_base_seconds",
+      "catchup_interval_seconds",
+      sql<string>`CAST(max_attachment_bytes AS CHAR)`.as("max_attachment_bytes"),
+      "allowed_mime_json",
+    ])
+    .where("configuration_version_id", "=", versionId)
+    .executeTakeFirstOrThrow(
+      () => new Error(`loadMaterializedConfigValues: guild_config_bunny missing for version ${versionId}`),
+    );
+
+  const selfbot = await db
+    .selectFrom("guild_config_selfbot")
+    .select([
+      sql<string>`CAST(herowarbot_channel_id AS CHAR)`.as("herowarbot_channel_id"),
+      sql<string | null>`CAST(screenshots_channel_id AS CHAR)`.as("screenshots_channel_id"),
+      sql<string | null>`CAST(community_channel_id AS CHAR)`.as("community_channel_id"),
+      "automation_enabled",
+      "profile_enabled",
+      "profile_timeout_seconds",
+      "profile_stale_seconds",
+      "hero_response_timeout_seconds",
+      "max_delivery_attempts",
+      "community_updates_enabled",
+      "everyone_mentions_enabled",
+      "reminder_enabled",
+      "nb_gc_hero",
+      "nb_gc_titan",
+      "nb_hol",
+      "nb_hero",
+      "nb_titan",
+      "auto_profile_interval_seconds",
+      "auto_max_per_cycle",
+    ])
+    .where("configuration_version_id", "=", versionId)
+    .executeTakeFirstOrThrow(
+      () => new Error(`loadMaterializedConfigValues: guild_config_selfbot missing for version ${versionId}`),
+    );
+
+  const orchestrator = await db
+    .selectFrom("guild_config_orchestrator")
+    .select([
+      "max_guild_inflight",
+      "max_channel_inflight",
+      "risk_eval_min_seconds",
+      "risk_eval_max_seconds",
+      "send_min_seconds",
+      "send_max_seconds",
+      "profile_min_seconds",
+      "profile_max_seconds",
+      "reminder_min_seconds",
+      "reminder_max_seconds",
+      "critical_hours_remaining",
+      "hero_latency_circuit_seconds",
+      sql<string | null>`CAST(error_rate_circuit AS CHAR)`.as("error_rate_circuit"),
+      "min_sample_size",
+      sql<string | null>`CAST(fairness_weight AS CHAR)`.as("fairness_weight"),
+      "starvation_seconds",
+      "decision_rules_json",
+    ])
+    .where("configuration_version_id", "=", versionId)
+    .executeTakeFirstOrThrow(
+      () => new Error(`loadMaterializedConfigValues: guild_config_orchestrator missing for version ${versionId}`),
+    );
+
+  return {
+    common: {
+      timezone: common.timezone,
+      operationalEnabled: common.operational_enabled === 1,
+      locale: common.locale,
+      guildWeight: common.guild_weight,
+    },
+    bunny: {
+      incomingChannelId: bunny.incoming_channel_id,
+      processedChannelId: bunny.processed_channel_id,
+      ingestionEnabled: bunny.ingestion_enabled === 1,
+      sourceDeletePolicy: bunny.source_delete_policy,
+      saveProcessedCopy: bunny.save_processed_copy === 1,
+      ocrEngine: bunny.ocr_engine,
+      ocrProfile: bunny.ocr_profile,
+      perGuildConcurrency: bunny.per_guild_concurrency,
+      maxOcrAttempts: bunny.max_ocr_attempts,
+      retryBaseSeconds: bunny.retry_base_seconds,
+      catchupIntervalSeconds: bunny.catchup_interval_seconds,
+      maxAttachmentBytes: bunny.max_attachment_bytes,
+      allowedMime: parseJsonColumn<string[]>(bunny.allowed_mime_json, []),
+    },
+    selfbot: {
+      herowarbotChannelId: selfbot.herowarbot_channel_id,
+      screenshotsChannelId: selfbot.screenshots_channel_id,
+      communityChannelId: selfbot.community_channel_id,
+      automationEnabled: selfbot.automation_enabled === 1,
+      profileEnabled: selfbot.profile_enabled === 1,
+      profileTimeoutSeconds: selfbot.profile_timeout_seconds,
+      profileStaleSeconds: selfbot.profile_stale_seconds,
+      heroResponseTimeoutSeconds: selfbot.hero_response_timeout_seconds,
+      maxDeliveryAttempts: selfbot.max_delivery_attempts,
+      communityUpdatesEnabled: selfbot.community_updates_enabled === 1,
+      everyoneMentionsEnabled: selfbot.everyone_mentions_enabled === 1,
+      reminderEnabled: selfbot.reminder_enabled === 1,
+      nbGcHero: selfbot.nb_gc_hero,
+      nbGcTitan: selfbot.nb_gc_titan,
+      nbHol: selfbot.nb_hol,
+      nbHero: selfbot.nb_hero,
+      nbTitan: selfbot.nb_titan,
+      autoProfileIntervalSeconds: selfbot.auto_profile_interval_seconds,
+      autoMaxPerCycle: selfbot.auto_max_per_cycle,
+    },
+    orchestrator: {
+      maxGuildInflight: orchestrator.max_guild_inflight,
+      maxChannelInflight: orchestrator.max_channel_inflight,
+      riskEvalMinSeconds: orchestrator.risk_eval_min_seconds,
+      riskEvalMaxSeconds: orchestrator.risk_eval_max_seconds,
+      sendMinSeconds: orchestrator.send_min_seconds,
+      sendMaxSeconds: orchestrator.send_max_seconds,
+      profileMinSeconds: orchestrator.profile_min_seconds,
+      profileMaxSeconds: orchestrator.profile_max_seconds,
+      reminderMinSeconds: orchestrator.reminder_min_seconds,
+      reminderMaxSeconds: orchestrator.reminder_max_seconds,
+      criticalHoursRemaining: orchestrator.critical_hours_remaining,
+      heroLatencyCircuitSeconds: orchestrator.hero_latency_circuit_seconds,
+      errorRateCircuit: orchestrator.error_rate_circuit,
+      minSampleSize: orchestrator.min_sample_size,
+      fairnessWeight: orchestrator.fairness_weight,
+      starvationSeconds: orchestrator.starvation_seconds,
+      decisionRulesJson: parseJsonColumn<MaterializedConfigValues["orchestrator"]["decisionRulesJson"]>(
+        orchestrator.decision_rules_json,
+        null,
+      ),
+    },
+  };
+}
+
+async function insertOrchestratorRow(
+  db: Executor,
+  versionId: number,
+  values: MaterializedConfigValues["orchestrator"],
+): Promise<void> {
+  await db
+    .insertInto("guild_config_orchestrator")
+    .values({
+      configuration_version_id: versionId,
+      max_guild_inflight: values.maxGuildInflight,
+      max_channel_inflight: values.maxChannelInflight,
+      risk_eval_min_seconds: values.riskEvalMinSeconds,
+      risk_eval_max_seconds: values.riskEvalMaxSeconds,
+      send_min_seconds: values.sendMinSeconds,
+      send_max_seconds: values.sendMaxSeconds,
+      profile_min_seconds: values.profileMinSeconds,
+      profile_max_seconds: values.profileMaxSeconds,
+      reminder_min_seconds: values.reminderMinSeconds,
+      reminder_max_seconds: values.reminderMaxSeconds,
+      critical_hours_remaining: values.criticalHoursRemaining,
+      hero_latency_circuit_seconds: values.heroLatencyCircuitSeconds,
+      error_rate_circuit: values.errorRateCircuit,
+      min_sample_size: values.minSampleSize,
+      fairness_weight: values.fairnessWeight,
+      starvation_seconds: values.starvationSeconds,
+      decision_rules_json: values.decisionRulesJson === null ? null : sql`CAST(${JSON.stringify(values.decisionRulesJson)} AS JSON)`,
+    })
+    .execute();
+}
 
 /**
  * Creates (or reuses) a valid, currently-editable `DRAFT` `guild_configuration_versions`
  * row for `guildId`, then writes the buffer's known values into the real
- * `guild_config_common`/`guild_config_bunny`/`guild_config_selfbot` sub-tables —
- * called ONLY at request-activation time (see this module's header
- * comment), once the server-side checklist has already confirmed
- * `incomingChannelId`/`heroChannelId` are both known (both NOT NULL on
- * their respective sub-tables). Rotates onto a brand-new version (never
- * mutates an existing one already referenced by a non-terminal activation
- * request) — the TOCTOU-closing mechanism.
+ * `guild_config_common`/`guild_config_bunny`/`guild_config_selfbot`/
+ * `guild_config_orchestrator` sub-tables — called ONLY at request-activation
+ * time (see this module's header comment), once the server-side checklist
+ * has already confirmed `incomingChannelId`/`heroChannelId` are both known
+ * (both NOT NULL on their respective sub-tables). Rotates onto a
+ * brand-new version (never mutates an existing one already referenced by a
+ * non-terminal activation request) — the TOCTOU-closing mechanism.
+ *
+ * Step 10 external-review correction round, Section 5/10: EVERY field not
+ * touched by this call carries forward UNCHANGED from
+ * `params.currentDraftVersionId`'s real, currently-stored row content
+ * (`loadMaterializedConfigValues`) — never silently reset to a bootstrap
+ * default just because a materialization happened. Only a guild's very
+ * first version (`currentDraftVersionId === null`) uses
+ * `bootstrapMaterializedConfigValues()`. `guild_config_orchestrator` is
+ * ALWAYS written now too (a real, separate bug found while wiring this: the
+ * table was never inserted into at all before this fix, which would have
+ * made `get_active_guild_config`'s real `INNER JOIN guild_config_orchestrator`
+ * on the Self-bot side fail to resolve ANY guild config an onboarding save
+ * ever created) — carried forward unchanged (no onboarding section maps to
+ * an orchestrator override) or all-NULL for a guild's first version.
  */
 export async function materializeDraftConfigVersion(
   db: Executor,
@@ -271,9 +625,35 @@ export async function materializeDraftConfigVersion(
   const incoming = params.sections.incomingChannel?.data as { channelId: string };
   const hero = params.sections.heroChannel?.data as { channelId: string };
   const community = params.sections.communityChannel?.data as { channelId: string | null } | undefined;
-  const checksum = computeConfigChecksum(params.sections);
 
   let versionId = params.currentDraftVersionId;
+
+  // Section 10: carry forward every field the touched sections don't
+  // override, from the CURRENT draft/based-on version's real, currently
+  // stored row content — never reset to bootstrap defaults on a
+  // materialization that already has a version to carry forward from.
+  const baseValues =
+    versionId !== null ? await loadMaterializedConfigValues(db, versionId) : null;
+  const carriedForward = baseValues ?? bootstrapMaterializedConfigValues();
+  const merged: MaterializedConfigValues = {
+    common: carriedForward.common,
+    bunny: {
+      ...carriedForward.bunny,
+      incomingChannelId: incoming.channelId,
+      processedChannelId: carriedForward.bunny.processedChannelId,
+    },
+    selfbot: {
+      ...carriedForward.selfbot,
+      herowarbotChannelId: hero.channelId,
+      // `community` is `undefined` iff the section was never saved at all
+      // (carry forward); once saved, its `channelId` may itself be `null`
+      // (an explicit "clear the community channel") and must NOT fall back
+      // to the carried-forward value in that case.
+      communityChannelId: community !== undefined ? community.channelId : carriedForward.selfbot.communityChannelId,
+    },
+    orchestrator: carriedForward.orchestrator,
+  };
+  const checksum = computeMaterializedConfigChecksum(merged);
 
   // Real bug found in real-MySQL testing (reject -> reopen -> re-submit with
   // NO edits in between, then request-changes -> re-submit again with still
@@ -353,10 +733,29 @@ export async function materializeDraftConfigVersion(
       throw err;
     }
     versionId = Number(insertResult.insertId);
+    // Section 10: physically carry forward the FULL merged common values
+    // (bootstrap defaults for a guild's very first version, or the real
+    // based-on version's own stored values otherwise) — `guild_config_common`
+    // is never touched again after this single insert (no onboarding
+    // section maps to it), so this is the only write it ever gets.
     await db
       .insertInto("guild_config_common")
-      .values({ configuration_version_id: versionId, ...GUILD_CONFIG_COMMON_DEFAULTS })
+      .values({
+        configuration_version_id: versionId,
+        timezone: merged.common.timezone,
+        operational_enabled: merged.common.operationalEnabled ? 1 : 0,
+        locale: merged.common.locale,
+        guild_weight: merged.common.guildWeight,
+      })
       .execute();
+    // Section 5 real bug fix: guild_config_orchestrator was never inserted
+    // into at all before this fix (see this function's own doc comment) —
+    // the Self-bot side's `get_active_guild_config` INNER JOINs this table,
+    // so every onboarding-created version would have been unresolvable
+    // there. Carries forward the real based-on version's own orchestrator
+    // overrides unchanged (bootstrap: all-NULL, `ORCHESTRATOR_BOOTSTRAP_DEFAULTS`'s
+    // shape) — no onboarding section maps to an orchestrator override.
+    await insertOrchestratorRow(db, versionId, merged.orchestrator);
   } else {
     await db
       .updateTable("guild_configuration_versions")
@@ -365,28 +764,66 @@ export async function materializeDraftConfigVersion(
       .execute();
   }
 
+  // `guild_config_bunny`/`guild_config_selfbot` are written with the FULL
+  // merged row on every call (carry-forward + this call's touched
+  // fields) — on a genuine fresh INSERT (needsNewVersion branch above)
+  // every column physically lands in the new row; on a mutate-in-place
+  // collision (`onDuplicateKeyUpdate`), only the columns explicitly listed
+  // there are actually applied — `merged`'s OTHER fields are byte-identical
+  // to what that row already holds (loaded from this SAME versionId just
+  // above), so supplying the full object in `.values()` is always safe.
   await db
     .insertInto("guild_config_bunny")
     .values({
       configuration_version_id: versionId!,
-      incoming_channel_id: bindBigIntUnsigned(incoming.channelId),
-      processed_channel_id: null,
-      ...GUILD_CONFIG_BUNNY_DEFAULTS,
+      incoming_channel_id: bindBigIntUnsigned(merged.bunny.incomingChannelId),
+      processed_channel_id:
+        merged.bunny.processedChannelId === null ? null : bindBigIntUnsigned(merged.bunny.processedChannelId),
+      ingestion_enabled: merged.bunny.ingestionEnabled ? 1 : 0,
+      source_delete_policy: merged.bunny.sourceDeletePolicy,
+      save_processed_copy: merged.bunny.saveProcessedCopy ? 1 : 0,
+      ocr_engine: merged.bunny.ocrEngine,
+      ocr_profile: merged.bunny.ocrProfile,
+      per_guild_concurrency: merged.bunny.perGuildConcurrency,
+      max_ocr_attempts: merged.bunny.maxOcrAttempts,
+      retry_base_seconds: merged.bunny.retryBaseSeconds,
+      catchup_interval_seconds: merged.bunny.catchupIntervalSeconds,
+      max_attachment_bytes: bindBigIntUnsigned(merged.bunny.maxAttachmentBytes),
+      allowed_mime_json: sql`CAST(${JSON.stringify(merged.bunny.allowedMime)} AS JSON)`,
     })
-    .onDuplicateKeyUpdate({ incoming_channel_id: bindBigIntUnsigned(incoming.channelId) })
+    .onDuplicateKeyUpdate({ incoming_channel_id: bindBigIntUnsigned(merged.bunny.incomingChannelId) })
     .execute();
 
   await db
     .insertInto("guild_config_selfbot")
     .values({
       configuration_version_id: versionId!,
-      herowarbot_channel_id: bindBigIntUnsigned(hero.channelId),
-      community_channel_id: community?.channelId ? bindBigIntUnsigned(community.channelId) : null,
-      ...GUILD_CONFIG_SELFBOT_DEFAULTS,
+      herowarbot_channel_id: bindBigIntUnsigned(merged.selfbot.herowarbotChannelId),
+      screenshots_channel_id:
+        merged.selfbot.screenshotsChannelId === null ? null : bindBigIntUnsigned(merged.selfbot.screenshotsChannelId),
+      community_channel_id:
+        merged.selfbot.communityChannelId === null ? null : bindBigIntUnsigned(merged.selfbot.communityChannelId),
+      automation_enabled: merged.selfbot.automationEnabled ? 1 : 0,
+      profile_enabled: merged.selfbot.profileEnabled ? 1 : 0,
+      profile_timeout_seconds: merged.selfbot.profileTimeoutSeconds,
+      profile_stale_seconds: merged.selfbot.profileStaleSeconds,
+      hero_response_timeout_seconds: merged.selfbot.heroResponseTimeoutSeconds,
+      max_delivery_attempts: merged.selfbot.maxDeliveryAttempts,
+      community_updates_enabled: merged.selfbot.communityUpdatesEnabled ? 1 : 0,
+      everyone_mentions_enabled: merged.selfbot.everyoneMentionsEnabled ? 1 : 0,
+      reminder_enabled: merged.selfbot.reminderEnabled ? 1 : 0,
+      nb_gc_hero: merged.selfbot.nbGcHero,
+      nb_gc_titan: merged.selfbot.nbGcTitan,
+      nb_hol: merged.selfbot.nbHol,
+      nb_hero: merged.selfbot.nbHero,
+      nb_titan: merged.selfbot.nbTitan,
+      auto_profile_interval_seconds: merged.selfbot.autoProfileIntervalSeconds,
+      auto_max_per_cycle: merged.selfbot.autoMaxPerCycle,
     })
     .onDuplicateKeyUpdate({
-      herowarbot_channel_id: bindBigIntUnsigned(hero.channelId),
-      community_channel_id: community?.channelId ? bindBigIntUnsigned(community.channelId) : null,
+      herowarbot_channel_id: bindBigIntUnsigned(merged.selfbot.herowarbotChannelId),
+      community_channel_id:
+        merged.selfbot.communityChannelId === null ? null : bindBigIntUnsigned(merged.selfbot.communityChannelId),
     })
     .execute();
 
