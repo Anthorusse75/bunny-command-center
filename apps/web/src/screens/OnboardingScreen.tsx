@@ -9,15 +9,16 @@
 // "Bunny & permissions" is a user attestation checkbox, not a live Discord
 // permission check (no bot-token Discord API client exists anywhere in this
 // codebase — `packages/shared/src/types/lifecycle.ts`'s own comment on
-// `onboardingSectionSaveSchema` has the full rationale); the three channel
-// fields are plain Discord-snowflake text inputs, not a live channel-picker
-// dropdown (no channel-catalog endpoint exists in THIS repo yet — a sibling
-// channel-catalog effort is understood to be landing separately in the
-// Bunny OCR repo, out of this step's own scope to consume). Both are
-// real, functioning, validated inputs — just not the richer live-Discord-data
-// widgets a later step can upgrade them to without changing this screen's
-// contract.
-import { useState } from "react";
+// `onboardingSectionSaveSchema` has the full rationale).
+//
+// Step 10 correction round, Gap 2: the three channel fields (Incoming/Hero/
+// Community) now use a real live dropdown (`ChannelPickerSection`) populated
+// from `GET /api/guilds/:guildId/onboarding/channels`, which proxies Bunny's
+// real channel catalog — replacing the prior plain-text-snowflake-input
+// placeholder. `adminRolePolicy` (a Discord ROLE id, not a channel) keeps
+// using the plain `ChannelSection` text input unchanged — no role-catalog
+// endpoint exists yet, out of this correction round's scope.
+import { useEffect, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
@@ -28,6 +29,7 @@ import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import Link from "@mui/material/Link";
+import MenuItem from "@mui/material/MenuItem";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -35,7 +37,11 @@ import Typography from "@mui/material/Typography";
 import { useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useTranslation } from "react-i18next";
-import type { OnboardingSectionKey, OnboardingStateResponse } from "@bunny-command-center/shared";
+import type {
+  OnboardingChannelCatalogResponse,
+  OnboardingSectionKey,
+  OnboardingStateResponse,
+} from "@bunny-command-center/shared";
 import { ONBOARDING_SECTION_KEYS } from "@bunny-command-center/shared";
 import { useGuildOverviewContext } from "../navigation/GuildRouteGuard.js";
 import { PageHeading } from "../navigation/PageHeading.js";
@@ -44,6 +50,7 @@ import { useBccIcon } from "../design-system/icons.js";
 import { ApiError } from "../features/auth/index.js";
 import {
   useGuildLifecycleActionMutation,
+  useOnboardingChannelCatalog,
   useOnboardingState,
   useRequestActivationMutation,
   useSaveOnboardingSectionMutation,
@@ -112,6 +119,7 @@ function OnboardingContent({
   const saveSection = useSaveOnboardingSectionMutation(guildId);
   const requestActivationMutation = useRequestActivationMutation(guildId);
   const lifecycleAction = useGuildLifecycleActionMutation(guildId);
+  const channelCatalogQuery = useOnboardingChannelCatalog(guildId);
   // PENDING_APPROVAL/REJECTED default to their marketing/reason view
   // (SCREENS/ONBOARDING.md: "never looks like a 403" / "never a dead end")
   // rather than the stepper — both offer an explicit CTA to reveal it.
@@ -199,10 +207,12 @@ function OnboardingContent({
               );
             }}
           />
-          <ChannelSection
+          <ChannelPickerSection
             sectionKey="incomingChannel"
             value={state.values.incomingChannelId}
             required
+            catalog={channelCatalogQuery.data}
+            catalogLoading={channelCatalogQuery.isPending}
             onSave={(channelId) => {
               if (!channelId) return;
               saveSection.mutate(
@@ -211,10 +221,12 @@ function OnboardingContent({
               );
             }}
           />
-          <ChannelSection
+          <ChannelPickerSection
             sectionKey="heroChannel"
             value={state.values.heroChannelId}
             required
+            catalog={channelCatalogQuery.data}
+            catalogLoading={channelCatalogQuery.isPending}
             onSave={(channelId) => {
               if (!channelId) return;
               saveSection.mutate(
@@ -223,13 +235,15 @@ function OnboardingContent({
               );
             }}
           />
-          <ChannelSection
+          <ChannelPickerSection
             sectionKey="communityChannel"
             value={state.values.communityChannelId}
             required={false}
+            catalog={channelCatalogQuery.data}
+            catalogLoading={channelCatalogQuery.isPending}
             onSave={(channelId) => {
               saveSection.mutate(
-                { section: "communityChannel", data: { channelId: channelId || null } },
+                { section: "communityChannel", data: { channelId } },
                 { onSuccess: announceSaved },
               );
             }}
@@ -437,6 +451,99 @@ function ChannelSection({
         helperText={touched && !isValid ? t("errors.validation") : undefined}
         slotProps={{ htmlInput: { inputMode: "numeric" } }}
       />
+    </SectionShell>
+  );
+}
+
+/**
+ * Step 10 correction round, Gap 2 — a real live channel dropdown (MUI's
+ * `TextField select`, the SAME form-control family already used everywhere
+ * else on this screen — no new component pattern introduced) populated from
+ * `GET /api/guilds/:guildId/onboarding/channels` (proxying Bunny's real
+ * catalog). Degrades gracefully to a DISABLED picker with an inline warning
+ * when the catalog is unavailable (Bunny unreachable/erroring/misconfigured)
+ * — this never blocks the rest of the onboarding page (every other section
+ * is an independent component with its own save path).
+ */
+export function ChannelPickerSection({
+  sectionKey,
+  value,
+  required,
+  catalog,
+  catalogLoading,
+  onSave,
+}: {
+  sectionKey: OnboardingSectionKey;
+  value: string | null;
+  required: boolean;
+  catalog: OnboardingChannelCatalogResponse | undefined;
+  catalogLoading: boolean;
+  onSave: (channelId: string | null) => void;
+}): React.JSX.Element {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(value ?? "");
+
+  // Keeps the picker in sync if the server-confirmed value changes out from
+  // under it (e.g. a save from another tab, or the initial query resolving
+  // after this component already mounted with `value: null`).
+  useEffect(() => {
+    setDraft(value ?? "");
+  }, [value]);
+
+  const available = catalog?.available ?? false;
+  const channels = catalog?.channels ?? [];
+  const disabled = catalogLoading || !available;
+
+  // The currently-saved value might no longer be present in a fresh catalog
+  // fetch (the channel was deleted, or the catalog is a different guild's
+  // stale cache) — shown as its own selectable-but-flagged entry rather than
+  // silently vanishing or triggering an MUI "out of range value" warning.
+  const showStaleValueOption = value !== null && !channels.some((c) => c.id === value);
+
+  return (
+    <SectionShell sectionKey={sectionKey}>
+      {!catalogLoading && !available ? (
+        <Typography
+          role="alert"
+          color="warning.main"
+          variant="body2"
+          sx={{ marginBlockEnd: 1 }}
+          data-testid={`${sectionKey}-catalog-unavailable`}
+        >
+          {t("onboarding.channelPicker.unavailable")}
+        </Typography>
+      ) : null}
+      <TextField
+        select
+        fullWidth
+        size="small"
+        label={t(`onboarding.sections.${sectionKey}.channelIdLabel`)}
+        value={draft}
+        disabled={disabled}
+        data-testid={`${sectionKey}-picker`}
+        helperText={disabled && !catalogLoading ? t("onboarding.channelPicker.unavailableHint") : undefined}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          onSave(next.length > 0 ? next : null);
+        }}
+      >
+        {!required ? (
+          <MenuItem value="">{t("onboarding.channelPicker.none")}</MenuItem>
+        ) : (
+          <MenuItem value="" disabled>
+            {t("onboarding.channelPicker.placeholder")}
+          </MenuItem>
+        )}
+        {showStaleValueOption && value !== null ? (
+          <MenuItem value={value}>{t("onboarding.channelPicker.staleValue", { channelId: value })}</MenuItem>
+        ) : null}
+        {channels.map((channel) => (
+          <MenuItem key={channel.id} value={channel.id}>
+            {`#${channel.name}`}
+          </MenuItem>
+        ))}
+      </TextField>
     </SectionShell>
   );
 }

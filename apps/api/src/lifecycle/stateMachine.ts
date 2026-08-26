@@ -29,16 +29,26 @@
  * not proof of wiring"). Left as a documented gap, not silently assumed
  * equivalent to any modeled action.
  *
- * RBAC note (explicit, disclosed interpretation — 00_GLOBAL_IMPLEMENTATION_RULES.md
- * rule 1): the diagram's prose says "Guild Owner" for pause/resume, but this
- * repo's actual RBAC model (`apps/api/src/auth/guildAuthorization.ts`) has
- * exactly two guild-scoped tiers, `GUILD_ADMIN` and `SUPERADMIN` — no
- * separate "Owner" tier exists. IMPLEMENTATION/10_onboarding_approval.md's
- * own §SECURITY & RBAC section (the operative rule per
- * 00_GLOBAL_IMPLEMENTATION_RULES.md rule 16's header-block/security mapping)
- * only ever names `GUILD_ADMIN`/`SUPERADMIN`, so "Guild Owner" is treated
- * here as this system's `GUILD_ADMIN` tier (the top guild-scoped tier that
- * actually exists) — flagged here explicitly rather than silently assumed.
+ * RBAC note (CORRECTED, Step 10 correction round Gap 1 — this module's prior
+ * comment here was wrong): the diagram's prose says "Guild Owner" for
+ * pause/resume, and that IS meant literally — a real, separate check from
+ * `GUILD_ADMIN` tier. `requiredTier: "GUILD_ADMIN"` below for `PAUSE`/`RESUME`
+ * is deliberately left as-is (it stays a valid, necessary defense-in-depth
+ * floor: a genuine Owner always resolves to `GUILD_ADMIN` tier via
+ * `resolveGuildAuthorization`'s own Owner branch, and Superadmin resolves to
+ * the higher `SUPERADMIN` rank, so both legitimately pass this check) — but
+ * it is NOT sufficient on its own: `GUILD_ADMIN` tier is also reachable via
+ * the configured admin role or the Discord ADMINISTRATOR permission bit,
+ * neither of which implies Owner-ness. The REAL Owner-vs-not gate lives one
+ * layer up, at the route (`lifecycle/routes.ts`'s `requireOwner` preHandler,
+ * built from `auth/tier.ts`'s `buildRequireGuildOwner`) — this module has no
+ * access to the raw Discord "is this caller the Owner" fact itself (it is
+ * pure/side-effect-free, per this header's own first paragraph), so it
+ * cannot enforce that half of the check itself. `REOPEN` genuinely IS
+ * plain-`GUILD_ADMIN`-scoped (verified against
+ * DASHBOARD/10_GUILD_ONBOARDING_AND_APPROVAL.md's "REJECTED --> CONFIGURING:
+ * Guild Admin may re-open" — no "Owner" qualifier there) and needed no
+ * change.
  */
 import type { GuildTier } from "../auth/guildAuthorization.js";
 

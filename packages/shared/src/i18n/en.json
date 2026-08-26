@@ -121,7 +121,9 @@
       "checksumMismatch": "The submitted configuration changed since it was reviewed. Ask the Guild Admin to re-submit."
     },
     "onboarding": {
-      "checklistNotPassed": "Complete the incoming channel, Hero channel, and at least one quota category before requesting activation."
+      "checklistNotPassed": "Complete the incoming channel, Hero channel, and at least one quota category before requesting activation.",
+      "channelVerificationFailed": "We couldn't verify that channel with Bunny right now. Please try again.",
+      "channelNotFound": "That channel doesn't exist in this server anymore. Pick another one."
     },
     "notFoundPage": {
       "title": "This page doesn't exist",
@@ -406,6 +408,13 @@
         "description": "Optionally designate a Discord role as Dashboard admin for this guild. Leave blank to default to Discord Administrator.",
         "roleIdLabel": "Admin role ID (optional)"
       }
+    },
+    "channelPicker": {
+      "placeholder": "Select a channel…",
+      "none": "None",
+      "unavailable": "We couldn't load this server's channel list from Bunny right now. Try again shortly.",
+      "unavailableHint": "Channel list unavailable",
+      "staleValue": "Current: {{channelId}} (no longer found)"
     },
     "actions": {
       "requestActivation": "Request activation",

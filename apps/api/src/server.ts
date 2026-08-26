@@ -28,7 +28,7 @@ import {
   type SessionSweepHandle,
 } from "./auth/index.js";
 import { buildGuildRoutes } from "./guilds/index.js";
-import { buildLifecycleRoutes } from "./lifecycle/index.js";
+import { buildLifecycleRoutes, registerLifecycleEventsSse } from "./lifecycle/index.js";
 import {
   buildNotificationRoutes,
   registerNotificationsSse,
@@ -146,6 +146,10 @@ export async function buildServer(config = loadAppConfig()) {
   // schedules `config.sse.pollIntervalMs` in the future, never immediately),
   // so registering here is safely ahead of it.
   registerNotificationsSse(db);
+  // Step 10 correction round, Gap 3: same extension-point discipline as the
+  // notifications registration immediately above — registered here, at real
+  // server startup, before the poller's first tick.
+  registerLifecycleEventsSse(db);
   const poller = startSsePoller({
     hub,
     cursorRepo,
@@ -211,7 +215,7 @@ export async function buildServer(config = loadAppConfig()) {
     });
   fastify.decorate("notificationTestHooks", { watcher: notificationReconciliationWatcher });
 
-  await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db }));
+  await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db, guildAuthDeps }));
   fastify.decorate("sseTestHooks", { hub, cursorRepo, poller });
 
   // `preClose`, not `onClose`: Fastify's OWN internal "stop the HTTP server"

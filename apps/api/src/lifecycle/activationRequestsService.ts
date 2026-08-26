@@ -30,6 +30,7 @@ import {
   isVersionImmutable,
   materializeDraftConfigVersion,
   minimumChecklistPassed,
+  ConfigVersionRaceError,
 } from "./onboardingRepo.js";
 import {
   getActivationRequestById,
@@ -50,7 +51,8 @@ export type ActivationServiceErrorCode =
   | "CHECKLIST_NOT_PASSED"
   | "REQUEST_NOT_FOUND"
   | "REQUEST_ALREADY_DECIDED"
-  | "CHECKSUM_MISMATCH";
+  | "CHECKSUM_MISMATCH"
+  | "CONCURRENT_MODIFICATION";
 
 export class ActivationServiceError extends Error {
   constructor(
@@ -178,73 +180,86 @@ export async function createActivationRequest(
   logger: MinimalLogger,
   params: CommonParams & { readonly guildId: string },
 ): Promise<CreateActivationRequestResult> {
-  const outcome = await db.transaction().execute(async (trx) => {
-    const guildRow = await getGuildLifecycleRow(trx, params.guildId);
-    if (!guildRow) {
-      throw new ActivationServiceError("GUILD_NOT_FOUND", `no guilds row for ${params.guildId}`);
+  // Step 10 correction round, Gap 5: `materializeDraftConfigVersion` can
+  // throw `ConfigVersionRaceError` on a real concurrent-INSERT race (see its
+  // own doc comment, onboardingRepo.ts) — caught here and mapped onto the
+  // same typed `CONCURRENT_MODIFICATION` conflict every other guarded write
+  // in this step already produces, never left as an unhandled 500.
+  let outcome;
+  try {
+    outcome = await db.transaction().execute(async (trx) => {
+      const guildRow = await getGuildLifecycleRow(trx, params.guildId);
+      if (!guildRow) {
+        throw new ActivationServiceError("GUILD_NOT_FOUND", `no guilds row for ${params.guildId}`);
+      }
+      const action: LifecycleAction =
+        guildRow.lifecycleState === "CONFIGURING"
+          ? "REQUEST_ACTIVATION"
+          : guildRow.lifecycleState === "CHANGES_REQUESTED"
+            ? "RESUBMIT_ACTIVATION"
+            : "REQUEST_ACTIVATION"; // deliberately invalid from any other state — transitionGuildLifecycleInTransaction below rejects it as ILLEGAL_TRANSITION, never silently guessed as legal.
+
+      const progress = await ensureOnboardingProgressRow(trx, params.guildId);
+      if (!minimumChecklistPassed(progress.sections)) {
+        throw new ActivationServiceError(
+          "CHECKLIST_NOT_PASSED",
+          "server-side minimum-checklist re-validation failed (client-disabled-button bypass attempt rejected)",
+        );
+      }
+
+      const currentDraftIsImmutable =
+        progress.draftConfigVersionId !== null
+          ? await isVersionImmutable(trx, progress.draftConfigVersionId)
+          : false;
+
+      const { versionId, checksum } = await materializeDraftConfigVersion(trx, {
+        guildId: params.guildId,
+        authorDiscordId: params.actorDiscordId,
+        sections: progress.sections,
+        currentDraftVersionId: progress.draftConfigVersionId,
+        currentDraftIsImmutable,
+      });
+
+      const requestId = generateNotificationId();
+      await insertActivationRequest(trx, {
+        requestId,
+        guildId: params.guildId,
+        submittedConfigVersionId: versionId,
+        submittedConfigChecksum: checksum,
+        requestedBy: params.actorDiscordId,
+      });
+
+      const transition = await transitionGuildLifecycleInTransaction(trx, {
+        guildId: params.guildId,
+        action,
+        callerTier: params.callerTier,
+        actorUserId: params.actorUserId,
+        correlationId: params.correlationId,
+        reason: `activation request ${requestId}`,
+      });
+
+      await insertAuditLogEntry(trx, {
+        actorUserId: params.actorUserId,
+        action: "ACTIVATION_REQUEST_CREATED",
+        guildId: params.guildId,
+        beforeJson: null,
+        afterJson: { requestId, submittedConfigVersionId: versionId },
+        correlationId: params.correlationId,
+        result: "SUCCESS",
+      });
+
+      return {
+        requestId,
+        lifecycleState: transition.nextState,
+        guildName: guildRow.displayName ?? params.guildId,
+      };
+    });
+  } catch (err) {
+    if (err instanceof ConfigVersionRaceError) {
+      throw new ActivationServiceError("CONCURRENT_MODIFICATION", err.message);
     }
-    const action: LifecycleAction =
-      guildRow.lifecycleState === "CONFIGURING"
-        ? "REQUEST_ACTIVATION"
-        : guildRow.lifecycleState === "CHANGES_REQUESTED"
-          ? "RESUBMIT_ACTIVATION"
-          : "REQUEST_ACTIVATION"; // deliberately invalid from any other state — transitionGuildLifecycleInTransaction below rejects it as ILLEGAL_TRANSITION, never silently guessed as legal.
-
-    const progress = await ensureOnboardingProgressRow(trx, params.guildId);
-    if (!minimumChecklistPassed(progress.sections)) {
-      throw new ActivationServiceError(
-        "CHECKLIST_NOT_PASSED",
-        "server-side minimum-checklist re-validation failed (client-disabled-button bypass attempt rejected)",
-      );
-    }
-
-    const currentDraftIsImmutable =
-      progress.draftConfigVersionId !== null
-        ? await isVersionImmutable(trx, progress.draftConfigVersionId)
-        : false;
-
-    const { versionId, checksum } = await materializeDraftConfigVersion(trx, {
-      guildId: params.guildId,
-      authorDiscordId: params.actorDiscordId,
-      sections: progress.sections,
-      currentDraftVersionId: progress.draftConfigVersionId,
-      currentDraftIsImmutable,
-    });
-
-    const requestId = generateNotificationId();
-    await insertActivationRequest(trx, {
-      requestId,
-      guildId: params.guildId,
-      submittedConfigVersionId: versionId,
-      submittedConfigChecksum: checksum,
-      requestedBy: params.actorDiscordId,
-    });
-
-    const transition = await transitionGuildLifecycleInTransaction(trx, {
-      guildId: params.guildId,
-      action,
-      callerTier: params.callerTier,
-      actorUserId: params.actorUserId,
-      correlationId: params.correlationId,
-      reason: `activation request ${requestId}`,
-    });
-
-    await insertAuditLogEntry(trx, {
-      actorUserId: params.actorUserId,
-      action: "ACTIVATION_REQUEST_CREATED",
-      guildId: params.guildId,
-      beforeJson: null,
-      afterJson: { requestId, submittedConfigVersionId: versionId },
-      correlationId: params.correlationId,
-      result: "SUCCESS",
-    });
-
-    return {
-      requestId,
-      lifecycleState: transition.nextState,
-      guildName: guildRow.displayName ?? params.guildId,
-    };
-  });
+    throw err;
+  }
 
   await notifySuperadminNewGuildPending(db, config, logger, {
     guildId: params.guildId,
@@ -283,96 +298,136 @@ export async function approveActivationRequest(
   logger: MinimalLogger,
   params: CommonParams & { readonly requestId: string },
 ): Promise<DecisionResult> {
-  const outcome = await db.transaction().execute(async (trx) => {
-    const request = await loadPendingRequestOrThrow(trx, params.requestId);
-    if (request.state !== "PENDING") {
-      throw new ActivationServiceError(
-        "REQUEST_ALREADY_DECIDED",
-        `request ${params.requestId} is already ${request.state}`,
-      );
-    }
+  // Step 10 correction round, Gap 4: a checksum mismatch must leave a durable
+  // audit trail of the integrity failure — but the mismatch is detected
+  // INSIDE the transaction below, and throwing out of `db.transaction().execute()`
+  // rolls back every write that transaction made (correctly — nothing about
+  // the rejected approval should persist). An audit row recording the
+  // failure therefore CANNOT be written inside that same transaction (it
+  // would be rolled back with everything else); it is written via the outer
+  // `db` handle, in its own separate committed statement, from the catch
+  // block below, only for this one specific error code.
+  let guildIdForIntegrityAudit: string | undefined;
+  try {
+    const outcome = await db.transaction().execute(async (trx) => {
+      const request = await loadPendingRequestOrThrow(trx, params.requestId);
+      guildIdForIntegrityAudit = request.guildId;
+      if (request.state !== "PENDING") {
+        throw new ActivationServiceError(
+          "REQUEST_ALREADY_DECIDED",
+          `request ${params.requestId} is already ${request.state}`,
+        );
+      }
 
-    const snapshot = await getMaterializedConfigSnapshot(trx, request.submittedConfigVersionId);
-    if (!snapshot || Buffer.compare(snapshot.checksum, request.submittedConfigChecksum) !== 0) {
-      throw new ActivationServiceError(
-        "CHECKSUM_MISMATCH",
-        `submitted_config_checksum no longer matches guild_configuration_versions id=${request.submittedConfigVersionId} — refusing to approve a mutated snapshot`,
-      );
-    }
+      const snapshot = await getMaterializedConfigSnapshot(trx, request.submittedConfigVersionId);
+      if (!snapshot || Buffer.compare(snapshot.checksum, request.submittedConfigChecksum) !== 0) {
+        throw new ActivationServiceError(
+          "CHECKSUM_MISMATCH",
+          `submitted_config_checksum no longer matches guild_configuration_versions id=${request.submittedConfigVersionId} — refusing to approve a mutated snapshot`,
+        );
+      }
 
-    const decided = await writeActivationRequestDecision(trx, {
-      requestId: params.requestId,
-      expectedState: "PENDING",
-      newState: "APPROVED",
-      reviewedBy: params.actorDiscordId,
-      decisionReason: null,
-    });
-    if (!decided) {
-      throw new ActivationServiceError(
-        "REQUEST_ALREADY_DECIDED",
-        `request ${params.requestId} was decided concurrently`,
-      );
-    }
+      const decided = await writeActivationRequestDecision(trx, {
+        requestId: params.requestId,
+        expectedState: "PENDING",
+        newState: "APPROVED",
+        reviewedBy: params.actorDiscordId,
+        decisionReason: null,
+      });
+      if (!decided) {
+        throw new ActivationServiceError(
+          "REQUEST_ALREADY_DECIDED",
+          `request ${params.requestId} was decided concurrently`,
+        );
+      }
 
-    // Supersede whatever was previously ACTIVE for this guild, then
-    // activate the reviewed version — same "one ACTIVE at a time" discipline
-    // as `hero_reference_catalog_versions.active_marker`.
-    const guildRow = await getGuildLifecycleRow(trx, request.guildId);
-    if (guildRow?.activeConfigVersionId) {
+      // Supersede whatever was previously ACTIVE for this guild, then
+      // activate the reviewed version — same "one ACTIVE at a time" discipline
+      // as `hero_reference_catalog_versions.active_marker`.
+      const guildRow = await getGuildLifecycleRow(trx, request.guildId);
+      if (guildRow?.activeConfigVersionId) {
+        await trx
+          .updateTable("guild_configuration_versions")
+          .set({ state: "SUPERSEDED", superseded_at: new Date() })
+          .where("id", "=", guildRow.activeConfigVersionId)
+          .where("state", "=", "ACTIVE")
+          .execute();
+      }
       await trx
         .updateTable("guild_configuration_versions")
-        .set({ state: "SUPERSEDED", superseded_at: new Date() })
-        .where("id", "=", guildRow.activeConfigVersionId)
-        .where("state", "=", "ACTIVE")
+        .set({ state: "ACTIVE", activated_at: new Date() })
+        .where("id", "=", request.submittedConfigVersionId)
         .execute();
+      await setActiveConfigVersion(trx, {
+        guildId: request.guildId,
+        configVersionId: request.submittedConfigVersionId,
+      });
+
+      const transition = await transitionGuildLifecycleInTransaction(trx, {
+        guildId: request.guildId,
+        action: "APPROVE",
+        callerTier: params.callerTier,
+        actorUserId: params.actorUserId,
+        correlationId: params.correlationId,
+        reason: `activation request ${params.requestId} approved`,
+      });
+
+      await insertAuditLogEntry(trx, {
+        actorUserId: params.actorUserId,
+        action: "ACTIVATION_REQUEST_APPROVED",
+        guildId: request.guildId,
+        beforeJson: { requestState: "PENDING" },
+        afterJson: { requestState: "APPROVED", activeConfigVersionId: request.submittedConfigVersionId },
+        correlationId: params.correlationId,
+        result: "SUCCESS",
+      });
+
+      return {
+        requestId: params.requestId,
+        lifecycleState: transition.nextState,
+        guildId: request.guildId,
+        guildName: guildRow?.displayName ?? request.guildId,
+        requestedBy: request.requestedBy,
+      };
+    });
+
+    await notifyGuildAdminApprovalStateChange(db, config, logger, {
+      guildId: outcome.guildId,
+      guildName: outcome.guildName,
+      state: "APPROVED",
+      requestedByDiscordId: outcome.requestedBy,
+      reviewerDiscordId: params.actorDiscordId,
+    });
+
+    return { requestId: outcome.requestId, lifecycleState: outcome.lifecycleState };
+  } catch (err) {
+    // Step 10 correction round, Gap 4: record the integrity failure durably
+    // — a real out-of-band mutation of a referenced `guild_configuration_versions`
+    // row is exactly the "impossible" case defense-in-depth exists for; a
+    // Superadmin (and any later investigator) must be able to see in
+    // `dashboard_audit_log` that an approval was refused for this reason,
+    // never just a silent 409 with no trace. Written via the OUTER `db`
+    // (never `trx`, already rolled back by the throw) as its own committed
+    // statement — a failure to write this audit row is logged but must never
+    // mask or replace the original `CHECKSUM_MISMATCH` rejection.
+    if (err instanceof ActivationServiceError && err.code === "CHECKSUM_MISMATCH") {
+      await insertAuditLogEntry(db, {
+        actorUserId: params.actorUserId,
+        action: "ACTIVATION_REQUEST_APPROVAL_INTEGRITY_FAILURE",
+        guildId: guildIdForIntegrityAudit ?? null,
+        beforeJson: { requestId: params.requestId, requestState: "PENDING" },
+        afterJson: null,
+        correlationId: params.correlationId,
+        result: "FAILURE",
+      }).catch((auditErr: unknown) => {
+        logger.error(
+          { err: auditErr, requestId: params.requestId },
+          "activationRequests: failed to write CHECKSUM_MISMATCH integrity-failure audit row (non-fatal — the original rejection still stands)",
+        );
+      });
     }
-    await trx
-      .updateTable("guild_configuration_versions")
-      .set({ state: "ACTIVE", activated_at: new Date() })
-      .where("id", "=", request.submittedConfigVersionId)
-      .execute();
-    await setActiveConfigVersion(trx, {
-      guildId: request.guildId,
-      configVersionId: request.submittedConfigVersionId,
-    });
-
-    const transition = await transitionGuildLifecycleInTransaction(trx, {
-      guildId: request.guildId,
-      action: "APPROVE",
-      callerTier: params.callerTier,
-      actorUserId: params.actorUserId,
-      correlationId: params.correlationId,
-      reason: `activation request ${params.requestId} approved`,
-    });
-
-    await insertAuditLogEntry(trx, {
-      actorUserId: params.actorUserId,
-      action: "ACTIVATION_REQUEST_APPROVED",
-      guildId: request.guildId,
-      beforeJson: { requestState: "PENDING" },
-      afterJson: { requestState: "APPROVED", activeConfigVersionId: request.submittedConfigVersionId },
-      correlationId: params.correlationId,
-      result: "SUCCESS",
-    });
-
-    return {
-      requestId: params.requestId,
-      lifecycleState: transition.nextState,
-      guildId: request.guildId,
-      guildName: guildRow?.displayName ?? request.guildId,
-      requestedBy: request.requestedBy,
-    };
-  });
-
-  await notifyGuildAdminApprovalStateChange(db, config, logger, {
-    guildId: outcome.guildId,
-    guildName: outcome.guildName,
-    state: "APPROVED",
-    requestedByDiscordId: outcome.requestedBy,
-    reviewerDiscordId: params.actorDiscordId,
-  });
-
-  return { requestId: outcome.requestId, lifecycleState: outcome.lifecycleState };
+    throw err;
+  }
 }
 
 async function decideNonApprove(

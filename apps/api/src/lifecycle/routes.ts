@@ -26,9 +26,15 @@ import {
   rejectActivationRequestSchema,
   requestChangesRequestSchema,
 } from "@bunny-command-center/shared";
-import { buildRequireTier, createGuildAuthDeps, type GuildAuthDeps } from "../auth/index.js";
+import {
+  buildRequireTier,
+  buildRequireGuildOwner,
+  createGuildAuthDeps,
+  type GuildAuthDeps,
+} from "../auth/index.js";
 import { buildRequireAuth, requireCsrfHeader } from "../auth/requireAuth.js";
 import { getOnboardingState, saveOnboardingSection, OnboardingRejectedError } from "./onboardingService.js";
+import { fetchGuildChannelCatalog } from "../integrations/bunnyInternalApi.js";
 import { transitionGuildLifecycle, LifecycleTransitionRejectedError } from "./lifecycleService.js";
 import {
   approveActivationRequest,
@@ -112,6 +118,20 @@ async function sendServiceError(reply: FastifyReply, code: string): Promise<void
       errorCode: "CHECKSUM_MISMATCH",
       messageKey: "errors.lifecycle.checksumMismatch",
     },
+    // Step 10 correction round, Gap 2: onboarding channel-section save
+    // rejections — "couldn't verify" (Bunny unreachable/misconfigured/error)
+    // is a distinct, clearer outcome from "verified, and it genuinely
+    // doesn't exist" — both fail the save closed, never a silent accept.
+    CHANNEL_VERIFICATION_FAILED: {
+      status: 503,
+      errorCode: "CHANNEL_VERIFICATION_FAILED",
+      messageKey: "errors.onboarding.channelVerificationFailed",
+    },
+    CHANNEL_NOT_FOUND: {
+      status: 400,
+      errorCode: "CHANNEL_NOT_FOUND",
+      messageKey: "errors.onboarding.channelNotFound",
+    },
   };
   const entry = table[code] ?? { status: 500, errorCode: "INTERNAL_ERROR", messageKey: "errors.server" };
   await reply
@@ -133,8 +153,10 @@ export function buildLifecycleRoutes(
 ): FastifyPluginAsync {
   const guildAuthDeps = guildAuthDepsOverride ?? createGuildAuthDeps(db, config);
   const requireTier = buildRequireTier(guildAuthDeps);
+  const requireGuildOwner = buildRequireGuildOwner(guildAuthDeps);
   const requireAuth = buildRequireAuth(db, config);
   const requireGuildAdmin = requireTier("guildId", "GUILD_ADMIN", { freshness: "SENSITIVE_MUTATION" });
+  const requireOwner = requireGuildOwner("guildId", { freshness: "SENSITIVE_MUTATION" });
   const requireSuperadmin = requireTier("SUPERADMIN");
 
   // eslint-disable-next-line @typescript-eslint/require-await -- FastifyPluginAsync's contract
@@ -175,7 +197,7 @@ export function buildLifecycleRoutes(
         }
         const { guildId } = request.guildAuthorization!;
         try {
-          const state = await saveOnboardingSection(db, {
+          const state = await saveOnboardingSection(db, config, {
             guildId,
             actorUserId: request.authUser!.id,
             actorDiscordId: request.authUser!.discordUserId,
@@ -191,6 +213,47 @@ export function buildLifecycleRoutes(
           }
           throw err;
         }
+      },
+    );
+
+    // -----------------------------------------------------------------
+    // GET /api/guilds/:guildId/onboarding/channels — Step 10 correction
+    // round, Gap 2: proxies Bunny's real live channel catalog for the
+    // onboarding channel-picker dropdowns. Same Guild-Admin-scoped auth as
+    // the rest of onboarding (READ freshness — this is a read, not a
+    // sensitive mutation). ALWAYS 200: a Bunny-unreachable/misconfigured/
+    // error outcome degrades to `{ available: false, channels: [] }` rather
+    // than a 500 — the brief's explicit "never silently treat 'can't reach
+    // Bunny' as 'channel doesn't exist' in a way that blocks all
+    // onboarding": the picker degrades to disabled/error, the rest of the
+    // page keeps working.
+    // -----------------------------------------------------------------
+    fastify.get(
+      "/api/guilds/:guildId/onboarding/channels",
+      { preHandler: [requireAuth, validateGuildIdParam, requireGuildAdmin] },
+      async (request, reply) => {
+        if (reply.sent) return undefined;
+        const { guildId } = request.guildAuthorization!;
+        const result = await fetchGuildChannelCatalog(config, guildId);
+        if (!result.ok) {
+          request.log.warn(
+            { guildId, reason: result.reason },
+            "onboarding/channels: Bunny catalog unavailable — degrading to available:false",
+          );
+          return { data: { available: false, channels: [] } };
+        }
+        return {
+          data: {
+            available: true,
+            channels: result.channels.map((c) => ({
+              id: c.id,
+              name: c.name,
+              position: c.position,
+              type: c.type,
+              canReadHistory: c.canReadHistory,
+            })),
+          },
+        };
       },
     );
 
@@ -223,19 +286,24 @@ export function buildLifecycleRoutes(
     );
 
     // -----------------------------------------------------------------
-    // POST /api/guilds/:guildId/{pause,resume,reopen} — Guild Admin
-    // ("Owner" in the diagram's prose — see stateMachine.ts's header comment
-    // on this interpretation).
+    // POST /api/guilds/:guildId/{pause,resume} — literal Discord guild
+    // OWNER only (Superadmin bypasses too), NOT merely GUILD_ADMIN tier.
+    // Step 10 correction round, Gap 1: DASHBOARD/10_GUILD_ONBOARDING_AND_APPROVAL.md's
+    // permission matrix says "Owner: pause"/"Owner: resume" — a Guild Admin
+    // who holds the configured admin role or the Discord ADMINISTRATOR bit
+    // but is NOT the guild's Owner must be rejected with 403. See
+    // `auth/tier.ts`'s `buildRequireGuildOwner` for the exact mechanism
+    // reused (`isCallerGuildOwner`, itself reusing `resolveGuildAuthorization`'s
+    // own internal Owner check — no parallel "who is the owner" logic).
     // -----------------------------------------------------------------
-    const guildAdminActions: Record<string, "PAUSE" | "RESUME" | "REOPEN"> = {
+    const ownerActions: Record<string, "PAUSE" | "RESUME"> = {
       pause: "PAUSE",
       resume: "RESUME",
-      reopen: "REOPEN",
     };
-    for (const [path, action] of Object.entries(guildAdminActions)) {
+    for (const [path, action] of Object.entries(ownerActions)) {
       fastify.post(
         `/api/guilds/:guildId/${path}`,
-        { preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireGuildAdmin] },
+        { preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireOwner] },
         async (request, reply) => {
           if (reply.sent) return undefined;
           const { guildId } = request.guildAuthorization!;
@@ -260,6 +328,40 @@ export function buildLifecycleRoutes(
         },
       );
     }
+
+    // -----------------------------------------------------------------
+    // POST /api/guilds/:guildId/reopen — plain GUILD_ADMIN-scoped (verified
+    // against DASHBOARD/10_GUILD_ONBOARDING_AND_APPROVAL.md's state machine:
+    // "REJECTED --> CONFIGURING: Guild Admin may re-open" — no "Owner"
+    // qualifier, unlike pause/resume above; correctly scoped already, left
+    // unchanged).
+    // -----------------------------------------------------------------
+    fastify.post(
+      "/api/guilds/:guildId/reopen",
+      { preHandler: [requireAuth, validateGuildIdParam, requireCsrfHeader, requireGuildAdmin] },
+      async (request, reply) => {
+        if (reply.sent) return undefined;
+        const { guildId } = request.guildAuthorization!;
+        try {
+          const result = await transitionGuildLifecycle(db, {
+            guildId,
+            action: "REOPEN",
+            callerTier: request.guildAuthorization!.tier,
+            actorUserId: request.authUser!.id,
+            correlationId: request.id ?? null,
+          });
+          return {
+            data: { guildId, previousState: result.previousState, lifecycleState: result.nextState },
+          };
+        } catch (err) {
+          const code = serviceErrorCode(err);
+          if (code) {
+            return sendServiceError(reply, code);
+          }
+          throw err;
+        }
+      },
+    );
 
     // -----------------------------------------------------------------
     // POST /api/admin/guilds/:guildId/{suspend,lift-suspension} — platform-

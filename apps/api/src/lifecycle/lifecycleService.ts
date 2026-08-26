@@ -11,6 +11,7 @@ import type { Kysely, Transaction } from "kysely";
 import type { DB } from "../db/codegen-types.js";
 import { applyLifecycleTransition, type LifecycleAction, type LifecycleState } from "./stateMachine.js";
 import { getGuildLifecycleRow, writeLifecycleTransition } from "./lifecycleRepo.js";
+import { insertLifecycleEvent } from "./lifecycleEventsRepo.js";
 import { insertAuditLogEntry } from "./auditLog.js";
 import type { GuildTier } from "../auth/guildAuthorization.js";
 
@@ -133,6 +134,17 @@ export async function transitionGuildLifecycleInTransaction(
     },
     correlationId: params.correlationId,
     result: "SUCCESS",
+  });
+
+  // Step 10 correction round, Gap 3: one row per REAL, guard-confirmed
+  // transition (never for an ILLEGAL_TRANSITION/CONCURRENT_MODIFICATION
+  // rejection above — those already return before reaching here), in the
+  // SAME transaction as the `guilds` UPDATE this whole function just made.
+  // Backs `guild_lifecycle.state_changed` (`lifecycleSseAdapter.ts`).
+  await insertLifecycleEvent(trx, {
+    guildId: params.guildId,
+    previousState: row.lifecycleState,
+    nextState: outcome.nextState,
   });
 
   return { guildId: params.guildId, previousState: row.lifecycleState, nextState: outcome.nextState };

@@ -20,12 +20,14 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import type {
   LifecycleTransitionResponse,
+  OnboardingChannelCatalogResponse,
   OnboardingSectionSaveRequest,
   OnboardingStateResponse,
   RequestActivationResponse,
 } from "@bunny-command-center/shared";
 import { ApiError } from "../auth/apiClient.js";
 import {
+  fetchOnboardingChannelCatalog,
   fetchOnboardingState,
   postGuildLifecycleAction,
   requestActivation,
@@ -36,11 +38,35 @@ export function onboardingQueryKey(guildId: string): readonly [string, string, s
   return ["guilds", "onboarding", guildId] as const;
 }
 
+export function onboardingChannelsQueryKey(guildId: string): readonly [string, string, string, string] {
+  return ["guilds", "onboarding", guildId, "channels"] as const;
+}
+
 export function useOnboardingState(guildId: string): UseQueryResult<OnboardingStateResponse, ApiError> {
   return useQuery({
     queryKey: onboardingQueryKey(guildId),
     queryFn: () => fetchOnboardingState(guildId),
     staleTime: 5_000,
+  });
+}
+
+/**
+ * Step 10 correction round, Gap 2 — backs the Incoming/Hero/Community
+ * channel picker dropdowns. `available: false` (Bunny unreachable/erroring)
+ * is a normal SUCCESSFUL response shape (never an ApiError/thrown query
+ * error) — the picker components decide how to render that degraded state
+ * themselves; this hook never retries aggressively against a Bunny that's
+ * genuinely down (`retry: 1`, matching a "try once more, then show the
+ * degraded state" UX rather than hammering an unreachable service).
+ */
+export function useOnboardingChannelCatalog(
+  guildId: string,
+): UseQueryResult<OnboardingChannelCatalogResponse, ApiError> {
+  return useQuery({
+    queryKey: onboardingChannelsQueryKey(guildId),
+    queryFn: () => fetchOnboardingChannelCatalog(guildId),
+    staleTime: 30_000,
+    retry: 1,
   });
 }
 

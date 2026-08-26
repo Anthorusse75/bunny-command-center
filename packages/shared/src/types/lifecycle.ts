@@ -198,3 +198,35 @@ export const activationRequestDetailResponseSchema = z
   })
   .strict();
 export type ActivationRequestDetailResponse = z.infer<typeof activationRequestDetailResponseSchema>;
+
+/**
+ * Step 10 correction round, Gap 2 — `GET /api/guilds/:guildId/onboarding/channels`,
+ * proxying Bunny OCR's real `GET /internal/guilds/{guild_id}/channels`
+ * (`apps/api/src/integrations/bunnyInternalApi.ts`). `available: false`
+ * covers EVERY "couldn't get a real answer from Bunny" outcome
+ * (misconfigured, unreachable, non-200, malformed body, Bunny not in the
+ * guild) — deliberately collapsed into one flag rather than a granular
+ * error enum, because the onboarding channel pickers only ever need to
+ * distinguish "here is a real list" from "show a degraded/disabled picker,
+ * do not block the rest of the page" (this step's brief: "never silently
+ * treat 'can't reach Bunny' as 'channel doesn't exist' in a way that blocks
+ * all onboarding"). `channels` is always `[]` when `available` is `false`.
+ */
+export const onboardingChannelDtoSchema = z
+  .object({
+    id: discordSnowflakeSchema,
+    name: z.string(),
+    position: z.number(),
+    type: z.string(),
+    canReadHistory: z.boolean(),
+  })
+  .strict();
+export type OnboardingChannelDto = z.infer<typeof onboardingChannelDtoSchema>;
+
+export const onboardingChannelCatalogResponseSchema = z
+  .object({
+    available: z.boolean(),
+    channels: z.array(onboardingChannelDtoSchema),
+  })
+  .strict();
+export type OnboardingChannelCatalogResponse = z.infer<typeof onboardingChannelCatalogResponseSchema>;

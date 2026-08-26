@@ -6,12 +6,13 @@ import {
   RESYNC_REQUIRED_EVENT_TYPE,
   STEP_03_TEST_SCOPE,
   userScope,
+  guildScope,
   type SseChannelScope,
   type SseCursorVector,
 } from "@bunny-command-center/shared";
 import type { AppConfig } from "../config.js";
 import type { DB } from "../db/codegen-types.js";
-import { resolveAuthenticatedUser } from "../auth/index.js";
+import { resolveAuthenticatedUser, getCallerGuildsForListing, type GuildAuthDeps } from "../auth/index.js";
 import { SseHub, type SseConnectionHandle } from "./hub.js";
 import { startHeartbeat } from "./heartbeat.js";
 import { validateSourceRow } from "./validate.js";
@@ -52,22 +53,58 @@ const SSE_RETRY_MS = 3000;
  * Step 03's own regression suite connects without any session at all — see
  * this step's HANDOVER "Step 03 compatibility" deviation note for why full
  * route-level auth enforcement here is deliberately deferred, not silently
- * dropped). `guild:`/`admin:`/`platform` scopes remain exclusively Step
- * 05/06's responsibility, per this same extension-point contract.
+ * dropped). `admin:`/`platform` scopes remain exclusively a future step's
+ * responsibility, per this same extension-point contract.
+ *
+ * STEP 10 CORRECTION ROUND UPDATE (Gap 3 — `guild_lifecycle.state_changed`):
+ * `guild:{guildId}` scope resolution is now REAL, not just a declared
+ * `SseChannelScope` variant nothing ever subscribed to. Without this, the
+ * new lifecycle-event source adapter (`lifecycle/lifecycleSseAdapter.ts`)
+ * would be registered and would write real, correctly-ordered rows, but NO
+ * connected browser could ever actually receive one — an SSE event
+ * genuinely nobody is subscribed to is not "wired," regardless of how
+ * correct its backend plumbing is. An authenticated connection is
+ * subscribed to `guild:{id}` for every guild in the caller's own LIVE
+ * Discord guild list (`getCallerGuildsForListing`, the SAME cached
+ * fetch/mechanism `assertGuildMembership`/`resolveGuildAuthorization`
+ * already use — no second "which guilds does this caller belong to"
+ * derivation invented here). Fails OPEN to `[userScope(...)]` ALONE (never
+ * throws, never drops the connection) if the live Discord fetch fails for
+ * any reason (expired grant, Discord outage, ...) — a degraded guild-scope
+ * subscription must never turn into a failed SSE connection; the caller
+ * simply doesn't get live guild-scoped events until their next successful
+ * reconnect, exactly like any other soft-fail path in this file.
  */
 async function resolveSubscriptionScopes(
   db: Kysely<DB>,
   config: AppConfig,
+  guildAuthDeps: GuildAuthDeps,
   request: FastifyRequest,
 ): Promise<SseChannelScope[]> {
   const authResult = await resolveAuthenticatedUser(db, config, request).catch((err: unknown) => {
     request.log.warn({ err }, "sse: session resolution failed while opening a stream connection");
     return undefined;
   });
-  if (authResult) {
-    return [userScope(String(authResult.user.id))];
+  if (!authResult) {
+    return [STEP_03_TEST_SCOPE];
   }
-  return [STEP_03_TEST_SCOPE];
+  const scopes: SseChannelScope[] = [userScope(String(authResult.user.id))];
+  try {
+    const guilds = await getCallerGuildsForListing(
+      guildAuthDeps,
+      { id: authResult.user.id, discordUserId: authResult.user.discordUserId },
+      "READ",
+    );
+    for (const guild of guilds) {
+      scopes.push(guildScope(guild.id));
+    }
+  } catch (err) {
+    request.log.warn(
+      { err },
+      "sse: failed to resolve caller's guild list for guild:-scope subscription — falling back to user scope only",
+    );
+  }
+  return scopes;
 }
 
 export function buildSseRoutePlugin(params: {
@@ -75,11 +112,12 @@ export function buildSseRoutePlugin(params: {
   cursorRepo: SseCursorRepo;
   config: AppConfig;
   db: Kysely<DB>;
+  guildAuthDeps: GuildAuthDeps;
 }): FastifyPluginAsync {
   // eslint-disable-next-line @typescript-eslint/require-await -- FastifyPluginAsync's contract
   return async (fastify) => {
     fastify.get("/api/stream", async (request, reply) => {
-      const scopes = await resolveSubscriptionScopes(params.db, params.config, request);
+      const scopes = await resolveSubscriptionScopes(params.db, params.config, params.guildAuthDeps, request);
 
       // ==================================================================
       // Last-Event-ID resolution — TWO DISTINCT RECONNECT CASES, one

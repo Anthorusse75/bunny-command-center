@@ -19,6 +19,10 @@ import { createSession } from "../../src/auth/sessionRepo.js";
 import { encryptSecret } from "../../src/auth/tokenCrypto.js";
 import { startDiscordTestDouble, type DiscordTestDouble } from "../helpers/discordTestDouble.js";
 import {
+  startBunnyInternalApiTestDouble,
+  type BunnyInternalApiTestDouble,
+} from "../helpers/bunnyInternalApiTestDouble.js";
+import {
   testSessionConfig,
   testSuperadminConfig,
   TEST_SUPERADMIN_DISCORD_ID,
@@ -88,6 +92,7 @@ async function freshDatabase(): Promise<MigratorDbConfig> {
 
 describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workflow", () => {
   let discord: DiscordTestDouble;
+  let bunny: BunnyInternalApiTestDouble;
   let config: AppConfig;
   let fastify: Awaited<ReturnType<typeof buildServer>>;
   let pool: mysql.Pool;
@@ -96,6 +101,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     const dbConfig = await freshDatabase();
     pool = mysql.createPool(dbConfig);
     discord = await startDiscordTestDouble();
+    bunny = await startBunnyInternalApiTestDouble();
     config = {
       port: 0,
       logLevel: "silent",
@@ -118,6 +124,13 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       },
       session: testSessionConfig(),
       superadmin: testSuperadminConfig(),
+      // Step 10 correction round, Gap 2: real local HTTP test double
+      // (`bunnyInternalApiTestDouble.ts`), never a mocked `fetch` — its
+      // default channel catalog already covers every channel-id literal this
+      // whole file uses, so every EXISTING test keeps working unchanged; the
+      // dedicated Gap 2 tests below override `bunny.state` per-case to prove
+      // the not-found/unreachable/malformed paths.
+      bunnyInternalApi: { baseUrl: bunny.baseUrl, token: bunny.state.token },
     };
     fastify = await buildServer(config);
     await fastify.ready();
@@ -126,6 +139,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
   afterAll(async () => {
     await fastify.close();
     await discord.close();
+    await bunny.close();
     await pool.end();
     const admin = await mysql.createConnection(ROOT_CONFIG);
     await admin.query(`DROP DATABASE IF EXISTS \`${TEST_DB_NAME}\``);
@@ -135,17 +149,28 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
   let userCounter = 800100000000000000n;
   let sessionCounter = 0;
   /**
-   * `discordTestDouble.ts`'s `state.guilds` is a SINGLE shared fixture (not
-   * keyed per access token/user) — the double always answers "the caller's
-   * own guild list" with whatever this field currently holds. `guilds/routes.test.ts`
-   * never interleaves two different sessions' requests, so this never
-   * mattered there; this test file DOES (an admin action followed by a
-   * Superadmin action, back and forth, in the same test). `cookie` is
-   * therefore a GETTER, not a plain field: reading it re-syncs
-   * `discord.state.guilds` to THIS session's own fixture at the exact moment
-   * a request is about to use it, regardless of what any other session did
-   * in between — every existing `session.cookie` call site gets this for
-   * free, no per-call-site changes needed.
+   * Step 10 correction round, Gap 5 (real bug found in real-MySQL/real-server
+   * testing): `discordTestDouble.ts`'s `state.guilds` is a SINGLE shared
+   * fixture (not keyed per access token/user) — the double used to always
+   * answer "the caller's own guild list" with whatever that single field
+   * currently held, re-synced by this function's own `cookie` GETTER
+   * side-effect immediately before each request. That worked for every
+   * PRIOR test in this file (an admin action followed by a Superadmin
+   * action, SEQUENTIALLY, never in the same tick) but broke the FIRST
+   * genuinely concurrent multi-session test added in this correction round
+   * (`Promise.all([...])` firing an Owner's pause and a Superadmin's suspend
+   * at the same moment): both requests' header objects are constructed
+   * synchronously before either `fastify.inject()` call's async work
+   * actually runs, so the LAST cookie-getter evaluated during argument
+   * construction wins for BOTH concurrent requests, regardless of which
+   * session it belongs to — the Owner's pause request observed the
+   * Superadmin's fixture (no `owner: true`) and spuriously 403'd. Fixed at
+   * the root (`discordTestDouble.ts`'s new `state.guildsByToken` map) rather
+   * than papering over it in this file: each session now gets its OWN
+   * distinct access token, registered against its OWN guild-list fixture, so
+   * two concurrent requests from two different sessions are correctly
+   * distinguished by the token each one actually presents — no shared
+   * mutable field, no ordering dependency.
    */
   async function makeSession(
     guilds: { id: string; owner: boolean; permissions: string; name?: string }[],
@@ -154,11 +179,13 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     const id = discordUserId ?? String((userCounter += 1n));
     const key = config.session.tokenEncryptionKey;
     const db = fastify.authTestHooks!.db;
+    const accessToken = `test-access-token-${id}`;
+    discord.state.guildsByToken.set(accessToken, guilds);
     const user = await upsertDashboardUser(db, {
       discordUserId: id,
       username: `user-${id}`,
       avatarHash: null,
-      encryptedAccessToken: encryptSecret(discord.state.currentAccessToken, key),
+      encryptedAccessToken: encryptSecret(accessToken, key),
       encryptedRefreshToken: encryptSecret("refresh-token-value", key),
       tokenExpiresAt: new Date(Date.now() + 3600_000),
     });
@@ -172,14 +199,10 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       slidingTtlMs: config.session.slidingTtlMs,
       absoluteTtlMs: config.session.absoluteTtlMs,
     });
-    discord.state.guilds = guilds;
     fastify.authTestHooks!.guildAuthDeps.cache.invalidateUserGuild(id, "*");
     const rawCookie = `${config.session.cookieName}=${rawToken}`;
     return {
-      get cookie(): string {
-        discord.state.guilds = guilds;
-        return rawCookie;
-      },
+      cookie: rawCookie,
       discordUserId: id,
       userId: user.id,
     };
@@ -687,5 +710,581 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     });
     expect(resubmitRes.statusCode).toBe(200);
     expect(lifecycleBody(resubmitRes).data.lifecycleState).toBe("PENDING_APPROVAL");
+  });
+
+  // -----------------------------------------------------------------------
+  // Step 10 correction round, Gap 1: pause/resume are Owner-scoped, NOT
+  // merely GUILD_ADMIN-scoped (DASHBOARD/10_GUILD_ONBOARDING_AND_APPROVAL.md's
+  // permission matrix: "ACTIVE | Owner: pause", "USER_PAUSED | Owner:
+  // resume"). A caller who resolves to GUILD_ADMIN tier via the Discord
+  // ADMINISTRATOR permission bit but is NOT `owner: true` in their own live
+  // guild list must be rejected with 403 — the prior implementation used
+  // `requireGuildAdmin` here, which incorrectly let any GUILD_ADMIN-tier
+  // caller pause/resume.
+  // -----------------------------------------------------------------------
+  it("pause/resume are Owner-scoped: a non-Owner Guild Admin (ADMINISTRATOR bit) is rejected, the real Owner and Superadmin can act", async () => {
+    const guildId = "600000000000000007";
+    await seedGuild(guildId);
+    const owner = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+    const superadmin = await makeSession(
+      [{ id: guildId, owner: false, permissions: "0" }],
+      TEST_SUPERADMIN_DISCORD_ID,
+    );
+
+    await saveMinimumChecklist(owner.cookie, guildId, "500000000000000050");
+    const { requestId } = activationCreatedBody(
+      await fastify.inject({
+        method: "POST",
+        url: `/api/guilds/${guildId}/request-activation`,
+        headers: csrf(owner.cookie),
+      }),
+    ).data;
+    await fastify.inject({
+      method: "POST",
+      url: `/api/admin/activation-requests/${requestId}/approve`,
+      headers: csrf(superadmin.cookie),
+    });
+
+    // A non-Owner Guild Admin (resolves to GUILD_ADMIN tier via the Discord
+    // ADMINISTRATOR bit, `owner: false`) must be rejected with a clear 403,
+    // and the guild must remain ACTIVE (no partial/silent state change).
+    const nonOwnerAdmin = await makeSession([{ id: guildId, owner: false, permissions: "8" }]);
+    const rejectedPause = await fastify.inject({
+      method: "POST",
+      url: `/api/guilds/${guildId}/pause`,
+      headers: csrf(nonOwnerAdmin.cookie),
+    });
+    expect(rejectedPause.statusCode).toBe(403);
+    expect(errorBody(rejectedPause).error_code).toBe("FORBIDDEN");
+
+    const [stillActiveRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT lifecycle_state FROM guilds WHERE guild_id = ?",
+      [guildId],
+    );
+    expect((stillActiveRows[0] as { lifecycle_state: string }).lifecycle_state).toBe("ACTIVE");
+
+    // The real Owner CAN pause.
+    const ownerPause = await fastify.inject({
+      method: "POST",
+      url: `/api/guilds/${guildId}/pause`,
+      headers: csrf(owner.cookie),
+    });
+    expect(ownerPause.statusCode).toBe(200);
+    expect(lifecycleBody(ownerPause).data.lifecycleState).toBe("USER_PAUSED");
+
+    // The same non-Owner Guild Admin is also rejected for resume.
+    const rejectedResume = await fastify.inject({
+      method: "POST",
+      url: `/api/guilds/${guildId}/resume`,
+      headers: csrf(nonOwnerAdmin.cookie),
+    });
+    expect(rejectedResume.statusCode).toBe(403);
+    expect(errorBody(rejectedResume).error_code).toBe("FORBIDDEN");
+
+    // Superadmin CAN resume (bypasses the Owner check, matches the
+    // Superadmin-supersedes-everything pattern used everywhere else).
+    const superadminResume = await fastify.inject({
+      method: "POST",
+      url: `/api/guilds/${guildId}/resume`,
+      headers: csrf(superadmin.cookie),
+    });
+    expect(superadminResume.statusCode).toBe(200);
+    expect(lifecycleBody(superadminResume).data.lifecycleState).toBe("ACTIVE");
+  });
+
+  it("reopen stays GUILD_ADMIN-scoped (not Owner-only): a non-Owner Guild Admin can reopen a REJECTED guild", async () => {
+    const guildId = "600000000000000008";
+    await seedGuild(guildId);
+    const owner = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+    const superadmin = await makeSession(
+      [{ id: guildId, owner: false, permissions: "0" }],
+      TEST_SUPERADMIN_DISCORD_ID,
+    );
+
+    await saveMinimumChecklist(owner.cookie, guildId, "500000000000000060");
+    const { requestId } = activationCreatedBody(
+      await fastify.inject({
+        method: "POST",
+        url: `/api/guilds/${guildId}/request-activation`,
+        headers: csrf(owner.cookie),
+      }),
+    ).data;
+    const rejectRes = await fastify.inject({
+      method: "POST",
+      url: `/api/admin/activation-requests/${requestId}/reject`,
+      headers: csrf(superadmin.cookie),
+      payload: { reason: "Not ready." },
+    });
+    expect(rejectRes.statusCode).toBe(200);
+
+    // A non-Owner Guild Admin (ADMINISTRATOR bit, owner: false) CAN reopen —
+    // `reopen` is documented as plain Guild-Admin-scoped, not Owner-only.
+    const nonOwnerAdmin = await makeSession([{ id: guildId, owner: false, permissions: "8" }]);
+    const reopenRes = await fastify.inject({
+      method: "POST",
+      url: `/api/guilds/${guildId}/reopen`,
+      headers: csrf(nonOwnerAdmin.cookie),
+    });
+    expect(reopenRes.statusCode).toBe(200);
+    expect(lifecycleBody(reopenRes).data.lifecycleState).toBe("CONFIGURING");
+  });
+
+  // -----------------------------------------------------------------------
+  // Step 10 correction round, Gap 4: checksum-mismatch defense-in-depth.
+  // `activationRequestsService.ts`'s `approveActivationRequest` re-verifies
+  // `Buffer.compare(snapshot.checksum, request.submittedConfigChecksum)`
+  // before ever flipping lifecycle_state — this proves it actually fires on
+  // a genuine mismatch, simulating an "impossible" out-of-band mutation of
+  // the referenced `guild_configuration_versions` row directly via SQL
+  // (the application layer itself never does this).
+  // -----------------------------------------------------------------------
+  it("approve is rejected with CHECKSUM_MISMATCH when the referenced config version's checksum was mutated out-of-band, and the failure is audited", async () => {
+    const guildId = "600000000000000009";
+    await seedGuild(guildId);
+    const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+    const superadmin = await makeSession(
+      [{ id: guildId, owner: false, permissions: "0" }],
+      TEST_SUPERADMIN_DISCORD_ID,
+    );
+
+    await saveMinimumChecklist(admin.cookie, guildId, "500000000000000070");
+    const { requestId } = activationCreatedBody(
+      await fastify.inject({
+        method: "POST",
+        url: `/api/guilds/${guildId}/request-activation`,
+        headers: csrf(admin.cookie),
+      }),
+    ).data;
+
+    // Out-of-band mutation: directly corrupt the referenced
+    // guild_configuration_versions row's checksum — something the
+    // application layer itself would never do, simulating an "impossible"
+    // integrity violation the defense-in-depth check exists to catch.
+    const [requestRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT submitted_config_version_id FROM dashboard_guild_activation_requests WHERE request_id = ?",
+      [requestId],
+    );
+    const submittedConfigVersionId = (requestRows[0] as { submitted_config_version_id: number })
+      .submitted_config_version_id;
+    await pool.query("UPDATE guild_configuration_versions SET checksum = UNHEX(SHA2('tampered', 256)) WHERE id = ?", [
+      submittedConfigVersionId,
+    ]);
+
+    const approveRes = await fastify.inject({
+      method: "POST",
+      url: `/api/admin/activation-requests/${requestId}/approve`,
+      headers: csrf(superadmin.cookie),
+    });
+    expect(approveRes.statusCode).toBe(409);
+    expect(errorBody(approveRes).error_code).toBe("CHECKSUM_MISMATCH");
+
+    // The guild must NOT have become ACTIVE, and `enabled` must stay 0.
+    const [guildRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT lifecycle_state, enabled FROM guilds WHERE guild_id = ?",
+      [guildId],
+    );
+    expect((guildRows[0] as { lifecycle_state: string }).lifecycle_state).toBe("PENDING_APPROVAL");
+    expect((guildRows[0] as { enabled: number }).enabled).toBe(0);
+
+    // The activation request must still be PENDING (never silently decided).
+    const [requestStateRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT state FROM dashboard_guild_activation_requests WHERE request_id = ?",
+      [requestId],
+    );
+    expect((requestStateRows[0] as { state: string }).state).toBe("PENDING");
+
+    // An audit-log row records the integrity failure.
+    const [auditRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT action, result, guild_id FROM dashboard_audit_log WHERE action = 'ACTIVATION_REQUEST_APPROVAL_INTEGRITY_FAILURE' AND guild_id = ?",
+      [guildId],
+    );
+    expect(auditRows).toHaveLength(1);
+    expect((auditRows[0] as { result: string }).result).toBe("FAILURE");
+
+    // No false-success GUILD_APPROVAL_STATE_CHANGE notification was created
+    // for this request (only a real state-change notification would use
+    // this event type; approval never got far enough to send one).
+    const [notificationRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT id FROM dashboard_notifications WHERE event_type = 'GUILD_APPROVAL_STATE_CHANGE' AND guild_id = ?",
+      [guildId],
+    );
+    expect(notificationRows).toHaveLength(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // -----------------------------------------------------------------------
+  // Step 10 correction round, Gap 2: live channel-catalog integration.
+  // -----------------------------------------------------------------------
+  describe("onboarding channel catalog integration (Gap 2)", () => {
+    it("saving a channel section is rejected (fails closed) when Bunny is unreachable/erroring, never silently accepted", async () => {
+      const guildId = "600000000000000015";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      bunny.state.forcedStatus = 503;
+      try {
+        const res = await patchOnboarding(admin.cookie, guildId, {
+          section: "incomingChannel",
+          data: { channelId: "500000000000000001" },
+        });
+        expect(res.statusCode).toBe(503);
+        expect(errorBody(res).error_code).toBe("CHANNEL_VERIFICATION_FAILED");
+      } finally {
+        bunny.state.forcedStatus = undefined;
+      }
+
+      // The save must NOT have been persisted — never a silent accept of an
+      // unverified channel id.
+      const stateRes = await fastify.inject({
+        method: "GET",
+        url: `/api/guilds/${guildId}/onboarding`,
+        headers: { cookie: admin.cookie },
+      });
+      const state = stateRes.json() as { data: { values: { incomingChannelId: string | null } } };
+      expect(state.data.values.incomingChannelId).toBeNull();
+    });
+
+    it("saving a channel section is rejected when the channel genuinely doesn't exist in Bunny's live catalog", async () => {
+      const guildId = "600000000000000016";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      // Explicit, empty catalog for this guild — overrides the shared
+      // default's broad synthetic list.
+      bunny.state.channelsByGuild.set(guildId, []);
+
+      const res = await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000099" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(errorBody(res).error_code).toBe("CHANNEL_NOT_FOUND");
+    });
+
+    it("saving a channel section succeeds when the channel genuinely exists in Bunny's live catalog", async () => {
+      const guildId = "600000000000000017";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      bunny.state.channelsByGuild.set(guildId, [
+        { id: "500000000000000098", name: "real-incoming", position: 0, type: "text", can_read_history: true },
+      ]);
+
+      const res = await patchOnboarding(admin.cookie, guildId, {
+        section: "incomingChannel",
+        data: { channelId: "500000000000000098" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(onboardingBody(res).data.lifecycleState).toBe("CONFIGURING");
+    });
+
+    it("clearing the optional community channel (channelId: null) never triggers a catalog check", async () => {
+      const guildId = "600000000000000018";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      bunny.state.forcedStatus = 503; // if this section wrongly checked the catalog, it would fail
+      try {
+        const res = await patchOnboarding(admin.cookie, guildId, {
+          section: "communityChannel",
+          data: { channelId: null },
+        });
+        expect(res.statusCode).toBe(200);
+      } finally {
+        bunny.state.forcedStatus = undefined;
+      }
+    });
+
+    it("GET .../onboarding/channels returns the real catalog when Bunny is reachable, and a graceful available:false when it is not — never a 500", async () => {
+      const guildId = "600000000000000019";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      bunny.state.channelsByGuild.set(guildId, [
+        { id: "500000000000000097", name: "catalog-channel", position: 3, type: "text", can_read_history: true },
+      ]);
+
+      const okRes = await fastify.inject({
+        method: "GET",
+        url: `/api/guilds/${guildId}/onboarding/channels`,
+        headers: { cookie: admin.cookie },
+      });
+      expect(okRes.statusCode).toBe(200);
+      const okBody = okRes.json() as {
+        data: { available: boolean; channels: { id: string; name: string }[] };
+      };
+      expect(okBody.data.available).toBe(true);
+      expect(okBody.data.channels).toEqual([
+        { id: "500000000000000097", name: "catalog-channel", position: 3, type: "text", canReadHistory: true },
+      ]);
+
+      bunny.state.forcedStatus = 503;
+      try {
+        const degradedRes = await fastify.inject({
+          method: "GET",
+          url: `/api/guilds/${guildId}/onboarding/channels`,
+          headers: { cookie: admin.cookie },
+        });
+        expect(degradedRes.statusCode).toBe(200);
+        const degradedBody = degradedRes.json() as { data: { available: boolean; channels: unknown[] } };
+        expect(degradedBody.data.available).toBe(false);
+        expect(degradedBody.data.channels).toEqual([]);
+      } finally {
+        bunny.state.forcedStatus = undefined;
+      }
+    });
+  });
+
+  // Step 10 correction round, Gap 5: concurrency/race tests. Every one of
+  // these fires two real HTTP requests concurrently (`Promise.all`) against
+  // the real running test server, then asserts on the REAL final DB state —
+  // matching this suite's own established real-server, real-MySQL approach.
+  // The guard mechanism under test is `lifecycleRepo.ts`'s `writeLifecycleTransition`
+  // (guilds.row_version + expected-state, guarded UPDATE) and
+  // `activationRequestsRepo.ts`'s `writeActivationRequestDecision`
+  // (dashboard_guild_activation_requests.state, guarded UPDATE) — both
+  // "clear rejection rather than silent no-op" per
+  // IMPLEMENTATION/10_onboarding_approval.md §Concurrency.
+  // -----------------------------------------------------------------------
+  describe("concurrency/race guarantees", () => {
+    function statusCodes(results: InjectResponse[]): number[] {
+      return results.map((r) => r.statusCode).sort();
+    }
+
+    it("two concurrent request-activation calls for the same guild: exactly one succeeds, never two live activation requests", async () => {
+      const guildId = "600000000000000010";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000080");
+
+      const [resA, resB] = await Promise.all([
+        fastify.inject({
+          method: "POST",
+          url: `/api/guilds/${guildId}/request-activation`,
+          headers: csrf(admin.cookie),
+        }),
+        fastify.inject({
+          method: "POST",
+          url: `/api/guilds/${guildId}/request-activation`,
+          headers: csrf(admin.cookie),
+        }),
+      ]);
+
+      expect(statusCodes([resA, resB])).toEqual([200, 409]);
+      const loser = resA.statusCode === 409 ? resA : resB;
+      expect(["ILLEGAL_TRANSITION", "CONCURRENT_MODIFICATION"]).toContain(errorBody(loser).error_code);
+
+      const [guildRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT lifecycle_state FROM guilds WHERE guild_id = ?",
+        [guildId],
+      );
+      expect((guildRows[0] as { lifecycle_state: string }).lifecycle_state).toBe("PENDING_APPROVAL");
+
+      const [liveRequestRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT request_id FROM dashboard_guild_activation_requests WHERE guild_id = ? AND state IN ('PENDING', 'CHANGES_REQUESTED')",
+        [guildId],
+      );
+      expect(liveRequestRows).toHaveLength(1);
+    });
+
+    it("approve racing reject on the same requestId: exactly one wins", async () => {
+      const guildId = "600000000000000011";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      const superadmin = await makeSession(
+        [{ id: guildId, owner: false, permissions: "0" }],
+        TEST_SUPERADMIN_DISCORD_ID,
+      );
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000081");
+      const { requestId } = activationCreatedBody(
+        await fastify.inject({
+          method: "POST",
+          url: `/api/guilds/${guildId}/request-activation`,
+          headers: csrf(admin.cookie),
+        }),
+      ).data;
+
+      const [approveRes, rejectRes] = await Promise.all([
+        fastify.inject({
+          method: "POST",
+          url: `/api/admin/activation-requests/${requestId}/approve`,
+          headers: csrf(superadmin.cookie),
+        }),
+        fastify.inject({
+          method: "POST",
+          url: `/api/admin/activation-requests/${requestId}/reject`,
+          headers: csrf(superadmin.cookie),
+          payload: { reason: "racing rejection" },
+        }),
+      ]);
+
+      expect(statusCodes([approveRes, rejectRes])).toEqual([200, 409]);
+      if (approveRes.statusCode === 409) {
+        expect(errorBody(approveRes).error_code).toBe("REQUEST_ALREADY_DECIDED");
+      } else {
+        expect(errorBody(rejectRes).error_code).toBe("REQUEST_ALREADY_DECIDED");
+      }
+
+      const [requestRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT state FROM dashboard_guild_activation_requests WHERE request_id = ?",
+        [requestId],
+      );
+      const finalState = (requestRows[0] as { state: string }).state;
+      expect(["APPROVED", "REJECTED"]).toContain(finalState);
+
+      const [guildRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT lifecycle_state FROM guilds WHERE guild_id = ?",
+        [guildId],
+      );
+      const guildState = (guildRows[0] as { lifecycle_state: string }).lifecycle_state;
+      // The guild's lifecycle_state must be consistent with WHICHEVER
+      // decision actually won — never a hybrid/corrupted state.
+      expect(guildState).toBe(finalState === "APPROVED" ? "ACTIVE" : "REJECTED");
+    });
+
+    it("approve racing request-changes on the same requestId: exactly one wins", async () => {
+      const guildId = "600000000000000012";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      const superadmin = await makeSession(
+        [{ id: guildId, owner: false, permissions: "0" }],
+        TEST_SUPERADMIN_DISCORD_ID,
+      );
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000082");
+      const { requestId } = activationCreatedBody(
+        await fastify.inject({
+          method: "POST",
+          url: `/api/guilds/${guildId}/request-activation`,
+          headers: csrf(admin.cookie),
+        }),
+      ).data;
+
+      const [approveRes, changesRes] = await Promise.all([
+        fastify.inject({
+          method: "POST",
+          url: `/api/admin/activation-requests/${requestId}/approve`,
+          headers: csrf(superadmin.cookie),
+        }),
+        fastify.inject({
+          method: "POST",
+          url: `/api/admin/activation-requests/${requestId}/request-changes`,
+          headers: csrf(superadmin.cookie),
+          payload: { reason: "racing request-changes" },
+        }),
+      ]);
+
+      expect(statusCodes([approveRes, changesRes])).toEqual([200, 409]);
+      const [requestRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT state FROM dashboard_guild_activation_requests WHERE request_id = ?",
+        [requestId],
+      );
+      const finalState = (requestRows[0] as { state: string }).state;
+      expect(["APPROVED", "CHANGES_REQUESTED"]).toContain(finalState);
+
+      const [guildRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT lifecycle_state FROM guilds WHERE guild_id = ?",
+        [guildId],
+      );
+      const guildState = (guildRows[0] as { lifecycle_state: string }).lifecycle_state;
+      expect(guildState).toBe(finalState === "APPROVED" ? "ACTIVE" : "CHANGES_REQUESTED");
+    });
+
+    it("pause racing platform-suspend on the same guild: exactly one lifecycle transition wins", async () => {
+      const guildId = "600000000000000013";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      const superadmin = await makeSession(
+        [{ id: guildId, owner: false, permissions: "0" }],
+        TEST_SUPERADMIN_DISCORD_ID,
+      );
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000083");
+      const { requestId } = activationCreatedBody(
+        await fastify.inject({
+          method: "POST",
+          url: `/api/guilds/${guildId}/request-activation`,
+          headers: csrf(admin.cookie),
+        }),
+      ).data;
+      await fastify.inject({
+        method: "POST",
+        url: `/api/admin/activation-requests/${requestId}/approve`,
+        headers: csrf(superadmin.cookie),
+      });
+
+      const [pauseRes, suspendRes] = await Promise.all([
+        fastify.inject({ method: "POST", url: `/api/guilds/${guildId}/pause`, headers: csrf(admin.cookie) }),
+        fastify.inject({
+          method: "POST",
+          url: `/api/admin/guilds/${guildId}/suspend`,
+          headers: csrf(superadmin.cookie),
+        }),
+      ]);
+
+      expect(statusCodes([pauseRes, suspendRes])).toEqual([200, 409]);
+      const loser = pauseRes.statusCode === 409 ? pauseRes : suspendRes;
+      expect(["ILLEGAL_TRANSITION", "CONCURRENT_MODIFICATION"]).toContain(errorBody(loser).error_code);
+
+      const [guildRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT lifecycle_state, suspended_from_state, row_version FROM guilds WHERE guild_id = ?",
+        [guildId],
+      );
+      const finalState = (guildRows[0] as { lifecycle_state: string }).lifecycle_state;
+      // Never a silent last-write-wins hybrid: exactly one of the two
+      // legitimate outcomes, each internally consistent with
+      // suspended_from_state.
+      if (pauseRes.statusCode === 200) {
+        expect(finalState).toBe("USER_PAUSED");
+      } else {
+        expect(finalState).toBe("PLATFORM_SUSPENDED");
+        expect((guildRows[0] as { suspended_from_state: string | null }).suspended_from_state).toBe("ACTIVE");
+      }
+    });
+
+    it("resume racing platform-suspend on the same guild: exactly one lifecycle transition wins", async () => {
+      const guildId = "600000000000000014";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      const superadmin = await makeSession(
+        [{ id: guildId, owner: false, permissions: "0" }],
+        TEST_SUPERADMIN_DISCORD_ID,
+      );
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000084");
+      const { requestId } = activationCreatedBody(
+        await fastify.inject({
+          method: "POST",
+          url: `/api/guilds/${guildId}/request-activation`,
+          headers: csrf(admin.cookie),
+        }),
+      ).data;
+      await fastify.inject({
+        method: "POST",
+        url: `/api/admin/activation-requests/${requestId}/approve`,
+        headers: csrf(superadmin.cookie),
+      });
+      await fastify.inject({ method: "POST", url: `/api/guilds/${guildId}/pause`, headers: csrf(admin.cookie) });
+
+      const [resumeRes, suspendRes] = await Promise.all([
+        fastify.inject({ method: "POST", url: `/api/guilds/${guildId}/resume`, headers: csrf(admin.cookie) }),
+        fastify.inject({
+          method: "POST",
+          url: `/api/admin/guilds/${guildId}/suspend`,
+          headers: csrf(superadmin.cookie),
+        }),
+      ]);
+
+      expect(statusCodes([resumeRes, suspendRes])).toEqual([200, 409]);
+      const loser = resumeRes.statusCode === 409 ? resumeRes : suspendRes;
+      expect(["ILLEGAL_TRANSITION", "CONCURRENT_MODIFICATION"]).toContain(errorBody(loser).error_code);
+
+      const [guildRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT lifecycle_state, suspended_from_state FROM guilds WHERE guild_id = ?",
+        [guildId],
+      );
+      const finalState = (guildRows[0] as { lifecycle_state: string }).lifecycle_state;
+      if (resumeRes.statusCode === 200) {
+        expect(finalState).toBe("ACTIVE");
+      } else {
+        expect(finalState).toBe("PLATFORM_SUSPENDED");
+        expect((guildRows[0] as { suspended_from_state: string | null }).suspended_from_state).toBe(
+          "USER_PAUSED",
+        );
+      }
+    });
   });
 });

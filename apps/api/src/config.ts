@@ -34,6 +34,28 @@ export interface DiscordOAuthConfig {
   apiBaseUrl: string;
 }
 
+/**
+ * Step 10 correction round, Gap 2: the sibling Bunny OCR repo's
+ * `GET /internal/guilds/{guild_id}/channels` (`02_NEW_BOT_OCR/functions/internal_channel_catalog.py`,
+ * branch `dashboard/step-10-channel-catalog`) — `Authorization: Bearer
+ * <token>`, same convention as that repo's existing `internal_role_catalog.py`.
+ * See `apps/api/src/integrations/bunnyInternalApi.ts` for the one client
+ * that calls this.
+ *
+ * OPTIONAL, mirroring `AppConfig.publicUrl`'s own documented pattern: a
+ * Dashboard instance can legitimately run (dev, most tests) with no Bunny
+ * OCR deployment reachable at all — `bunnyInternalApi.ts`'s client treats an
+ * absent config as its own distinct `NOT_CONFIGURED` outcome (never a
+ * startup failure), which the onboarding save path then fails CLOSED on
+ * exactly like any other "couldn't verify" outcome (11_GUILD_CONFIGURATION.md's
+ * audit-gap closure: "never silently accept an unverified channel id").
+ */
+export interface BunnyInternalApiConfig {
+  /** No trailing slash — callers build `${baseUrl}/internal/guilds/...` directly. */
+  baseUrl: string;
+  token: string;
+}
+
 export interface SuperadminConfig {
   /**
    * ADR-008: exactly one, non-delegable Superadmin Discord user ID, sourced
@@ -99,6 +121,8 @@ export interface AppConfig {
    * never exercise.
    */
   publicUrl?: string;
+  /** See `BunnyInternalApiConfig`'s own doc comment — OPTIONAL, same `exactOptionalPropertyTypes`-friendly rationale as `publicUrl` above. */
+  bunnyInternalApi?: BunnyInternalApiConfig;
 }
 
 /**
@@ -225,8 +249,37 @@ function optionalPublicUrlEnv(env: EnvSource, name: string): string | undefined 
   }
 }
 
+/**
+ * Step 10 correction round, Gap 2: mirrors `optionalPublicUrlEnv`'s own
+ * "present-but-malformed degrades to undefined, never a startup failure"
+ * contract — a Dashboard instance must be able to start with no Bunny OCR
+ * deployment configured yet (dev, most of this repo's existing tests, which
+ * know nothing about these two new vars). BOTH vars must be present and
+ * non-blank for the config to be considered set at all — a URL with no
+ * token (or vice versa) is treated the same as neither being set, never a
+ * half-configured client that would 401 against Bunny on every call.
+ */
+function optionalBunnyInternalApiEnv(env: EnvSource): BunnyInternalApiConfig | undefined {
+  const rawUrl = env.BUNNY_INTERNAL_API_URL?.trim();
+  const token = env.BUNNY_INTERNAL_API_TOKEN?.trim();
+  if (!rawUrl || !token) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  const baseUrl = rawUrl.endsWith("/") ? rawUrl.slice(0, -1) : rawUrl;
+  return { baseUrl, token };
+}
+
 export function loadAppConfig(env: EnvSource = process.env): AppConfig {
   const publicUrl = optionalPublicUrlEnv(env, "DASHBOARD_PUBLIC_URL");
+  const bunnyInternalApi = optionalBunnyInternalApiEnv(env);
   return {
     port: Number(env.PORT ?? 8080),
     logLevel: env.LOG_LEVEL ?? "info",
@@ -271,5 +324,6 @@ export function loadAppConfig(env: EnvSource = process.env): AppConfig {
       discordUserId: requiredSnowflakeEnv(env, "PLATFORM_SUPERADMIN_DISCORD_ID"),
     },
     ...(publicUrl !== undefined ? { publicUrl } : {}),
+    ...(bunnyInternalApi !== undefined ? { bunnyInternalApi } : {}),
   };
 }

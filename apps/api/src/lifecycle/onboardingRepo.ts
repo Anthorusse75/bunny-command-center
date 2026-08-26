@@ -49,6 +49,31 @@ import { ONBOARDING_SECTION_KEYS } from "@bunny-command-center/shared";
 
 export type Executor = Kysely<DB> | Transaction<DB>;
 
+/**
+ * Thrown by `materializeDraftConfigVersion` on the real concurrency race
+ * documented at its `guild_configuration_versions` INSERT below (Step 10
+ * correction round, Gap 5) — `activationRequestsService.ts` catches this and
+ * maps it onto `ActivationServiceError("CONCURRENT_MODIFICATION", ...)`, the
+ * same typed conflict every other guarded write in this step already uses.
+ */
+export class ConfigVersionRaceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigVersionRaceError";
+  }
+}
+
+/** Narrowly matches ONLY the specific unique-constraint violation this race can produce — any other error (a genuinely different DB failure) is rethrown unchanged by the caller, never mis-mapped onto a spurious "retry" conflict. */
+function isDuplicateVersionNoError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: unknown; sqlMessage?: unknown };
+  return (
+    e.code === "ER_DUP_ENTRY" &&
+    typeof e.sqlMessage === "string" &&
+    e.sqlMessage.includes("uq_guild_configuration_versions_guild_version")
+  );
+}
+
 interface SectionEntry {
   readonly data: unknown;
   readonly completedAt: string;
@@ -285,19 +310,48 @@ export async function materializeDraftConfigVersion(
       .where("guild_id", "=", guildIdBig)
       .executeTakeFirst();
     const nextVersionNo = (maxRow?.maxVersionNo ?? 0) + 1;
-    const insertResult = await db
-      .insertInto("guild_configuration_versions")
-      .values({
-        guild_id: guildIdBig,
-        version_no: nextVersionNo,
-        state: "DRAFT",
-        based_on_id: versionId,
-        author_type: "GUILD_ADMIN",
-        author_discord_id: bindBigIntUnsigned(params.authorDiscordId),
-        origin: "ONBOARDING",
-        checksum,
-      })
-      .executeTakeFirstOrThrow();
+    let insertResult;
+    try {
+      insertResult = await db
+        .insertInto("guild_configuration_versions")
+        .values({
+          guild_id: guildIdBig,
+          version_no: nextVersionNo,
+          state: "DRAFT",
+          based_on_id: versionId,
+          author_type: "GUILD_ADMIN",
+          author_discord_id: bindBigIntUnsigned(params.authorDiscordId),
+          origin: "ONBOARDING",
+          checksum,
+        })
+        .executeTakeFirstOrThrow();
+    } catch (err) {
+      // Step 10 correction round, Gap 5 (REAL concurrency bug found in
+      // real-MySQL, real-server concurrent testing, not a hypothetical): two
+      // concurrent request-activation calls for the SAME guild with no
+      // existing draft version both compute `nextVersionNo` via this
+      // non-atomic "SELECT MAX(version_no)+1 THEN INSERT" — each running in
+      // its own transaction, each seeing no rows yet, each computing the
+      // SAME `nextVersionNo`. Both INSERTs then race on
+      // `guild_configuration_versions`'s real `UNIQUE(guild_id, version_no)`
+      // constraint (`uq_guild_configuration_versions_guild_version`); the
+      // loser previously surfaced as an unhandled `ER_DUP_ENTRY` — a raw 500,
+      // not the documented "clear rejection rather than silent no-op"
+      // contract (IMPLEMENTATION/10_onboarding_approval.md §Concurrency)
+      // every OTHER guarded write in this step already honors. Mapped here
+      // onto `ConfigVersionRaceError`, which `activationRequestsService.ts`
+      // catches and turns into the same typed `CONCURRENT_MODIFICATION`
+      // conflict (409) the `guilds.row_version` guard already produces for
+      // every other racing lifecycle transition — the caller retries
+      // exactly like any other optimistic-concurrency conflict, never a
+      // silent duplicate version or an opaque 500.
+      if (isDuplicateVersionNoError(err)) {
+        throw new ConfigVersionRaceError(
+          `materializeDraftConfigVersion: guild_configuration_versions(guild_id=${params.guildId}, version_no=${nextVersionNo}) was created concurrently by another request — retry`,
+        );
+      }
+      throw err;
+    }
     versionId = Number(insertResult.insertId);
     await db
       .insertInto("guild_config_common")

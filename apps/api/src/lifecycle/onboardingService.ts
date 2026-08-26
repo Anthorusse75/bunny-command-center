@@ -6,6 +6,8 @@
 import type { Kysely } from "kysely";
 import type { DB } from "../db/codegen-types.js";
 import type { OnboardingSectionSaveRequest, OnboardingStateResponse } from "@bunny-command-center/shared";
+import type { AppConfig } from "../config.js";
+import { fetchGuildChannelCatalog } from "../integrations/bunnyInternalApi.js";
 import { getGuildLifecycleRow } from "./lifecycleRepo.js";
 import { transitionGuildLifecycleInTransaction } from "./lifecycleService.js";
 import {
@@ -20,11 +22,48 @@ import type { GuildTier } from "../auth/guildAuthorization.js";
 
 export class OnboardingRejectedError extends Error {
   constructor(
-    public readonly code: "GUILD_NOT_FOUND" | "NOT_EDITABLE",
+    public readonly code:
+      "GUILD_NOT_FOUND" | "NOT_EDITABLE" | "CHANNEL_VERIFICATION_FAILED" | "CHANNEL_NOT_FOUND",
     message: string,
   ) {
     super(message);
     this.name = "OnboardingRejectedError";
+  }
+}
+
+/**
+ * Step 10 correction round, Gap 2 (`11_GUILD_CONFIGURATION.md`'s explicit
+ * audit-gap closure: "never silently accept an unverified channel id"). The
+ * three channel-selecting sections get a LIVE existence check against
+ * Bunny's real channel catalog before their save is accepted — this was
+ * flagged as a known gap in the prior pass and explicitly required to be
+ * closed in this one. Called BEFORE `saveOnboardingSection`'s DB transaction
+ * opens (an outbound HTTP call must never happen while holding a MySQL
+ * transaction/row locks open). Bunny-unreachable (or any other non-success
+ * outcome) fails the save CLOSED — never a silent accept of an unverified id
+ * — per this step's explicit brief: "Bunny-unreachable during a save must
+ * fail the save closed with a clear 'couldn't verify channel, try again'
+ * error."
+ */
+const CHANNEL_SECTIONS = new Set(["incomingChannel", "heroChannel", "communityChannel"]);
+
+async function verifyChannelExistsOrThrow(
+  config: AppConfig,
+  guildId: string,
+  channelId: string,
+): Promise<void> {
+  const result = await fetchGuildChannelCatalog(config, guildId);
+  if (!result.ok) {
+    throw new OnboardingRejectedError(
+      "CHANNEL_VERIFICATION_FAILED",
+      `onboarding: could not verify channel ${channelId} against Bunny's live catalog for guild ${guildId} (${result.reason}) — refusing to accept an unverified channel id`,
+    );
+  }
+  if (!result.channels.some((c) => c.id === channelId)) {
+    throw new OnboardingRejectedError(
+      "CHANNEL_NOT_FOUND",
+      `onboarding: channel ${channelId} does not exist in guild ${guildId}'s live Bunny channel catalog`,
+    );
   }
 }
 
@@ -82,6 +121,7 @@ export async function getOnboardingState(db: Kysely<DB>, guildId: string): Promi
 
 export async function saveOnboardingSection(
   db: Kysely<DB>,
+  config: AppConfig,
   params: {
     readonly guildId: string;
     readonly actorUserId: number;
@@ -91,6 +131,18 @@ export async function saveOnboardingSection(
     readonly request: OnboardingSectionSaveRequest;
   },
 ): Promise<OnboardingStateResponse> {
+  // Step 10 correction round, Gap 2: live channel-existence check BEFORE the
+  // transaction below even opens (an outbound HTTP call to Bunny must never
+  // happen while holding a MySQL transaction open). `communityChannel`'s
+  // `channelId` is nullable (optional section) — `null` skips the check
+  // entirely, matching the existing "clear the community channel" save path.
+  if (CHANNEL_SECTIONS.has(params.request.section)) {
+    const channelId = (params.request.data as { channelId: string | null }).channelId;
+    if (channelId !== null) {
+      await verifyChannelExistsOrThrow(config, params.guildId, channelId);
+    }
+  }
+
   await db.transaction().execute(async (trx) => {
     const guildRow = await getGuildLifecycleRow(trx, params.guildId);
     if (!guildRow) {

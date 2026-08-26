@@ -337,6 +337,14 @@ export interface DashboardGuildActivationRequests {
   submitted_config_version_id: number;
 }
 
+export interface DashboardGuildLifecycleEvents {
+  guild_id: string;
+  lifecycle_state: string;
+  occurred_at: Generated<Date>;
+  previous_state: string;
+  sse_seq: Generated<number>;
+}
+
 export interface DashboardGuildOnboardingProgress {
   created_at: Generated<Date>;
   draft_config_version_id: number | null;
@@ -1687,6 +1695,7 @@ export interface DB {
   dashboard_admin_overrides: DashboardAdminOverrides;
   dashboard_audit_log: DashboardAuditLog;
   dashboard_guild_activation_requests: DashboardGuildActivationRequests;
+  dashboard_guild_lifecycle_events: DashboardGuildLifecycleEvents;
   dashboard_guild_onboarding_progress: DashboardGuildOnboardingProgress;
   dashboard_guild_policy: DashboardGuildPolicy;
   dashboard_notification_deliveries: DashboardNotificationDeliveries;

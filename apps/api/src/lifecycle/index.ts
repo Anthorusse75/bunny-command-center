@@ -27,3 +27,9 @@ export {
   getOpenRequestForGuild,
   ActivationServiceError,
 } from "./activationRequestsService.js";
+export {
+  registerLifecycleEventsSse,
+  resetLifecycleEventsSseRegistrationForTests,
+  buildLifecycleEventsSourceAdapter,
+  DASHBOARD_GUILD_LIFECYCLE_EVENTS_SSE_SOURCE_INDEX,
+} from "./lifecycleSseAdapter.js";
