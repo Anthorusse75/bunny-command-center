@@ -45,7 +45,22 @@ interface ActivationDetailBody {
 interface ErrorBody {
   error_code: string;
 }
+interface OnboardingValuesBody {
+  data: { values: { incomingChannelId: string | null } };
+}
+interface OnboardingChannelsBody {
+  data: {
+    available: boolean;
+    channels: Array<{ id: string; name: string; position: number; type: string; canReadHistory: boolean }>;
+  };
+}
 function onboardingBody(response: InjectResponse): OnboardingBody {
+  return response.json();
+}
+function onboardingValuesBody(response: InjectResponse): OnboardingValuesBody {
+  return response.json();
+}
+function onboardingChannelsBody(response: InjectResponse): OnboardingChannelsBody {
   return response.json();
 }
 function activationCreatedBody(response: InjectResponse): ActivationCreatedBody {
@@ -866,9 +881,10 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     );
     const submittedConfigVersionId = (requestRows[0] as { submitted_config_version_id: number })
       .submitted_config_version_id;
-    await pool.query("UPDATE guild_configuration_versions SET checksum = UNHEX(SHA2('tampered', 256)) WHERE id = ?", [
-      submittedConfigVersionId,
-    ]);
+    await pool.query(
+      "UPDATE guild_configuration_versions SET checksum = UNHEX(SHA2('tampered', 256)) WHERE id = ?",
+      [submittedConfigVersionId],
+    );
 
     const approveRes = await fastify.inject({
       method: "POST",
@@ -940,7 +956,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
         url: `/api/guilds/${guildId}/onboarding`,
         headers: { cookie: admin.cookie },
       });
-      const state = stateRes.json() as { data: { values: { incomingChannelId: string | null } } };
+      const state = onboardingValuesBody(stateRes);
       expect(state.data.values.incomingChannelId).toBeNull();
     });
 
@@ -965,7 +981,13 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       await seedGuild(guildId);
       const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
       bunny.state.channelsByGuild.set(guildId, [
-        { id: "500000000000000098", name: "real-incoming", position: 0, type: "text", can_read_history: true },
+        {
+          id: "500000000000000098",
+          name: "real-incoming",
+          position: 0,
+          type: "text",
+          can_read_history: true,
+        },
       ]);
 
       const res = await patchOnboarding(admin.cookie, guildId, {
@@ -997,7 +1019,13 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       await seedGuild(guildId);
       const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
       bunny.state.channelsByGuild.set(guildId, [
-        { id: "500000000000000097", name: "catalog-channel", position: 3, type: "text", can_read_history: true },
+        {
+          id: "500000000000000097",
+          name: "catalog-channel",
+          position: 3,
+          type: "text",
+          can_read_history: true,
+        },
       ]);
 
       const okRes = await fastify.inject({
@@ -1006,12 +1034,16 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
         headers: { cookie: admin.cookie },
       });
       expect(okRes.statusCode).toBe(200);
-      const okBody = okRes.json() as {
-        data: { available: boolean; channels: { id: string; name: string }[] };
-      };
+      const okBody = onboardingChannelsBody(okRes);
       expect(okBody.data.available).toBe(true);
       expect(okBody.data.channels).toEqual([
-        { id: "500000000000000097", name: "catalog-channel", position: 3, type: "text", canReadHistory: true },
+        {
+          id: "500000000000000097",
+          name: "catalog-channel",
+          position: 3,
+          type: "text",
+          canReadHistory: true,
+        },
       ]);
 
       bunny.state.forcedStatus = 503;
@@ -1022,7 +1054,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
           headers: { cookie: admin.cookie },
         });
         expect(degradedRes.statusCode).toBe(200);
-        const degradedBody = degradedRes.json() as { data: { available: boolean; channels: unknown[] } };
+        const degradedBody = onboardingChannelsBody(degradedRes);
         expect(degradedBody.data.available).toBe(false);
         expect(degradedBody.data.channels).toEqual([]);
       } finally {
@@ -1257,7 +1289,11 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
         url: `/api/admin/activation-requests/${requestId}/approve`,
         headers: csrf(superadmin.cookie),
       });
-      await fastify.inject({ method: "POST", url: `/api/guilds/${guildId}/pause`, headers: csrf(admin.cookie) });
+      await fastify.inject({
+        method: "POST",
+        url: `/api/guilds/${guildId}/pause`,
+        headers: csrf(admin.cookie),
+      });
 
       const [resumeRes, suspendRes] = await Promise.all([
         fastify.inject({ method: "POST", url: `/api/guilds/${guildId}/resume`, headers: csrf(admin.cookie) }),

@@ -21,7 +21,12 @@ function baseConfig(bunnyInternalApi?: AppConfig["bunnyInternalApi"]): AppConfig
     logLevel: "silent",
     appVersion: "test",
     db: { host: "127.0.0.1", port: 3306, user: "x", password: "x", database: "x" },
-    sse: { heartbeatSeconds: 15, pollIntervalMs: 3000, maxQueuedFramesPerConnection: 200, maxRowsPerSourcePerTick: 500 },
+    sse: {
+      heartbeatSeconds: 15,
+      pollIntervalMs: 3000,
+      maxQueuedFramesPerConnection: 200,
+      maxRowsPerSourcePerTick: 500,
+    },
     discord: {
       clientId: "x",
       clientSecret: "x",
@@ -137,11 +142,12 @@ describe("fetchGuildChannelCatalog (Bunny internal API client)", () => {
     try {
       const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
       const result = await fetchGuildChannelCatalog(config, "600000000000000007");
-      expect(result).toEqual({
-        ok: false,
-        reason: "MALFORMED_RESPONSE",
-        detail: expect.stringContaining("did not match"),
-      });
+      expect(result.ok).toBe(false);
+      if (!result.ok && result.reason === "MALFORMED_RESPONSE") {
+        expect(result.detail).toContain("did not match");
+      } else {
+        expect.fail(`expected MALFORMED_RESPONSE, got ${JSON.stringify(result)}`);
+      }
     } finally {
       bunny.state.forcedStatus = undefined;
       bunny.state.forcedBody = undefined;

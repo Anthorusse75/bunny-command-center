@@ -245,7 +245,7 @@ export async function startDiscordTestDouble(): Promise<DiscordTestDouble> {
           return;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(isRegisteredToken ? state.guildsByToken.get(token!)! : state.guilds));
+        res.end(JSON.stringify(isRegisteredToken ? state.guildsByToken.get(token)! : state.guilds));
         return;
       }
 
