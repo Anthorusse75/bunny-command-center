@@ -123,9 +123,10 @@
       "checksumMismatch": "La configuration soumise a changé depuis sa revue. Demandez à l'administrateur du serveur de la soumettre à nouveau."
     },
     "onboarding": {
-      "checklistNotPassed": "Complétez le salon entrant, le salon Hero, et au moins une catégorie de quota avant de demander l'activation.",
+      "checklistNotPassed": "Complétez le salon entrant, le salon Hero, et la section Saison & Quotas avant de demander l'activation.",
       "channelVerificationFailed": "Impossible de vérifier ce salon auprès de Bunny pour le moment. Veuillez réessayer.",
-      "channelNotFound": "Ce salon n'existe plus sur ce serveur. Choisissez-en un autre."
+      "channelNotFound": "Ce salon n'existe plus sur ce serveur. Choisissez-en un autre.",
+      "quotaOverrideRequired": "Acceptez les valeurs par défaut de la plateforme ou saisissez au moins un quota personnalisé."
     },
     "notFoundPage": {
       "title": "Cette page n'existe pas",

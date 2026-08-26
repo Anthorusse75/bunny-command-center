@@ -133,6 +133,14 @@ async function sendServiceError(reply: FastifyReply, code: string): Promise<void
       errorCode: "CHANNEL_NOT_FOUND",
       messageKey: "errors.onboarding.channelNotFound",
     },
+    // Step 10 external-review correction round, Section 9: seasonQuotas
+    // save-time validation — acceptPlatformDefaults=false with no explicit
+    // override.
+    QUOTA_OVERRIDE_REQUIRED: {
+      status: 400,
+      errorCode: "QUOTA_OVERRIDE_REQUIRED",
+      messageKey: "errors.onboarding.quotaOverrideRequired",
+    },
   };
   const entry = table[code] ?? { status: 500, errorCode: "INTERNAL_ERROR", messageKey: "errors.server" };
   await reply

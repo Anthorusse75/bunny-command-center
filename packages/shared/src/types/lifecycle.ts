@@ -71,15 +71,29 @@ export const onboardingSectionSaveSchema = z.discriminatedUnion("section", [
   z
     .object({
       section: z.literal("seasonQuotas"),
+      // Step 10 external-review correction round, Section 9: REPLACES the
+      // prior fake category-string model (which had no numeric value at
+      // all and could never actually express a real quota) with the real
+      // 5-numeric-value model matching `guild_config_selfbot`'s real
+      // `nb_gc_hero`/`nb_gc_titan`/`nb_hol`/`nb_hero`/`nb_titan` columns
+      // (confirmed-live canonical defaults: 912/380/600/1200/600).
+      // Effective quota = the canonical default + any explicit override in
+      // `quotaOverrides`. If `acceptPlatformDefaults` is `false`, the
+      // server requires at least one explicit override (rejects the save
+      // otherwise, apps/api's `onboardingService.ts`) — there is no
+      // meaningful "reject all defaults, override nothing" state.
       data: z
         .object({
-          // Category quota keys, this step's minimal shape (real quota
-          // editing UI/bounds are 11_GUILD_CONFIGURATION.md/Step 13's scope
-          // — this step only needs "at least one category" to satisfy the
-          // activation checklist, SCREENS/ONBOARDING.md's own documented
-          // minimum).
-          categories: z.array(z.string().min(1).max(64)).min(0).max(32),
           acceptPlatformDefaults: z.boolean(),
+          quotaOverrides: z
+            .object({
+              gcHero: z.number().int().min(0).max(1_000_000).optional(),
+              gcTitan: z.number().int().min(0).max(1_000_000).optional(),
+              hol: z.number().int().min(0).max(1_000_000).optional(),
+              hero: z.number().int().min(0).max(1_000_000).optional(),
+              titan: z.number().int().min(0).max(1_000_000).optional(),
+            })
+            .strict(),
         })
         .strict(),
     })
@@ -137,7 +151,7 @@ export const onboardingStateResponseSchema = z
     guildId: discordSnowflakeSchema,
     lifecycleState: lifecycleStateSchema,
     sections: z.record(onboardingSectionKeySchema, onboardingSectionStatusSchema),
-    /** Server-side re-derivation of SCREENS/ONBOARDING.md's minimum checklist (incoming channel, hero channel, at least one quota category) — the ONLY value the "Request activation" button's enabled state may trust; the client's own tally is presentation only. */
+    /** Server-side re-derivation of SCREENS/ONBOARDING.md's minimum checklist (incoming channel, hero channel, season & quotas section saved) — the ONLY value the "Request activation" button's enabled state may trust; the client's own tally is presentation only. */
     minimumChecklistPassed: z.boolean(),
     latestRequest: latestActivationRequestSummarySchema,
     values: z
@@ -145,7 +159,19 @@ export const onboardingStateResponseSchema = z
         incomingChannelId: discordSnowflakeSchema.nullable(),
         heroChannelId: discordSnowflakeSchema.nullable(),
         communityChannelId: discordSnowflakeSchema.nullable(),
-        seasonQuotaCategories: z.array(z.string()),
+        // Step 10 external-review correction round, Section 9: replaces
+        // the fake `seasonQuotaCategories: string[]` field with the real
+        // numeric shape.
+        seasonQuotaAcceptPlatformDefaults: z.boolean(),
+        seasonQuotaOverrides: z
+          .object({
+            gcHero: z.number().int().optional(),
+            gcTitan: z.number().int().optional(),
+            hol: z.number().int().optional(),
+            hero: z.number().int().optional(),
+            titan: z.number().int().optional(),
+          })
+          .strict(),
         notificationsInAppEnabled: z.boolean().nullable(),
         notificationsDiscordDmEnabled: z.boolean().nullable(),
         adminRoleDiscordId: discordSnowflakeSchema.nullable(),

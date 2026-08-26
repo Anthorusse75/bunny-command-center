@@ -264,7 +264,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       (
         await patchOnboarding(cookie, guildId, {
           section: "seasonQuotas",
-          data: { categories: [], acceptPlatformDefaults: true },
+          data: { acceptPlatformDefaults: true, quotaOverrides: {} },
         })
       ).statusCode,
     ).toBe(200);

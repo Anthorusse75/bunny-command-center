@@ -12,20 +12,30 @@ import { getGuildLifecycleRow } from "./lifecycleRepo.js";
 import { transitionGuildLifecycleInTransaction } from "./lifecycleService.js";
 import {
   getOnboardingProgressOrEmpty,
+  isVersionImmutable,
+  materializeDraftConfigVersion,
   minimumChecklistPassed,
   saveOnboardingSectionData,
   sectionStatuses,
+  ConfigVersionRaceError,
 } from "./onboardingRepo.js";
 import { getLatestActivationRequestForGuild } from "./activationRequestsRepo.js";
 import { setGuildAdminRole } from "../auth/guildPolicyRepo.js";
 import { setGuildNotificationDefault } from "../notifications/repo.js";
+import { materializeSeasonPlanForOpenSeasonIfAny } from "./seasonPlansRepo.js";
+import { hasAnyQuotaOverride } from "./seasonQuotas.js";
 import type { GuildTier } from "../auth/guildAuthorization.js";
 import { lifecyclePermissionsFor } from "./permissionPolicy.js";
 
 export class OnboardingRejectedError extends Error {
   constructor(
     public readonly code:
-      "GUILD_NOT_FOUND" | "NOT_EDITABLE" | "CHANNEL_VERIFICATION_FAILED" | "CHANNEL_NOT_FOUND",
+      | "GUILD_NOT_FOUND"
+      | "NOT_EDITABLE"
+      | "CHANNEL_VERIFICATION_FAILED"
+      | "CHANNEL_NOT_FOUND"
+      | "QUOTA_OVERRIDE_REQUIRED"
+      | "CONCURRENT_MODIFICATION",
     message: string,
   ) {
     super(message);
@@ -98,7 +108,8 @@ async function buildResponse(db: Kysely<DB>, guildId: string): Promise<Onboardin
   const incoming = progress.sections.incomingChannel?.data as { channelId?: string } | undefined;
   const hero = progress.sections.heroChannel?.data as { channelId?: string } | undefined;
   const community = progress.sections.communityChannel?.data as { channelId?: string | null } | undefined;
-  const quotas = progress.sections.seasonQuotas?.data as { categories?: string[] } | undefined;
+  const quotas = progress.sections.seasonQuotas?.data as
+    { acceptPlatformDefaults?: boolean; quotaOverrides?: Record<string, number> } | undefined;
   const notifications = progress.sections.notifications?.data as
     { inAppEnabled?: boolean; discordDmEnabled?: boolean } | undefined;
   const adminRole = progress.sections.adminRolePolicy?.data as
@@ -121,7 +132,8 @@ async function buildResponse(db: Kysely<DB>, guildId: string): Promise<Onboardin
       incomingChannelId: incoming?.channelId ?? null,
       heroChannelId: hero?.channelId ?? null,
       communityChannelId: community?.channelId ?? null,
-      seasonQuotaCategories: quotas?.categories ?? [],
+      seasonQuotaAcceptPlatformDefaults: quotas?.acceptPlatformDefaults ?? false,
+      seasonQuotaOverrides: quotas?.quotaOverrides ?? {},
       notificationsInAppEnabled: notifications?.inAppEnabled ?? null,
       notificationsDiscordDmEnabled: notifications?.discordDmEnabled ?? null,
       adminRoleDiscordId: adminRole?.adminRoleDiscordId ?? null,
@@ -158,65 +170,135 @@ export async function saveOnboardingSection(
     }
   }
 
-  await db.transaction().execute(async (trx) => {
-    const guildRow = await getGuildLifecycleRow(trx, params.guildId);
-    if (!guildRow) {
-      throw new OnboardingRejectedError("GUILD_NOT_FOUND", `onboarding: no guilds row for ${params.guildId}`);
-    }
-    if (!lifecyclePermissionsFor(guildRow.lifecycleState).configEditable) {
+  // Step 10 external-review correction round, Section 9: server-side
+  // re-validation of the "acceptPlatformDefaults=false requires at least
+  // one explicit override" rule — never trust a client-only check. Pure
+  // validation, no DB needed, so it runs before the transaction opens
+  // (same discipline as the channel-verification check above).
+  if (params.request.section === "seasonQuotas") {
+    const data = params.request.data;
+    if (!data.acceptPlatformDefaults && !hasAnyQuotaOverride(data)) {
       throw new OnboardingRejectedError(
-        "NOT_EDITABLE",
-        `onboarding: guild ${params.guildId} is ${guildRow.lifecycleState} (read-only)`,
+        "QUOTA_OVERRIDE_REQUIRED",
+        "onboarding: seasonQuotas.acceptPlatformDefaults=false requires at least one explicit quotaOverrides entry",
       );
     }
+  }
 
-    // Permission matrix: "DISCOVERED: yes (starts CONFIGURING on first edit)".
-    if (guildRow.lifecycleState === "DISCOVERED") {
-      await transitionGuildLifecycleInTransaction(trx, db, {
-        guildId: params.guildId,
-        action: "START_CONFIGURING",
-        callerTier: params.callerTier,
-        actorUserId: params.actorUserId,
-        correlationId: params.correlationId,
-      });
+  try {
+    await db.transaction().execute(async (trx) => {
+      const guildRow = await getGuildLifecycleRow(trx, params.guildId);
+      if (!guildRow) {
+        throw new OnboardingRejectedError(
+          "GUILD_NOT_FOUND",
+          `onboarding: no guilds row for ${params.guildId}`,
+        );
+      }
+      if (!lifecyclePermissionsFor(guildRow.lifecycleState).configEditable) {
+        throw new OnboardingRejectedError(
+          "NOT_EDITABLE",
+          `onboarding: guild ${params.guildId} is ${guildRow.lifecycleState} (read-only)`,
+        );
+      }
+
+      // Permission matrix: "DISCOVERED: yes (starts CONFIGURING on first edit)".
+      if (guildRow.lifecycleState === "DISCOVERED") {
+        await transitionGuildLifecycleInTransaction(trx, db, {
+          guildId: params.guildId,
+          action: "START_CONFIGURING",
+          callerTier: params.callerTier,
+          actorUserId: params.actorUserId,
+          correlationId: params.correlationId,
+        });
+      }
+
+      await saveOnboardingSectionData(trx, params.guildId, params.request);
+
+      // Section 7 ("Admin role policy") mirrors into the EXISTING
+      // `dashboard_guild_policy` table (migration 0004, Step 05) — reusing
+      // `setGuildAdminRole` rather than inventing a parallel store for the
+      // same fact. Disclosed interpretation (00_GLOBAL_IMPLEMENTATION_RULES.md
+      // rule 1): `guildPolicyRepo.ts`'s own header comment reserves
+      // `PUT /api/guilds/:guildId/admin-policy/role` for Step 12's standalone
+      // post-onboarding editing route — this onboarding save uses the SAME
+      // underlying repo function through the onboarding-specific endpoint,
+      // which is a distinct route serving a distinct (first-time setup) UX,
+      // not a duplicate of Step 12's future route.
+      if (params.request.section === "adminRolePolicy") {
+        await setGuildAdminRole(trx, params.guildId, params.request.data.adminRoleDiscordId);
+      }
+
+      // Step 10 external-review correction round, Section 11: the
+      // "Notifications" section used to be a dead end — round-tripped
+      // through `sections_json` only, with zero real destination and zero
+      // effect on `resolvePreference()`. Mirrors into the new
+      // `dashboard_guild_notification_defaults` table (same "mirror into a
+      // real table alongside the sections_json buffer" pattern as
+      // `adminRolePolicy` immediately above) — plain Guild-Admin-tier is
+      // correct here (this section is listed as editable in every
+      // non-suspended state at the same tier as every other section; the
+      // Owner-only requirement is specific to `adminRolePolicy` and must not
+      // be over-applied here).
+      if (params.request.section === "notifications") {
+        await setGuildNotificationDefault(trx, {
+          guildId: params.guildId,
+          inAppEnabled: params.request.data.inAppEnabled,
+          discordDmEnabled: params.request.data.discordDmEnabled,
+          updatedBy: params.actorDiscordId,
+        });
+      }
+
+      // Step 10 external-review correction round, Sections 6/9: "Season &
+      // quotas" materializes into the REAL `guild_config_selfbot.nb_*`
+      // columns immediately on save — but ONLY once a draft version already
+      // exists (i.e. `incomingChannel`/`heroChannel` were already saved in an
+      // earlier call, so `guild_config_bunny`/`guild_config_selfbot`'s NOT
+      // NULL channel columns can already be validly populated). If no draft
+      // version exists yet, the value simply stays in the `sections_json`
+      // buffer for now (this section's real destination genuinely is NOT
+      // YET determinable) — `materializeDraftConfigVersion`'s own
+      // request-activation-time call already re-applies whatever is in the
+      // buffer once the checklist requires both channels to be known, so
+      // nothing here is ever lost, only deferred exactly as far as the
+      // ordering constraint requires. ** Documented scope limitation **: this
+      // does NOT generalize immediate materialization to the CHANNEL
+      // sections themselves (they still materialize only at
+      // request-activation, unchanged) — that broader change was judged too
+      // large/risky to make safely within this correction round's remaining
+      // scope and is flagged for a follow-up pass.
+      if (params.request.section === "seasonQuotas") {
+        const progress = await getOnboardingProgressOrEmpty(trx, params.guildId);
+        if (progress.draftConfigVersionId !== null) {
+          const currentDraftIsImmutable = await isVersionImmutable(trx, progress.draftConfigVersionId);
+          const { versionId, effectiveQuotas } = await materializeDraftConfigVersion(trx, {
+            guildId: params.guildId,
+            authorDiscordId: params.actorDiscordId,
+            sections: progress.sections,
+            currentDraftVersionId: progress.draftConfigVersionId,
+            currentDraftIsImmutable,
+          });
+          // Separately: an eligible current season, if any, gets its own
+          // guild_season_plans row created-or-updated with these same
+          // effective values. If NO eligible season exists, this is a
+          // deliberate no-op — the nb_* values just materialized above
+          // already durably hold the effective quota as this guild's
+          // per-guild default, to be consumed whenever a future season plan
+          // is created (see `seasonPlansRepo.ts`'s own doc comment and the
+          // accompanying regression test proving this exact behavior).
+          await materializeSeasonPlanForOpenSeasonIfAny(trx, {
+            guildId: params.guildId,
+            quotas: effectiveQuotas,
+            materializedVersionId: versionId,
+          });
+        }
+      }
+    });
+  } catch (err) {
+    if (err instanceof ConfigVersionRaceError) {
+      throw new OnboardingRejectedError("CONCURRENT_MODIFICATION", err.message);
     }
-
-    await saveOnboardingSectionData(trx, params.guildId, params.request);
-
-    // Section 7 ("Admin role policy") mirrors into the EXISTING
-    // `dashboard_guild_policy` table (migration 0004, Step 05) — reusing
-    // `setGuildAdminRole` rather than inventing a parallel store for the
-    // same fact. Disclosed interpretation (00_GLOBAL_IMPLEMENTATION_RULES.md
-    // rule 1): `guildPolicyRepo.ts`'s own header comment reserves
-    // `PUT /api/guilds/:guildId/admin-policy/role` for Step 12's standalone
-    // post-onboarding editing route — this onboarding save uses the SAME
-    // underlying repo function through the onboarding-specific endpoint,
-    // which is a distinct route serving a distinct (first-time setup) UX,
-    // not a duplicate of Step 12's future route.
-    if (params.request.section === "adminRolePolicy") {
-      await setGuildAdminRole(trx, params.guildId, params.request.data.adminRoleDiscordId);
-    }
-
-    // Step 10 external-review correction round, Section 11: the
-    // "Notifications" section used to be a dead end — round-tripped
-    // through `sections_json` only, with zero real destination and zero
-    // effect on `resolvePreference()`. Mirrors into the new
-    // `dashboard_guild_notification_defaults` table (same "mirror into a
-    // real table alongside the sections_json buffer" pattern as
-    // `adminRolePolicy` immediately above) — plain Guild-Admin-tier is
-    // correct here (this section is listed as editable in every
-    // non-suspended state at the same tier as every other section; the
-    // Owner-only requirement is specific to `adminRolePolicy` and must not
-    // be over-applied here).
-    if (params.request.section === "notifications") {
-      await setGuildNotificationDefault(trx, {
-        guildId: params.guildId,
-        inAppEnabled: params.request.data.inAppEnabled,
-        discordDmEnabled: params.request.data.discordDmEnabled,
-        updatedBy: params.actorDiscordId,
-      });
-    }
-  });
+    throw err;
+  }
 
   return buildResponse(db, params.guildId);
 }

@@ -249,10 +249,11 @@ function OnboardingContent({
             }}
           />
           <SeasonQuotasSection
-            categories={state.values.seasonQuotaCategories}
-            onSave={(categories, acceptPlatformDefaults) => {
+            acceptPlatformDefaults={state.values.seasonQuotaAcceptPlatformDefaults}
+            quotaOverrides={state.values.seasonQuotaOverrides}
+            onSave={(acceptPlatformDefaults, quotaOverrides) => {
               saveSection.mutate(
-                { section: "seasonQuotas", data: { categories, acceptPlatformDefaults } },
+                { section: "seasonQuotas", data: { acceptPlatformDefaults, quotaOverrides } },
                 { onSuccess: announceSaved },
               );
             }}
@@ -548,25 +549,34 @@ export function ChannelPickerSection({
   );
 }
 
+/**
+ * Step 10 external-review correction round, Section 9: minimal MECHANICAL
+ * adaptation to the real 5-numeric-value quota model (replacing the fake
+ * category-string model this component previously drove) — kept
+ * deliberately rough/unstyled; a proper redesigned UI for this section is
+ * Phase 2's job, not this backend-focused correction round's. This exists
+ * only so the monorepo keeps compiling and the section remains genuinely
+ * functional (every override key settable) under the new wire contract.
+ */
+const QUOTA_OVERRIDE_KEYS = ["gcHero", "gcTitan", "hol", "hero", "titan"] as const;
+type QuotaOverrideKey = (typeof QUOTA_OVERRIDE_KEYS)[number];
+type QuotaOverrides = OnboardingStateResponse["values"]["seasonQuotaOverrides"];
+
 function SeasonQuotasSection({
-  categories,
+  acceptPlatformDefaults,
+  quotaOverrides,
   onSave,
 }: {
-  categories: readonly string[];
-  onSave: (categories: string[], acceptPlatformDefaults: boolean) => void;
+  acceptPlatformDefaults: boolean;
+  quotaOverrides: QuotaOverrides;
+  onSave: (acceptPlatformDefaults: boolean, quotaOverrides: QuotaOverrides) => void;
 }): React.JSX.Element {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState(categories.join(", "));
-  const [acceptDefaults, setAcceptDefaults] = useState(categories.length === 0);
+  const [acceptDefaults, setAcceptDefaults] = useState(acceptPlatformDefaults);
+  const [overrides, setOverrides] = useState<QuotaOverrides>(quotaOverrides);
 
-  function commit(nextAcceptDefaults: boolean): void {
-    const parsed = nextAcceptDefaults
-      ? []
-      : draft
-          .split(",")
-          .map((c) => c.trim())
-          .filter((c) => c.length > 0);
-    onSave(parsed, nextAcceptDefaults);
+  function commit(nextAcceptDefaults: boolean, nextOverrides: QuotaOverrides): void {
+    onSave(nextAcceptDefaults, nextOverrides);
   }
 
   return (
@@ -577,23 +587,39 @@ function SeasonQuotasSection({
             checked={acceptDefaults}
             onChange={(e) => {
               setAcceptDefaults(e.target.checked);
-              commit(e.target.checked);
+              commit(e.target.checked, overrides);
             }}
           />
         }
         label={t("onboarding.sections.seasonQuotas.acceptDefaults")}
       />
-      {!acceptDefaults ? (
-        <TextField
-          fullWidth
-          size="small"
-          sx={{ marginBlockStart: 1 }}
-          label={t("onboarding.sections.seasonQuotas.categoriesLabel")}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => commit(false)}
-        />
-      ) : null}
+      {!acceptDefaults
+        ? QUOTA_OVERRIDE_KEYS.map((key) => (
+            <TextField
+              key={key}
+              fullWidth
+              size="small"
+              type="number"
+              sx={{ marginBlockStart: 1 }}
+              label={key}
+              value={overrides[key] ?? ""}
+              onChange={(e) => {
+                const raw = e.target.value;
+                const next: QuotaOverrides = { ...overrides };
+                if (raw === "") {
+                  delete next[key];
+                } else {
+                  const parsed = Number.parseInt(raw, 10);
+                  if (Number.isFinite(parsed) && parsed >= 0) {
+                    next[key] = parsed;
+                  }
+                }
+                setOverrides(next);
+              }}
+              onBlur={() => commit(acceptDefaults, overrides)}
+            />
+          ))
+        : null}
     </SectionShell>
   );
 }

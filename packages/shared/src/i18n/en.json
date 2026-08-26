@@ -121,9 +121,10 @@
       "checksumMismatch": "The submitted configuration changed since it was reviewed. Ask the Guild Admin to re-submit."
     },
     "onboarding": {
-      "checklistNotPassed": "Complete the incoming channel, Hero channel, and at least one quota category before requesting activation.",
+      "checklistNotPassed": "Complete the incoming channel, Hero channel, and Season & Quotas section before requesting activation.",
       "channelVerificationFailed": "We couldn't verify that channel with Bunny right now. Please try again.",
-      "channelNotFound": "That channel doesn't exist in this server anymore. Pick another one."
+      "channelNotFound": "That channel doesn't exist in this server anymore. Pick another one.",
+      "quotaOverrideRequired": "Accept the platform defaults or enter at least one custom quota."
     },
     "notFoundPage": {
       "title": "This page doesn't exist",

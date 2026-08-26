@@ -57,6 +57,7 @@ import {
   computeMaterializedConfigChecksum,
   type MaterializedConfigValues,
 } from "./configChecksum.js";
+import { computeEffectiveQuotas, type EffectiveQuotas, type SeasonQuotasData } from "./seasonQuotas.js";
 
 export type Executor = Kysely<DB> | Transaction<DB>;
 
@@ -247,14 +248,17 @@ export async function setDraftConfigVersionId(
 export function minimumChecklistPassed(sections: SectionsJson): boolean {
   const incoming = sections.incomingChannel?.data as { channelId?: string } | undefined;
   const hero = sections.heroChannel?.data as { channelId?: string } | undefined;
-  const quotas = sections.seasonQuotas?.data as
-    { categories?: string[]; acceptPlatformDefaults?: boolean } | undefined;
   const hasIncoming = typeof incoming?.channelId === "string" && incoming.channelId.length > 0;
   const hasHero = typeof hero?.channelId === "string" && hero.channelId.length > 0;
-  // SCREENS/ONBOARDING.md: "at least one quota category" OR accepting
-  // platform defaults (an explicit alternative the doc names, not a silent
-  // simplification).
-  const hasQuota = Boolean(quotas?.acceptPlatformDefaults) || (quotas?.categories?.length ?? 0) > 0;
+  // Step 10 external-review correction round, Section 9: the new numeric
+  // quota model's own save-time validation (`onboardingService.ts`) already
+  // guarantees any SAVED seasonQuotas section represents a genuinely valid
+  // effective quota (either accepting platform defaults, or at least one
+  // explicit override) — the checklist here only needs to confirm the
+  // section was saved AT ALL, never re-derive the old
+  // categories-length-based check (removed along with the fake
+  // category-string model).
+  const hasQuota = sections.seasonQuotas !== undefined;
   return hasIncoming && hasHero && hasQuota;
 }
 
@@ -710,10 +714,11 @@ export async function materializeDraftConfigVersion(
      */
     readonly currentDraftIsImmutable: boolean;
   },
-): Promise<{ versionId: number; checksum: Buffer }> {
+): Promise<{ versionId: number; checksum: Buffer; effectiveQuotas: EffectiveQuotas }> {
   const incoming = params.sections.incomingChannel?.data as { channelId: string };
   const hero = params.sections.heroChannel?.data as { channelId: string };
   const community = params.sections.communityChannel?.data as { channelId: string | null } | undefined;
+  const seasonQuotas = params.sections.seasonQuotas?.data as SeasonQuotasData | undefined;
 
   let versionId = params.currentDraftVersionId;
 
@@ -724,6 +729,20 @@ export async function materializeDraftConfigVersion(
   const baseValues =
     versionId !== null ? await loadMaterializedConfigValues(db, versionId) : null;
   const carriedForward = baseValues ?? bootstrapMaterializedConfigValues();
+  // Section 9: effective quota = the canonical default + any explicit
+  // override — carried forward unchanged (from whatever nb_* the based-on
+  // version already has) if the seasonQuotas section hasn't been saved
+  // yet at all (never reset to the bootstrap default over a real
+  // carried-forward value).
+  const effectiveQuotas: EffectiveQuotas = seasonQuotas
+    ? computeEffectiveQuotas(seasonQuotas)
+    : {
+        gcHero: carriedForward.selfbot.nbGcHero,
+        gcTitan: carriedForward.selfbot.nbGcTitan,
+        hol: carriedForward.selfbot.nbHol,
+        hero: carriedForward.selfbot.nbHero,
+        titan: carriedForward.selfbot.nbTitan,
+      };
   const merged: MaterializedConfigValues = {
     common: carriedForward.common,
     bunny: {
@@ -739,6 +758,11 @@ export async function materializeDraftConfigVersion(
       // (an explicit "clear the community channel") and must NOT fall back
       // to the carried-forward value in that case.
       communityChannelId: community !== undefined ? community.channelId : carriedForward.selfbot.communityChannelId,
+      nbGcHero: effectiveQuotas.gcHero,
+      nbGcTitan: effectiveQuotas.gcTitan,
+      nbHol: effectiveQuotas.hol,
+      nbHero: effectiveQuotas.hero,
+      nbTitan: effectiveQuotas.titan,
     },
     orchestrator: carriedForward.orchestrator,
   };
@@ -765,7 +789,7 @@ export async function materializeDraftConfigVersion(
       .where("id", "=", versionId)
       .executeTakeFirst();
     if (existing && Buffer.compare(existing.checksum, checksum) === 0) {
-      return { versionId, checksum };
+      return { versionId, checksum, effectiveQuotas };
     }
   }
 
@@ -917,7 +941,7 @@ export async function materializeDraftConfigVersion(
     .execute();
 
   await setDraftConfigVersionId(db, params.guildId, versionId!);
-  return { versionId: versionId!, checksum };
+  return { versionId: versionId!, checksum, effectiveQuotas };
 }
 
 /** Whether `versionId` is currently referenced by a non-terminal activation request — half of the TOCTOU-rotation check (see `isVersionImmutable`). */
