@@ -345,6 +345,14 @@ export interface DashboardGuildLifecycleEvents {
   sse_seq: Generated<number>;
 }
 
+export interface DashboardGuildNotificationDefaults {
+  discord_dm_enabled: number;
+  guild_id: string;
+  in_app_enabled: number;
+  updated_at: Generated<Date>;
+  updated_by: string;
+}
+
 export interface DashboardGuildOnboardingProgress {
   created_at: Generated<Date>;
   draft_config_version_id: number | null;
@@ -1696,6 +1704,7 @@ export interface DB {
   dashboard_audit_log: DashboardAuditLog;
   dashboard_guild_activation_requests: DashboardGuildActivationRequests;
   dashboard_guild_lifecycle_events: DashboardGuildLifecycleEvents;
+  dashboard_guild_notification_defaults: DashboardGuildNotificationDefaults;
   dashboard_guild_onboarding_progress: DashboardGuildOnboardingProgress;
   dashboard_guild_policy: DashboardGuildPolicy;
   dashboard_notification_deliveries: DashboardNotificationDeliveries;
