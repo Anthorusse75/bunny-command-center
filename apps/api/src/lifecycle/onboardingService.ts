@@ -19,6 +19,7 @@ import {
 import { getLatestActivationRequestForGuild } from "./activationRequestsRepo.js";
 import { setGuildAdminRole } from "../auth/guildPolicyRepo.js";
 import type { GuildTier } from "../auth/guildAuthorization.js";
+import { lifecyclePermissionsFor } from "./permissionPolicy.js";
 
 export class OnboardingRejectedError extends Error {
   constructor(
@@ -67,9 +68,13 @@ async function verifyChannelExistsOrThrow(
   }
 }
 
-// 10_GUILD_ONBOARDING_AND_APPROVAL.md's per-state permission matrix: config
-// stays editable in every state except PLATFORM_SUSPENDED ("read-only").
-const NON_EDITABLE_STATES = new Set(["PLATFORM_SUSPENDED"]);
+// Step 10 external-review correction round, Section 14: this used to be its
+// own ad-hoc `NON_EDITABLE_STATES` set, hand-maintained separately from the
+// canonical per-state permission matrix (`permissionPolicy.ts`) — now a
+// direct call into that single source of truth instead
+// (`10_GUILD_ONBOARDING_AND_APPROVAL.md`'s per-state permission matrix:
+// config stays editable in every state except `PLATFORM_SUSPENDED`,
+// "read-only").
 
 /**
  * Step 10 external-review correction round, Section 8: uses the TRUE
@@ -157,7 +162,7 @@ export async function saveOnboardingSection(
     if (!guildRow) {
       throw new OnboardingRejectedError("GUILD_NOT_FOUND", `onboarding: no guilds row for ${params.guildId}`);
     }
-    if (NON_EDITABLE_STATES.has(guildRow.lifecycleState)) {
+    if (!lifecyclePermissionsFor(guildRow.lifecycleState).configEditable) {
       throw new OnboardingRejectedError(
         "NOT_EDITABLE",
         `onboarding: guild ${params.guildId} is ${guildRow.lifecycleState} (read-only)`,
