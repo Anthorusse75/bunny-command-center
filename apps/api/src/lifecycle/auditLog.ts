@@ -39,3 +39,46 @@ export async function insertAuditLogEntry(db: Executor, entry: AuditLogEntryInpu
     })
     .execute();
 }
+
+/** Matches `MinimalLogger`/`MinimalPoolLogger`'s shape used elsewhere in this codebase (`notifications/service.ts`, `db/kysely.ts`) — not re-declared as an import to avoid a needless cross-module dependency for one method signature. */
+export interface MinimalAuditLogger {
+  error(obj: unknown, msg?: string): void;
+}
+
+/**
+ * Step 10 external-review correction round, Section 15: writes `entry` as
+ * its OWN, independently-committed statement via `pool` — NEVER the
+ * caller's own (possibly about-to-roll-back) transaction handle. This is
+ * the fix for a real bug: the guarded transition writer
+ * (`lifecycleService.ts`'s `transitionGuildLifecycleInTransaction`) used to
+ * `INSERT dashboard_audit_log; throw` inside the SAME transaction on a
+ * rejected/failed transition — the `throw` rolls back the transaction,
+ * silently rolling back the "failure" audit row too, making the code's own
+ * comments claiming durable rejected-attempt evidence false. The pattern
+ * this function centralizes: (1) the real business-mutation transaction is
+ * attempted and rolled back on failure as before, (2) SEPARATELY, via this
+ * function against the pool directly, the failure audit row is written —
+ * genuinely durable regardless of what happens to the business transaction.
+ *
+ * A failure to write THIS audit row is caught and logged here — never
+ * allowed to mask or replace whatever original rejection triggered it (the
+ * original error is always still thrown/returned by the caller, unchanged).
+ * `logger` defaults to `console`, matching this codebase's own established
+ * default-logger precedent (`db/kysely.ts`'s `MinimalPoolLogger`) for
+ * call sites that don't already have a request-scoped logger threaded
+ * through.
+ */
+export async function writeDurableFailureAudit(
+  pool: Executor,
+  entry: AuditLogEntryInput,
+  logger: MinimalAuditLogger = console,
+): Promise<void> {
+  try {
+    await insertAuditLogEntry(pool, entry);
+  } catch (err) {
+    logger.error(
+      { err, action: entry.action, guildId: entry.guildId },
+      "writeDurableFailureAudit: failed to write a durable failure-audit row (non-fatal — the original rejection still stands)",
+    );
+  }
+}

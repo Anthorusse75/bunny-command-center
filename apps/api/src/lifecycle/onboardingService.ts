@@ -166,7 +166,7 @@ export async function saveOnboardingSection(
 
     // Permission matrix: "DISCOVERED: yes (starts CONFIGURING on first edit)".
     if (guildRow.lifecycleState === "DISCOVERED") {
-      await transitionGuildLifecycleInTransaction(trx, {
+      await transitionGuildLifecycleInTransaction(trx, db, {
         guildId: params.guildId,
         action: "START_CONFIGURING",
         callerTier: params.callerTier,

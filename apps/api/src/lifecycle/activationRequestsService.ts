@@ -41,7 +41,7 @@ import {
   type ActivationRequestRow,
 } from "./activationRequestsRepo.js";
 import { setActiveConfigVersion } from "./lifecycleRepo.js";
-import { insertAuditLogEntry } from "./auditLog.js";
+import { insertAuditLogEntry, writeDurableFailureAudit } from "./auditLog.js";
 import { generateNotificationId } from "../notifications/id.js";
 import type { LifecycleAction } from "./stateMachine.js";
 
@@ -230,13 +230,14 @@ export async function createActivationRequest(
         requestedBy: params.actorDiscordId,
       });
 
-      const transition = await transitionGuildLifecycleInTransaction(trx, {
+      const transition = await transitionGuildLifecycleInTransaction(trx, db, {
         guildId: params.guildId,
         action,
         callerTier: params.callerTier,
         actorUserId: params.actorUserId,
         correlationId: params.correlationId,
         reason: `activation request ${requestId}`,
+        logger,
       });
 
       await insertAuditLogEntry(trx, {
@@ -394,13 +395,14 @@ export async function approveActivationRequest(
         configVersionId: request.submittedConfigVersionId,
       });
 
-      const transition = await transitionGuildLifecycleInTransaction(trx, {
+      const transition = await transitionGuildLifecycleInTransaction(trx, db, {
         guildId: request.guildId,
         action: "APPROVE",
         callerTier: params.callerTier,
         actorUserId: params.actorUserId,
         correlationId: params.correlationId,
         reason: `activation request ${params.requestId} approved`,
+        logger,
       });
 
       await insertAuditLogEntry(trx, {
@@ -442,20 +444,24 @@ export async function approveActivationRequest(
     // statement — a failure to write this audit row is logged but must never
     // mask or replace the original `CHECKSUM_MISMATCH` rejection.
     if (err instanceof ActivationServiceError && err.code === "CHECKSUM_MISMATCH") {
-      await insertAuditLogEntry(db, {
-        actorUserId: params.actorUserId,
-        action: "ACTIVATION_REQUEST_APPROVAL_INTEGRITY_FAILURE",
-        guildId: guildIdForIntegrityAudit ?? null,
-        beforeJson: { requestId: params.requestId, requestState: "PENDING" },
-        afterJson: null,
-        correlationId: params.correlationId,
-        result: "FAILURE",
-      }).catch((auditErr: unknown) => {
-        logger.error(
-          { err: auditErr, requestId: params.requestId },
-          "activationRequests: failed to write CHECKSUM_MISMATCH integrity-failure audit row (non-fatal — the original rejection still stands)",
-        );
-      });
+      // Section 15: routed through the centralized `writeDurableFailureAudit`
+      // helper (same one `lifecycleService.ts`'s guarded transition writer
+      // now uses) rather than hand-rolling the raw-pool-write-plus-catch
+      // boilerplate here — this was the ORIGINAL, hand-rolled instance of
+      // exactly the pattern Section 15 asks to centralize.
+      await writeDurableFailureAudit(
+        db,
+        {
+          actorUserId: params.actorUserId,
+          action: "ACTIVATION_REQUEST_APPROVAL_INTEGRITY_FAILURE",
+          guildId: guildIdForIntegrityAudit ?? null,
+          beforeJson: { requestId: params.requestId, requestState: "PENDING" },
+          afterJson: null,
+          correlationId: params.correlationId,
+          result: "FAILURE",
+        },
+        logger,
+      );
     }
     throw err;
   }
@@ -492,13 +498,14 @@ async function decideNonApprove(
     }
 
     const guildRow = await getGuildLifecycleRow(trx, request.guildId);
-    const transition = await transitionGuildLifecycleInTransaction(trx, {
+    const transition = await transitionGuildLifecycleInTransaction(trx, db, {
       guildId: request.guildId,
       action,
       callerTier: params.callerTier,
       actorUserId: params.actorUserId,
       correlationId: params.correlationId,
       reason: `activation request ${params.requestId} ${newRequestState.toLowerCase()}: ${params.reason}`,
+      logger,
     });
 
     await insertAuditLogEntry(trx, {

@@ -1127,6 +1127,72 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
   });
 
   // -----------------------------------------------------------------------
+  // Step 10 EXTERNAL-REVIEW correction round, Section 15: durable failure
+  // audit. `transitionGuildLifecycleInTransaction` used to
+  // `INSERT dashboard_audit_log; throw` inside the SAME transaction on a
+  // rejected transition — the throw rolls the whole transaction back,
+  // silently rolling back the "failure" audit row too, so the durable
+  // rejected-attempt evidence the code's own comments claimed was actually
+  // false. Proves the fix by querying `dashboard_audit_log` directly AFTER
+  // the failed API call — never spying on a function call.
+  // -----------------------------------------------------------------------
+  it("a rejected (ILLEGAL_TRANSITION) request-activation still leaves a durable dashboard_audit_log row, even though the business transaction rolled back", async () => {
+    const guildId = "600000000000000024";
+    await seedGuild(guildId);
+    const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+    const superadmin = await makeSession(
+      [{ id: guildId, owner: false, permissions: "0" }],
+      TEST_SUPERADMIN_DISCORD_ID,
+    );
+
+    await saveMinimumChecklist(admin.cookie, guildId, "500000000000000072");
+    const { requestId } = activationCreatedBody(
+      await fastify.inject({
+        method: "POST",
+        url: `/api/guilds/${guildId}/request-activation`,
+        headers: csrf(admin.cookie),
+      }),
+    ).data;
+    await fastify.inject({
+      method: "POST",
+      url: `/api/admin/activation-requests/${requestId}/approve`,
+      headers: csrf(superadmin.cookie),
+    });
+
+    // Guild is now ACTIVE — a second request-activation is ILLEGAL_TRANSITION.
+    // createActivationRequest's WHOLE transaction (a real activation-request
+    // row insert would have happened) rolls back on this rejection.
+    const [countBefore] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT COUNT(*) as c FROM dashboard_guild_activation_requests WHERE guild_id = ?",
+      [guildId],
+    );
+    const illegalRes = await fastify.inject({
+      method: "POST",
+      url: `/api/guilds/${guildId}/request-activation`,
+      headers: csrf(admin.cookie),
+    });
+    expect(illegalRes.statusCode).toBe(409);
+    expect(errorBody(illegalRes).error_code).toBe("ILLEGAL_TRANSITION");
+
+    // The business transaction genuinely rolled back — no new activation
+    // request row was created by the rejected attempt.
+    const [countAfter] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT COUNT(*) as c FROM dashboard_guild_activation_requests WHERE guild_id = ?",
+      [guildId],
+    );
+    expect((countAfter[0] as { c: number }).c).toBe((countBefore[0] as { c: number }).c);
+
+    // ...yet a durable audit row recording the rejected attempt DOES exist,
+    // queried directly from dashboard_audit_log — proving it survived the
+    // rollback (it was written via the pool, independently of `trx`).
+    const [auditRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT action, result FROM dashboard_audit_log WHERE guild_id = ? AND action = 'LIFECYCLE_REQUEST_ACTIVATION' AND result = 'ILLEGAL_TRANSITION'",
+      [guildId],
+    );
+    expect(auditRows).toHaveLength(1);
+  });
+
+  // -----------------------------------------------------------------------
   // -----------------------------------------------------------------------
   // Step 10 correction round, Gap 2: live channel-catalog integration.
   // -----------------------------------------------------------------------

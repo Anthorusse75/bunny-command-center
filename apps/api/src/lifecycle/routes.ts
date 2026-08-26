@@ -349,6 +349,7 @@ export function buildLifecycleRoutes(
               callerTier: request.guildAuthorization!.tier,
               actorUserId: request.authUser!.id,
               correlationId: request.id ?? null,
+              logger: request.log,
             });
             return {
               data: { guildId, previousState: result.previousState, lifecycleState: result.nextState },
@@ -384,6 +385,7 @@ export function buildLifecycleRoutes(
             callerTier: request.guildAuthorization!.tier,
             actorUserId: request.authUser!.id,
             correlationId: request.id ?? null,
+            logger: request.log,
           });
           return {
             data: { guildId, previousState: result.previousState, lifecycleState: result.nextState },
@@ -427,6 +429,7 @@ export function buildLifecycleRoutes(
               callerTier: "SUPERADMIN",
               actorUserId: request.authUser!.id,
               correlationId: request.id ?? null,
+              logger: request.log,
             });
             return {
               data: { guildId, previousState: result.previousState, lifecycleState: result.nextState },

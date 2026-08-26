@@ -12,7 +12,7 @@ import type { DB } from "../db/codegen-types.js";
 import { applyLifecycleTransition, type LifecycleAction, type LifecycleState } from "./stateMachine.js";
 import { getGuildLifecycleRow, writeLifecycleTransition } from "./lifecycleRepo.js";
 import { insertLifecycleEvent } from "./lifecycleEventsRepo.js";
-import { insertAuditLogEntry } from "./auditLog.js";
+import { insertAuditLogEntry, writeDurableFailureAudit, type MinimalAuditLogger } from "./auditLog.js";
 import type { GuildTier } from "../auth/guildAuthorization.js";
 
 export type LifecycleServiceErrorCode =
@@ -39,6 +39,8 @@ export interface TransitionGuildLifecycleParams {
   readonly actorUserId: number;
   readonly correlationId: string | null;
   readonly reason?: string;
+  /** Section 15: used only for the DURABLE failure-audit write (`writeDurableFailureAudit`) on a rejected/failed transition — defaults to `console` (see that function's own doc comment) when a caller has no request-scoped logger handy. */
+  readonly logger?: MinimalAuditLogger;
 }
 
 export interface TransitionGuildLifecycleResult {
@@ -60,6 +62,7 @@ export interface TransitionGuildLifecycleResult {
  */
 export async function transitionGuildLifecycleInTransaction(
   trx: Transaction<DB>,
+  pool: Kysely<DB>,
   params: TransitionGuildLifecycleParams,
 ): Promise<TransitionGuildLifecycleResult> {
   const row = await getGuildLifecycleRow(trx, params.guildId);
@@ -76,15 +79,23 @@ export async function transitionGuildLifecycleInTransaction(
     params.callerTier,
   );
   if (!outcome.ok) {
-    await insertAuditLogEntry(trx, {
-      actorUserId: params.actorUserId,
-      action: `LIFECYCLE_${params.action}`,
-      guildId: params.guildId,
-      beforeJson: { lifecycleState: row.lifecycleState, suspendedFromState: row.suspendedFromState },
-      afterJson: null,
-      correlationId: params.correlationId,
-      result: outcome.errorCode,
-    });
+    // Section 15: written via `pool` (a genuinely independent statement),
+    // NEVER `trx` — the throw immediately below rolls `trx` back, which
+    // would silently roll back an audit row written inside it too. See
+    // `writeDurableFailureAudit`'s own doc comment for the full rationale.
+    await writeDurableFailureAudit(
+      pool,
+      {
+        actorUserId: params.actorUserId,
+        action: `LIFECYCLE_${params.action}`,
+        guildId: params.guildId,
+        beforeJson: { lifecycleState: row.lifecycleState, suspendedFromState: row.suspendedFromState },
+        afterJson: null,
+        correlationId: params.correlationId,
+        result: outcome.errorCode,
+      },
+      params.logger,
+    );
     throw new LifecycleTransitionRejectedError(
       outcome.errorCode,
       `transitionGuildLifecycle: ${params.action} rejected from state=${row.lifecycleState} (${outcome.errorCode})`,
@@ -101,15 +112,21 @@ export async function transitionGuildLifecycleInTransaction(
     nextEnabled,
   });
   if (!wrote) {
-    await insertAuditLogEntry(trx, {
-      actorUserId: params.actorUserId,
-      action: `LIFECYCLE_${params.action}`,
-      guildId: params.guildId,
-      beforeJson: { lifecycleState: row.lifecycleState, rowVersion: row.rowVersion },
-      afterJson: null,
-      correlationId: params.correlationId,
-      result: "CONCURRENT_MODIFICATION",
-    });
+    // Section 15: same reasoning as the ILLEGAL_TRANSITION branch above —
+    // written via `pool`, never `trx`.
+    await writeDurableFailureAudit(
+      pool,
+      {
+        actorUserId: params.actorUserId,
+        action: `LIFECYCLE_${params.action}`,
+        guildId: params.guildId,
+        beforeJson: { lifecycleState: row.lifecycleState, rowVersion: row.rowVersion },
+        afterJson: null,
+        correlationId: params.correlationId,
+        result: "CONCURRENT_MODIFICATION",
+      },
+      params.logger,
+    );
     throw new LifecycleTransitionRejectedError(
       "CONCURRENT_MODIFICATION",
       `transitionGuildLifecycle: ${params.guildId} was modified concurrently — retry`,
@@ -164,5 +181,5 @@ export async function transitionGuildLifecycle(
   db: Kysely<DB>,
   params: TransitionGuildLifecycleParams,
 ): Promise<TransitionGuildLifecycleResult> {
-  return db.transaction().execute((trx) => transitionGuildLifecycleInTransaction(trx, params));
+  return db.transaction().execute((trx) => transitionGuildLifecycleInTransaction(trx, db, params));
 }
