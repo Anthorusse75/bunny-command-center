@@ -102,7 +102,38 @@ function parseSectionsJson(raw: unknown): SectionsJson {
   return raw as SectionsJson;
 }
 
-/** Idempotent — creates an empty progress row on first touch, never overwrites an existing one. */
+/**
+ * Step 10 external-review correction round, Section 8: TRUE read-only —
+ * never inserts a row. Returns an in-memory empty view (`draftConfigVersionId:
+ * null`, `sections: {}`) when no row exists yet, with ZERO database writes.
+ * `getOnboardingState` (the `GET /api/guilds/:guildId/onboarding` handler)
+ * MUST use this, never `ensureOnboardingProgressRow` — the prior
+ * implementation called `ensureOnboardingProgressRow` from a GET, which
+ * INSERTed an empty row on first touch, violating this mission's Phase Zero
+ * rule "GET never mutates." Only a real PATCH/mutation
+ * (`saveOnboardingSectionData`, via `ensureOnboardingProgressRow` below)
+ * may create the row.
+ */
+export async function getOnboardingProgressOrEmpty(
+  db: Executor,
+  guildId: string,
+): Promise<OnboardingProgressRow> {
+  const row = await db
+    .selectFrom("dashboard_guild_onboarding_progress")
+    .select(["guild_id", "draft_config_version_id", "sections_json"])
+    .where("guild_id", "=", guildId)
+    .executeTakeFirst();
+  if (!row) {
+    return { guildId, draftConfigVersionId: null, sections: {} };
+  }
+  return {
+    guildId: row.guild_id,
+    draftConfigVersionId: row.draft_config_version_id,
+    sections: parseSectionsJson(row.sections_json),
+  };
+}
+
+/** Idempotent — creates an empty progress row on first touch, never overwrites an existing one. Only called from a real mutation path (`saveOnboardingSectionData` below) — a GET must use `getOnboardingProgressOrEmpty` above instead, never this function. */
 export async function ensureOnboardingProgressRow(
   db: Executor,
   guildId: string,

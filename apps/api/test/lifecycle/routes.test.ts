@@ -400,6 +400,67 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
   });
 
   // -----------------------------------------------------------------------
+  // Step 10 EXTERNAL-REVIEW correction round, Section 8: GET must never
+  // mutate. `buildResponse` previously called `ensureOnboardingProgressRow`
+  // (an upsert) even for a plain GET, which INSERTed an empty
+  // `dashboard_guild_onboarding_progress` row on first touch — a real
+  // "GET never mutates" violation. Proves the row genuinely stays absent
+  // across a GET by querying the table directly, not merely asserting on
+  // the response shape (which would look identical either way).
+  // -----------------------------------------------------------------------
+  it("GET onboarding never creates a dashboard_guild_onboarding_progress row — row stays absent until a real PATCH", async () => {
+    const guildId = "600000000000000023";
+    await seedGuild(guildId);
+    const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+    const [beforeRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT guild_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+      [guildId],
+    );
+    expect(beforeRows).toHaveLength(0);
+
+    const getRes = await fastify.inject({
+      method: "GET",
+      url: `/api/guilds/${guildId}/onboarding`,
+      headers: { cookie: admin.cookie },
+    });
+    expect(getRes.statusCode).toBe(200);
+    expect(onboardingBody(getRes).data.lifecycleState).toBe("DISCOVERED");
+
+    // The row must STILL be absent after the GET — a real DB query, not an
+    // inference from the response shape.
+    const [afterFirstGetRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT guild_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+      [guildId],
+    );
+    expect(afterFirstGetRows).toHaveLength(0);
+
+    // A second GET (proving it's not a one-shot fluke) also creates nothing.
+    await fastify.inject({
+      method: "GET",
+      url: `/api/guilds/${guildId}/onboarding`,
+      headers: { cookie: admin.cookie },
+    });
+    const [afterSecondGetRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT guild_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+      [guildId],
+    );
+    expect(afterSecondGetRows).toHaveLength(0);
+
+    // A real PATCH (mutation) DOES create the row.
+    const patchRes = await patchOnboarding(admin.cookie, guildId, {
+      section: "incomingChannel",
+      data: { channelId: "500000000000000001" },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    const [afterPatchRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT guild_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+      [guildId],
+    );
+    expect(afterPatchRows).toHaveLength(1);
+  });
+
+  // -----------------------------------------------------------------------
   // Server-side re-validation (rejection criteria: never client-only)
   // -----------------------------------------------------------------------
   it("request-activation is rejected server-side when the minimum checklist has not actually passed, even if called directly", async () => {

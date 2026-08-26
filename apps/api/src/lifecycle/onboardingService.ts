@@ -11,7 +11,7 @@ import { fetchGuildChannelCatalog } from "../integrations/bunnyInternalApi.js";
 import { getGuildLifecycleRow } from "./lifecycleRepo.js";
 import { transitionGuildLifecycleInTransaction } from "./lifecycleService.js";
 import {
-  ensureOnboardingProgressRow,
+  getOnboardingProgressOrEmpty,
   minimumChecklistPassed,
   saveOnboardingSectionData,
   sectionStatuses,
@@ -71,10 +71,19 @@ async function verifyChannelExistsOrThrow(
 // stays editable in every state except PLATFORM_SUSPENDED ("read-only").
 const NON_EDITABLE_STATES = new Set(["PLATFORM_SUSPENDED"]);
 
+/**
+ * Step 10 external-review correction round, Section 8: uses the TRUE
+ * read-only `getOnboardingProgressOrEmpty` (never `ensureOnboardingProgressRow`,
+ * which INSERTs) — this function backs BOTH `GET /api/guilds/:guildId/onboarding`
+ * (`getOnboardingState` below, where a mutating read would be a genuine
+ * "GET never mutates" violation) AND the response `saveOnboardingSection`
+ * builds AFTER its own mutation has already committed (where the row is
+ * guaranteed to already exist, so reading it read-only changes nothing).
+ */
 async function buildResponse(db: Kysely<DB>, guildId: string): Promise<OnboardingStateResponse> {
   const [guildRow, progress, latestRequest] = await Promise.all([
     getGuildLifecycleRow(db, guildId),
-    ensureOnboardingProgressRow(db, guildId),
+    getOnboardingProgressOrEmpty(db, guildId),
     getLatestActivationRequestForGuild(db, guildId),
   ]);
   if (!guildRow) {
