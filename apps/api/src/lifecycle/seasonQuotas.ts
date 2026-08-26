@@ -12,10 +12,7 @@
  */
 import type { OnboardingSectionSaveRequest } from "@bunny-command-center/shared";
 
-export type SeasonQuotasData = Extract<
-  OnboardingSectionSaveRequest,
-  { section: "seasonQuotas" }
->["data"];
+export type SeasonQuotasData = Extract<OnboardingSectionSaveRequest, { section: "seasonQuotas" }>["data"];
 
 export interface EffectiveQuotas {
   readonly gcHero: number;

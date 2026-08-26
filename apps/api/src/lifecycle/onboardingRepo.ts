@@ -53,10 +53,7 @@ import type { DB } from "../db/codegen-types.js";
 import { bindBigIntUnsigned } from "../db/bigIntParam.js";
 import type { OnboardingSectionKey, OnboardingSectionSaveRequest } from "@bunny-command-center/shared";
 import { ONBOARDING_SECTION_KEYS } from "@bunny-command-center/shared";
-import {
-  computeMaterializedConfigChecksum,
-  type MaterializedConfigValues,
-} from "./configChecksum.js";
+import { computeMaterializedConfigChecksum, type MaterializedConfigValues } from "./configChecksum.js";
 import { computeEffectiveQuotas, type EffectiveQuotas, type SeasonQuotasData } from "./seasonQuotas.js";
 
 export type Executor = Kysely<DB> | Transaction<DB>;
@@ -487,7 +484,12 @@ export async function loadMaterializedConfigValues(
 ): Promise<MaterializedConfigValues | null> {
   const common = await db
     .selectFrom("guild_config_common")
-    .select(["timezone", "operational_enabled", "locale", sql<string>`CAST(guild_weight AS CHAR)`.as("guild_weight")])
+    .select([
+      "timezone",
+      "operational_enabled",
+      "locale",
+      sql<string>`CAST(guild_weight AS CHAR)`.as("guild_weight"),
+    ])
     .where("configuration_version_id", "=", versionId)
     .executeTakeFirst();
   if (!common) return null;
@@ -565,7 +567,8 @@ export async function loadMaterializedConfigValues(
     ])
     .where("configuration_version_id", "=", versionId)
     .executeTakeFirstOrThrow(
-      () => new Error(`loadMaterializedConfigValues: guild_config_orchestrator missing for version ${versionId}`),
+      () =>
+        new Error(`loadMaterializedConfigValues: guild_config_orchestrator missing for version ${versionId}`),
     );
 
   return {
@@ -661,7 +664,10 @@ async function insertOrchestratorRow(
       min_sample_size: values.minSampleSize,
       fairness_weight: values.fairnessWeight,
       starvation_seconds: values.starvationSeconds,
-      decision_rules_json: values.decisionRulesJson === null ? null : sql`CAST(${JSON.stringify(values.decisionRulesJson)} AS JSON)`,
+      decision_rules_json:
+        values.decisionRulesJson === null
+          ? null
+          : sql`CAST(${JSON.stringify(values.decisionRulesJson)} AS JSON)`,
     })
     .execute();
 }
@@ -726,8 +732,7 @@ export async function materializeDraftConfigVersion(
   // override, from the CURRENT draft/based-on version's real, currently
   // stored row content — never reset to bootstrap defaults on a
   // materialization that already has a version to carry forward from.
-  const baseValues =
-    versionId !== null ? await loadMaterializedConfigValues(db, versionId) : null;
+  const baseValues = versionId !== null ? await loadMaterializedConfigValues(db, versionId) : null;
   const carriedForward = baseValues ?? bootstrapMaterializedConfigValues();
   // Section 9: effective quota = the canonical default + any explicit
   // override — carried forward unchanged (from whatever nb_* the based-on
@@ -757,7 +762,8 @@ export async function materializeDraftConfigVersion(
       // (carry forward); once saved, its `channelId` may itself be `null`
       // (an explicit "clear the community channel") and must NOT fall back
       // to the carried-forward value in that case.
-      communityChannelId: community !== undefined ? community.channelId : carriedForward.selfbot.communityChannelId,
+      communityChannelId:
+        community !== undefined ? community.channelId : carriedForward.selfbot.communityChannelId,
       nbGcHero: effectiveQuotas.gcHero,
       nbGcTitan: effectiveQuotas.gcTitan,
       nbHol: effectiveQuotas.hol,
@@ -913,9 +919,13 @@ export async function materializeDraftConfigVersion(
       configuration_version_id: versionId!,
       herowarbot_channel_id: bindBigIntUnsigned(merged.selfbot.herowarbotChannelId),
       screenshots_channel_id:
-        merged.selfbot.screenshotsChannelId === null ? null : bindBigIntUnsigned(merged.selfbot.screenshotsChannelId),
+        merged.selfbot.screenshotsChannelId === null
+          ? null
+          : bindBigIntUnsigned(merged.selfbot.screenshotsChannelId),
       community_channel_id:
-        merged.selfbot.communityChannelId === null ? null : bindBigIntUnsigned(merged.selfbot.communityChannelId),
+        merged.selfbot.communityChannelId === null
+          ? null
+          : bindBigIntUnsigned(merged.selfbot.communityChannelId),
       automation_enabled: merged.selfbot.automationEnabled ? 1 : 0,
       profile_enabled: merged.selfbot.profileEnabled ? 1 : 0,
       profile_timeout_seconds: merged.selfbot.profileTimeoutSeconds,
@@ -936,7 +946,9 @@ export async function materializeDraftConfigVersion(
     .onDuplicateKeyUpdate({
       herowarbot_channel_id: bindBigIntUnsigned(merged.selfbot.herowarbotChannelId),
       community_channel_id:
-        merged.selfbot.communityChannelId === null ? null : bindBigIntUnsigned(merged.selfbot.communityChannelId),
+        merged.selfbot.communityChannelId === null
+          ? null
+          : bindBigIntUnsigned(merged.selfbot.communityChannelId),
     })
     .execute();
 

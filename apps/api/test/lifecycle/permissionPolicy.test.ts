@@ -107,7 +107,9 @@ describe("permissionPolicy — exhaustive per-state capability matrix (Section 1
   });
 
   it("exactly one state (ACTIVE) allows real ingestion / hero sends", () => {
-    const realIngestionStates = LIFECYCLE_STATES.filter((s) => lifecyclePermissionsFor(s).realIngestionAllowed);
+    const realIngestionStates = LIFECYCLE_STATES.filter(
+      (s) => lifecyclePermissionsFor(s).realIngestionAllowed,
+    );
     const heroSendStates = LIFECYCLE_STATES.filter((s) => lifecyclePermissionsFor(s).heroSendAllowed);
     expect(realIngestionStates).toEqual(["ACTIVE"]);
     expect(heroSendStates).toEqual(["ACTIVE"]);

@@ -311,12 +311,7 @@ export interface MaterializedConfigValues {
 // shape (never populated by Step 10 -- no onboarding section writes
 // orchestrator overrides -- but implemented for genuine correctness).
 export type JsonLikeValue =
-  | string
-  | number
-  | boolean
-  | null
-  | readonly JsonLikeValue[]
-  | { readonly [key: string]: JsonLikeValue };
+  string | number | boolean | null | readonly JsonLikeValue[] | { readonly [key: string]: JsonLikeValue };
 
 /**
  * Generic JSON-value -> PyValue converter for `decision_rules_json`'s

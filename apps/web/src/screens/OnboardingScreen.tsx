@@ -559,7 +559,6 @@ export function ChannelPickerSection({
  * functional (every override key settable) under the new wire contract.
  */
 const QUOTA_OVERRIDE_KEYS = ["gcHero", "gcTitan", "hol", "hero", "titan"] as const;
-type QuotaOverrideKey = (typeof QUOTA_OVERRIDE_KEYS)[number];
 type QuotaOverrides = OnboardingStateResponse["values"]["seasonQuotaOverrides"];
 
 function SeasonQuotasSection({

@@ -1738,7 +1738,8 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
         "SELECT submitted_config_version_id FROM dashboard_guild_activation_requests WHERE request_id = ?",
         [requestId],
       );
-      const versionId = (requestRows[0] as { submitted_config_version_id: number }).submitted_config_version_id;
+      const versionId = (requestRows[0] as { submitted_config_version_id: number })
+        .submitted_config_version_id;
       const nb = await nbColumns(versionId);
       expect(nb).toEqual({ nb_gc_hero: 912, nb_gc_titan: 380, nb_hol: 600, nb_hero: 1200, nb_titan: 600 });
     });

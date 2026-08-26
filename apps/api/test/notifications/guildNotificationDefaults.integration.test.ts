@@ -18,7 +18,11 @@ import type { MigratorDbConfig } from "../../migrations/config.js";
 import { createKyselyClient } from "../../src/db/kysely.js";
 import { upsertDashboardUser } from "../../src/auth/userRepo.js";
 import { createNotification } from "../../src/notifications/service.js";
-import { resolvePreference, setGuildNotificationDefault, upsertPreferenceGroup } from "../../src/notifications/repo.js";
+import {
+  resolvePreference,
+  setGuildNotificationDefault,
+  upsertPreferenceGroup,
+} from "../../src/notifications/repo.js";
 import { testDiscordConfig, testSessionConfig, testSuperadminConfig } from "../helpers/testAuthConfig.js";
 import type { AppConfig } from "../../src/config.js";
 
