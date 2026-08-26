@@ -340,7 +340,7 @@ export function jsonLikeToPyValue(value: JsonLikeValue): PyValue {
     return pyStr(String(value));
   }
   if (Array.isArray(value)) return pyList(value.map(jsonLikeToPyValue));
-  const record = value;
+  const record = value as { readonly [key: string]: JsonLikeValue };
   const out: Record<string, PyValue> = {};
   for (const key of Object.keys(record)) {
     out[key] = jsonLikeToPyValue(record[key]!);
