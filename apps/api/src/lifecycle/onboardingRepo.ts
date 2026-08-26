@@ -54,7 +54,12 @@ import { bindBigIntUnsigned } from "../db/bigIntParam.js";
 import type { OnboardingSectionKey, OnboardingSectionSaveRequest } from "@bunny-command-center/shared";
 import { ONBOARDING_SECTION_KEYS } from "@bunny-command-center/shared";
 import { computeMaterializedConfigChecksum, type MaterializedConfigValues } from "./configChecksum.js";
-import { computeEffectiveQuotas, type EffectiveQuotas, type SeasonQuotasData } from "./seasonQuotas.js";
+import {
+  CANONICAL_QUOTA_DEFAULTS,
+  computeEffectiveQuotas,
+  type EffectiveQuotas,
+  type SeasonQuotasData,
+} from "./seasonQuotas.js";
 
 export type Executor = Kysely<DB> | Transaction<DB>;
 
@@ -991,7 +996,42 @@ export async function isVersionImmutable(db: Executor, versionId: number): Promi
   return submittedNonTerminally || versionRow?.state !== "DRAFT";
 }
 
-/** Snapshot read for the Superadmin review screen — genuinely frozen once materialized (further onboarding saves rotate onto a NEW version id, never mutate this one). */
+/**
+ * Snapshot read for the Superadmin review screen — genuinely frozen once
+ * materialized (further onboarding saves rotate onto a NEW version id,
+ * never mutate this one; see `rotateDraftIfSubmitted`/`isVersionImmutable`
+ * above).
+ *
+ * Scope, verified directly against `configChecksum.ts` (the same function
+ * Phase 1's golden cross-language test byte-for-byte confirmed matches the
+ * canonical Python writer) rather than assumed: EVERY `guild_config_selfbot`
+ * column — including `community_updates_enabled`/`everyone_mentions_enabled`/
+ * `reminder_enabled` and the 5 `nb_*` quota columns — is part of the
+ * checksummed/materialized payload for a version, same as the channel ids.
+ * "Notifications" is NOT excluded from the frozen snapshot at the DB-row
+ * level. What IS genuinely live/never-frozen is a DIFFERENT, Dashboard-owned
+ * table this function does not touch: `dashboard_guild_notification_defaults`
+ * (`notifications/repo.ts`) — the row the Dashboard's own notification
+ * SENDER actually reads at send-time to decide whether to notify right now,
+ * mirror-written on every onboarding "Notifications" section save
+ * (`onboardingService.ts`) but never versioned/rotated the way this
+ * function's 4 sub-tables are. So: a materialized version's
+ * `community_updates_enabled` column is an accurate historical record of
+ * what was set at THAT draft's save time, but is not what currently governs
+ * live notification delivery.
+ *
+ * Deliberately returns only the orchestrator's explicit minimum for the
+ * review screen (incoming/Hero/community channel + the 5 effective quotas)
+ * — not a full dump of all 4 sub-tables — per the "don't over-build, this is
+ * not Step 12's full versioned-config editor" scope decision already made
+ * for this step (see this module's header comment). Genuinely LIVE,
+ * never-frozen-by-this-checksum concerns the review screen must keep
+ * visually/structurally separate from this snapshot: admin-role policy
+ * (`dashboard_guild_policy`, a wholly separate table, never part of
+ * `guild_configuration_versions`), the live notification-defaults row
+ * described above, and live Bunny-permission status (computed at read time
+ * from Discord, never stored in any version at all).
+ */
 export async function getMaterializedConfigSnapshot(
   db: Executor,
   versionId: number,
@@ -999,6 +1039,7 @@ export async function getMaterializedConfigSnapshot(
   incomingChannelId: string | null;
   heroChannelId: string | null;
   communityChannelId: string | null;
+  quotas: EffectiveQuotas;
   checksum: Buffer;
 } | null> {
   const version = await db
@@ -1017,6 +1058,11 @@ export async function getMaterializedConfigSnapshot(
     .select([
       sql<string>`CAST(herowarbot_channel_id AS CHAR)`.as("heroChannelId"),
       sql<string | null>`CAST(community_channel_id AS CHAR)`.as("communityChannelId"),
+      "nb_gc_hero",
+      "nb_gc_titan",
+      "nb_hol",
+      "nb_hero",
+      "nb_titan",
     ])
     .where("configuration_version_id", "=", versionId)
     .executeTakeFirst();
@@ -1024,6 +1070,13 @@ export async function getMaterializedConfigSnapshot(
     incomingChannelId: bunny?.incomingChannelId ?? null,
     heroChannelId: selfbot?.heroChannelId ?? null,
     communityChannelId: selfbot?.communityChannelId ?? null,
+    quotas: {
+      gcHero: selfbot?.nb_gc_hero ?? CANONICAL_QUOTA_DEFAULTS.gcHero,
+      gcTitan: selfbot?.nb_gc_titan ?? CANONICAL_QUOTA_DEFAULTS.gcTitan,
+      hol: selfbot?.nb_hol ?? CANONICAL_QUOTA_DEFAULTS.hol,
+      hero: selfbot?.nb_hero ?? CANONICAL_QUOTA_DEFAULTS.hero,
+      titan: selfbot?.nb_titan ?? CANONICAL_QUOTA_DEFAULTS.titan,
+    },
     checksum: version.checksum,
   };
 }

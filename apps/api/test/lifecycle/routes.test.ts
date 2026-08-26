@@ -40,7 +40,18 @@ interface LifecycleBody {
   data: { guildId: string; previousState: string; lifecycleState: string };
 }
 interface ActivationDetailBody {
-  data: { requestId: string; guildId: string; state: string };
+  data: {
+    requestId: string;
+    guildId: string;
+    submittedConfigVersionId: number;
+    state: string;
+    configSnapshot: {
+      incomingChannelId: string | null;
+      heroChannelId: string | null;
+      communityChannelId: string | null;
+      quotas: { gcHero: number; gcTitan: number; hol: number; hero: number; titan: number };
+    } | null;
+  };
 }
 interface ErrorBody {
   error_code: string;
@@ -346,6 +357,18 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     expect(detailRes.statusCode).toBe(200);
     expect(activationDetailBody(detailRes).data.state).toBe("PENDING");
     expect(activationDetailBody(detailRes).data.guildId).toBe(guildId);
+    // Frozen configSnapshot — loaded by the request's OWN submittedConfigVersionId,
+    // never "whatever is currently active" (Step 10 external-review Phase 2).
+    const snapshot = activationDetailBody(detailRes).data.configSnapshot;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.incomingChannelId).toBe("500000000000000001");
+    expect(snapshot!.heroChannelId).toBe("500000000000000002");
+    // saveMinimumChecklist never saves a "communityChannel" section — must
+    // come back null, never fabricated.
+    expect(snapshot!.communityChannelId).toBeNull();
+    // seasonQuotas was saved with acceptPlatformDefaults:true and no
+    // overrides — effective quotas must be exactly the canonical defaults.
+    expect(snapshot!.quotas).toEqual({ gcHero: 912, gcTitan: 380, hol: 600, hero: 1200, titan: 600 });
 
     // A mere guild member (not Superadmin) cannot approve.
     const outsider = await makeSession([{ id: guildId, owner: false, permissions: "0" }]);
@@ -397,6 +420,63 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
     expect(actions).toContain("ACTIVATION_REQUEST_CREATED");
     expect(actions).toContain("ACTIVATION_REQUEST_APPROVED");
     expect((auditRows as { result: string }[]).every((r) => r.result === "SUCCESS")).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // Step 10 external-review correction round, Phase 2, Section 4: the review
+  // snapshot must reflect a NON-default community channel and NON-default
+  // quota overrides accurately (the main E2E test above only exercises the
+  // all-defaults / no-community-channel path).
+  // -----------------------------------------------------------------------
+  it("review snapshot reflects a saved community channel and explicit quota overrides, not platform defaults", async () => {
+    const guildId = "600000000000000090";
+    await seedGuild(guildId);
+    const superadmin = await makeSession(
+      [{ id: guildId, owner: false, permissions: "0" }],
+      TEST_SUPERADMIN_DISCORD_ID,
+    );
+    const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+    await patchOnboarding(admin.cookie, guildId, {
+      section: "incomingChannel",
+      data: { channelId: "500000000000000091" },
+    });
+    await patchOnboarding(admin.cookie, guildId, {
+      section: "heroChannel",
+      data: { channelId: "500000000000000092" },
+    });
+    await patchOnboarding(admin.cookie, guildId, {
+      section: "communityChannel",
+      data: { channelId: "500000000000000093" },
+    });
+    const quotaRes = await patchOnboarding(admin.cookie, guildId, {
+      section: "seasonQuotas",
+      data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 1000, titan: 700 } },
+    });
+    expect(quotaRes.statusCode).toBe(200);
+
+    const requestRes = await fastify.inject({
+      method: "POST",
+      url: `/api/guilds/${guildId}/request-activation`,
+      headers: csrf(admin.cookie),
+    });
+    expect(requestRes.statusCode).toBe(200);
+    const { requestId } = activationCreatedBody(requestRes).data;
+
+    const detailRes = await fastify.inject({
+      method: "GET",
+      url: `/api/admin/activation-requests/${requestId}`,
+      headers: { cookie: superadmin.cookie },
+    });
+    expect(detailRes.statusCode).toBe(200);
+    const snapshot = activationDetailBody(detailRes).data.configSnapshot;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.incomingChannelId).toBe("500000000000000091");
+    expect(snapshot!.heroChannelId).toBe("500000000000000092");
+    expect(snapshot!.communityChannelId).toBe("500000000000000093");
+    // gcHero/titan explicitly overridden -- gcTitan/hol/hero fall back to
+    // canonical defaults since only gcHero and titan were overridden.
+    expect(snapshot!.quotas).toEqual({ gcHero: 1000, gcTitan: 380, hol: 600, hero: 1200, titan: 700 });
   });
 
   // -----------------------------------------------------------------------

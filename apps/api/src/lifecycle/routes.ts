@@ -35,6 +35,7 @@ import {
 } from "../auth/index.js";
 import { buildRequireAuth, requireCsrfHeader } from "../auth/requireAuth.js";
 import { getOnboardingState, saveOnboardingSection, OnboardingRejectedError } from "./onboardingService.js";
+import { getMaterializedConfigSnapshot } from "./onboardingRepo.js";
 import { fetchGuildChannelCatalog } from "../integrations/bunnyInternalApi.js";
 import { transitionGuildLifecycle, LifecycleTransitionRejectedError } from "./lifecycleService.js";
 import {
@@ -468,6 +469,12 @@ export function buildLifecycleRoutes(
         if (!row) {
           return sendServiceError(reply, "REQUEST_NOT_FOUND");
         }
+        // Always the SUBMITTED version this specific request references —
+        // never "whatever is currently active/draft for the guild" — so the
+        // snapshot a Superadmin reviews can never silently drift to reflect
+        // a LATER edit made after this request was already submitted (see
+        // isVersionImmutable/rotateDraftIfSubmitted in onboardingRepo.ts).
+        const configSnapshot = await getMaterializedConfigSnapshot(db, row.submittedConfigVersionId);
         return {
           data: {
             requestId: row.requestId,
@@ -479,6 +486,20 @@ export function buildLifecycleRoutes(
             reviewedBy: row.reviewedBy,
             reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
             decisionReason: row.decisionReason,
+            // Frozen/versioned as of submittedConfigVersionId — see
+            // getMaterializedConfigSnapshot's doc comment for exactly what is
+            // and is not inside this checksum. `null` only if the version
+            // row itself is somehow missing (should not happen for a real
+            // submitted request; the review screen must treat it as
+            // "snapshot unavailable", never fabricate zeros/blanks).
+            configSnapshot: configSnapshot
+              ? {
+                  incomingChannelId: configSnapshot.incomingChannelId,
+                  heroChannelId: configSnapshot.heroChannelId,
+                  communityChannelId: configSnapshot.communityChannelId,
+                  quotas: configSnapshot.quotas,
+                }
+              : null,
           },
         };
       },

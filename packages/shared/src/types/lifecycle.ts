@@ -209,6 +209,42 @@ export type ActivationRequestIdParam = z.infer<typeof activationRequestIdParamSc
 export const requestChangesRequestSchema = z.object({ reason: z.string().min(1).max(2000) }).strict();
 export const rejectActivationRequestSchema = z.object({ reason: z.string().min(1).max(2000) }).strict();
 
+/**
+ * The 5 real effective quota values (`guild_config_selfbot.nb_*`), same
+ * shape as `OnboardingStateResponse.values.seasonQuotaOverrides` but always
+ * fully populated (default-filled), never partial — see
+ * `apps/api/src/lifecycle/seasonQuotas.ts#EffectiveQuotas`.
+ */
+export const effectiveQuotasSchema = z
+  .object({
+    gcHero: z.number().int(),
+    gcTitan: z.number().int(),
+    hol: z.number().int(),
+    hero: z.number().int(),
+    titan: z.number().int(),
+  })
+  .strict();
+export type EffectiveQuotasResponse = z.infer<typeof effectiveQuotasSchema>;
+
+/**
+ * The frozen, checksummed portion of `submittedConfigVersionId`'s
+ * materialized configuration — incoming/Hero/community channel + the 5
+ * effective quotas, per `getMaterializedConfigSnapshot`'s exact scope (see
+ * that function's doc comment for what is and is not included and why).
+ * `null` only if the referenced version row is unexpectedly missing — the
+ * review screen must show "snapshot unavailable" for that, never fabricate
+ * zeros/blanks.
+ */
+export const materializedConfigSnapshotSchema = z
+  .object({
+    incomingChannelId: discordSnowflakeSchema.nullable(),
+    heroChannelId: discordSnowflakeSchema.nullable(),
+    communityChannelId: discordSnowflakeSchema.nullable(),
+    quotas: effectiveQuotasSchema,
+  })
+  .strict()
+  .nullable();
+
 /** The frozen snapshot a Superadmin reviews — `GET /api/admin/activation-requests/:requestId`. */
 export const activationRequestDetailResponseSchema = z
   .object({
@@ -221,6 +257,14 @@ export const activationRequestDetailResponseSchema = z
     reviewedBy: discordSnowflakeSchema.nullable(),
     reviewedAt: z.string().nullable(),
     decisionReason: z.string().nullable(),
+    // NOT the ENTIRE materialized version — only the frozen fields this
+    // review screen actually needs (see materializedConfigSnapshotSchema).
+    // Live, never-frozen-by-this-checksum concerns (admin-role policy, live
+    // notification-defaults, live Bunny-permission status) are deliberately
+    // absent from this response — the review screen must source those, if
+    // at all, from elsewhere and present them as visually/structurally
+    // separate from this snapshot.
+    configSnapshot: materializedConfigSnapshotSchema,
   })
   .strict();
 export type ActivationRequestDetailResponse = z.infer<typeof activationRequestDetailResponseSchema>;
