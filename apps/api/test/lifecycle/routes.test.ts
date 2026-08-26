@@ -845,6 +845,69 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
   });
 
   // -----------------------------------------------------------------------
+  // Step 10 EXTERNAL-REVIEW correction round, Section 13.1 (real security
+  // bug): the generic onboarding PATCH route was gated at plain GUILD_ADMIN
+  // tier for EVERY section, including `adminRolePolicy` — meaning any Guild
+  // Admin (not just the literal Discord guild Owner) could change who holds
+  // Guild Admin, a real privilege-escalation-adjacent bug. This proves the
+  // fix: a non-Owner Guild Admin is rejected 403 specifically for THIS
+  // section (while every other section stays plain-Guild-Admin-editable —
+  // proven by `saveMinimumChecklist` above already exercising `incomingChannel`/
+  // `heroChannel` with a non-Owner-agnostic session pattern elsewhere), the
+  // real Owner succeeds, and Superadmin bypasses (matching the established
+  // Superadmin-supersedes-everything convention, same as pause/resume).
+  // -----------------------------------------------------------------------
+  it("onboarding PATCH adminRolePolicy is Owner-scoped: a non-Owner Guild Admin is rejected 403, the real Owner and Superadmin can set it", async () => {
+    const guildId = "600000000000000022";
+    await seedGuild(guildId);
+    const owner = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+    const nonOwnerAdmin = await makeSession([{ id: guildId, owner: false, permissions: "8" }]);
+    const superadmin = await makeSession(
+      [{ id: guildId, owner: false, permissions: "0" }],
+      TEST_SUPERADMIN_DISCORD_ID,
+    );
+    const roleId = "700000000000000001";
+
+    // A non-Owner Guild Admin (ADMINISTRATOR bit, owner: false) is rejected
+    // 403 — even though this SAME caller is plain-Guild-Admin-capable for
+    // every other section (e.g. incomingChannel below).
+    const rejectedPatch = await patchOnboarding(nonOwnerAdmin.cookie, guildId, {
+      section: "adminRolePolicy",
+      data: { adminRoleDiscordId: roleId },
+    });
+    expect(rejectedPatch.statusCode).toBe(403);
+    expect(errorBody(rejectedPatch).error_code).toBe("FORBIDDEN");
+
+    // The same non-Owner Guild Admin CAN save an ordinary section — proves
+    // the Owner gate is specific to `adminRolePolicy`, not a blanket
+    // downgrade of the whole route.
+    const ordinarySectionPatch = await patchOnboarding(nonOwnerAdmin.cookie, guildId, {
+      section: "incomingChannel",
+      data: { channelId: "500000000000000001" },
+    });
+    expect(ordinarySectionPatch.statusCode).toBe(200);
+
+    // The real Owner CAN set adminRolePolicy.
+    const ownerPatch = await patchOnboarding(owner.cookie, guildId, {
+      section: "adminRolePolicy",
+      data: { adminRoleDiscordId: roleId },
+    });
+    expect(ownerPatch.statusCode).toBe(200);
+    const [policyRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT admin_role_discord_id FROM dashboard_guild_policy WHERE guild_id = ?",
+      [guildId],
+    );
+    expect((policyRows[0] as { admin_role_discord_id: string }).admin_role_discord_id).toBe(roleId);
+
+    // Superadmin bypasses the Owner check unconditionally.
+    const superadminPatch = await patchOnboarding(superadmin.cookie, guildId, {
+      section: "adminRolePolicy",
+      data: { adminRoleDiscordId: null },
+    });
+    expect(superadminPatch.statusCode).toBe(200);
+  });
+
+  // -----------------------------------------------------------------------
   // Step 10 correction round, Gap 4: checksum-mismatch defense-in-depth.
   // `activationRequestsService.ts`'s `approveActivationRequest` re-verifies
   // `Buffer.compare(snapshot.checksum, request.submittedConfigChecksum)`

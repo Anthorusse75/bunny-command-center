@@ -30,6 +30,7 @@ import {
   buildRequireTier,
   buildRequireGuildOwner,
   createGuildAuthDeps,
+  isCallerGuildOwner,
   type GuildAuthDeps,
 } from "../auth/index.js";
 import { buildRequireAuth, requireCsrfHeader } from "../auth/requireAuth.js";
@@ -185,6 +186,24 @@ export function buildLifecycleRoutes(
 
     // -----------------------------------------------------------------
     // PATCH /api/guilds/:guildId/onboarding — one section per call.
+    //
+    // Step 10 EXTERNAL-REVIEW correction round, Section 13.1 (real security
+    // bug): this route is gated at plain GUILD_ADMIN tier for entry — which,
+    // via `resolveGuildAuthorization`, includes a Guild Admin who holds the
+    // configured admin role or the raw Discord Administrator permission bit
+    // but is NOT the guild's literal Owner. The `adminRolePolicy` section
+    // changes WHO holds Guild Admin — a privilege-escalation-adjacent
+    // mutation that must be Owner-only, same tier as pause/resume
+    // (`requireOwner` above). Rather than re-deriving that check, this reuses
+    // the EXACT same `isCallerGuildOwner` primitive `buildRequireGuildOwner`
+    // is built on, applied here as a per-section guard INSIDE the otherwise
+    // GUILD_ADMIN-gated generic onboarding PATCH route (the route itself
+    // stays GUILD_ADMIN-gated for entry — every OTHER section is correctly
+    // editable by any Guild Admin) — never relies on the React UI merely
+    // hiding/disabling the field. Superadmin still bypasses unconditionally,
+    // matching `isCallerGuildOwner`'s own documented Superadmin bypass — the
+    // same established "Superadmin supersedes everything" convention this
+    // codebase already applies everywhere else (`resolveGuildAuthorization`).
     // -----------------------------------------------------------------
     fastify.patch(
       "/api/guilds/:guildId/onboarding",
@@ -196,6 +215,22 @@ export function buildLifecycleRoutes(
           return validationError(reply);
         }
         const { guildId } = request.guildAuthorization!;
+        if (parsedBody.data.section === "adminRolePolicy") {
+          const caller = { id: request.authUser!.id, discordUserId: request.authUser!.discordUserId };
+          const isOwner = await isCallerGuildOwner(guildAuthDeps, caller, guildId, "SENSITIVE_MUTATION");
+          if (!isOwner) {
+            request.log.warn(
+              { guildId, route: request.routeOptions?.url },
+              "onboarding PATCH: 403 (adminRolePolicy requires the literal guild Owner — caller is a Guild Admin but not the Owner)",
+            );
+            await reply.code(403).send({
+              error_code: "FORBIDDEN",
+              message_key: "errors.auth.insufficientPermissions",
+              parameters: {},
+            });
+            return;
+          }
+        }
         try {
           const state = await saveOnboardingSection(db, config, {
             guildId,
