@@ -928,6 +928,81 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
   });
 
   // -----------------------------------------------------------------------
+  // Step 10 EXTERNAL-REVIEW correction round, Section 5.1: approval
+  // defense-in-depth must recompute the checksum from the REAL sub-table
+  // rows, not just compare guild_configuration_versions.checksum against
+  // submitted_config_checksum (the prior test above only proves THAT
+  // comparison — it never mutates a real sub-table column, so it could not
+  // have caught a regression back to the single-comparison check). This
+  // proves the NEW recompute-from-real-rows path independently: the stored
+  // guild_configuration_versions.checksum column is left UNTOUCHED, only a
+  // real guild_config_bunny column is mutated directly via SQL — something
+  // the application layer itself would never do.
+  // -----------------------------------------------------------------------
+  it("approve is rejected with CHECKSUM_MISMATCH when a REAL guild_config_bunny column (not the stored checksum column) was mutated out-of-band, and the failure is audited", async () => {
+    const guildId = "600000000000000021";
+    await seedGuild(guildId);
+    const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+    const superadmin = await makeSession(
+      [{ id: guildId, owner: false, permissions: "0" }],
+      TEST_SUPERADMIN_DISCORD_ID,
+    );
+
+    await saveMinimumChecklist(admin.cookie, guildId, "500000000000000071");
+    const { requestId } = activationCreatedBody(
+      await fastify.inject({
+        method: "POST",
+        url: `/api/guilds/${guildId}/request-activation`,
+        headers: csrf(admin.cookie),
+      }),
+    ).data;
+
+    const [requestRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT submitted_config_version_id FROM dashboard_guild_activation_requests WHERE request_id = ?",
+      [requestId],
+    );
+    const submittedConfigVersionId = (requestRows[0] as { submitted_config_version_id: number })
+      .submitted_config_version_id;
+
+    // Out-of-band mutation of a REAL sub-table column — the stored
+    // guild_configuration_versions.checksum column is deliberately left
+    // untouched, so the OLD single-comparison check would have missed this
+    // entirely and approved a tampered config.
+    await pool.query(
+      "UPDATE guild_config_bunny SET source_delete_policy = 'DELETE' WHERE configuration_version_id = ?",
+      [submittedConfigVersionId],
+    );
+
+    const approveRes = await fastify.inject({
+      method: "POST",
+      url: `/api/admin/activation-requests/${requestId}/approve`,
+      headers: csrf(superadmin.cookie),
+    });
+    expect(approveRes.statusCode).toBe(409);
+    expect(errorBody(approveRes).error_code).toBe("CHECKSUM_MISMATCH");
+
+    const [guildRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT lifecycle_state, enabled FROM guilds WHERE guild_id = ?",
+      [guildId],
+    );
+    expect((guildRows[0] as { lifecycle_state: string }).lifecycle_state).toBe("PENDING_APPROVAL");
+    expect((guildRows[0] as { enabled: number }).enabled).toBe(0);
+
+    const [requestStateRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT state FROM dashboard_guild_activation_requests WHERE request_id = ?",
+      [requestId],
+    );
+    expect((requestStateRows[0] as { state: string }).state).toBe("PENDING");
+
+    const [auditRows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT action, result, guild_id FROM dashboard_audit_log WHERE action = 'ACTIVATION_REQUEST_APPROVAL_INTEGRITY_FAILURE' AND guild_id = ?",
+      [guildId],
+    );
+    expect(auditRows).toHaveLength(1);
+    expect((auditRows[0] as { result: string }).result).toBe("FAILURE");
+  });
+
+  // -----------------------------------------------------------------------
   // -----------------------------------------------------------------------
   // Step 10 correction round, Gap 2: live channel-catalog integration.
   // -----------------------------------------------------------------------

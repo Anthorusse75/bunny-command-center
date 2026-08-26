@@ -26,12 +26,13 @@ import { getGuildLifecycleRow } from "./lifecycleRepo.js";
 import { transitionGuildLifecycleInTransaction } from "./lifecycleService.js";
 import {
   ensureOnboardingProgressRow,
-  getMaterializedConfigSnapshot,
   isVersionImmutable,
+  loadMaterializedConfigValues,
   materializeDraftConfigVersion,
   minimumChecklistPassed,
   ConfigVersionRaceError,
 } from "./onboardingRepo.js";
+import { computeMaterializedConfigChecksum } from "./configChecksum.js";
 import {
   getActivationRequestById,
   getOpenRequestForGuild,
@@ -319,11 +320,41 @@ export async function approveActivationRequest(
         );
       }
 
-      const snapshot = await getMaterializedConfigSnapshot(trx, request.submittedConfigVersionId);
-      if (!snapshot || Buffer.compare(snapshot.checksum, request.submittedConfigChecksum) !== 0) {
+      // Step 10 external-review correction round, Section 5.1: defense in
+      // depth used to compare ONLY `guild_configuration_versions.checksum`
+      // against `submitted_config_checksum` — it never re-derived anything
+      // from the REAL, live sub-table rows, so an out-of-band mutation of a
+      // sub-table column (e.g. directly UPDATE-ing `guild_config_bunny`)
+      // that left `guild_configuration_versions.checksum` itself untouched
+      // would have sailed through undetected. Fixed: load the referenced
+      // version's REAL `guild_config_common`/`guild_config_bunny`/
+      // `guild_config_selfbot`/`guild_config_orchestrator` rows
+      // (`loadMaterializedConfigValues` — the SAME reader materialization
+      // itself uses, so the two can never define "the real row content"
+      // differently), recompute the checksum with the canonical serializer
+      // (`configChecksum.ts`), and require ALL THREE values to agree:
+      // recomputed == guild_configuration_versions.checksum ==
+      // submitted_config_checksum. Any disagreement — a stale/tampered
+      // stored checksum column, tampered sub-table content, or a genuinely
+      // stale submitted_config_checksum — fails closed exactly like the
+      // original single-comparison check (audit, no activation, no
+      // notification).
+      const storedVersion = await trx
+        .selectFrom("guild_configuration_versions")
+        .select("checksum")
+        .where("id", "=", request.submittedConfigVersionId)
+        .executeTakeFirst();
+      const realValues = await loadMaterializedConfigValues(trx, request.submittedConfigVersionId);
+      const recomputedChecksum = realValues ? computeMaterializedConfigChecksum(realValues) : null;
+      const integrityOk =
+        storedVersion !== undefined &&
+        recomputedChecksum !== null &&
+        Buffer.compare(recomputedChecksum, storedVersion.checksum) === 0 &&
+        Buffer.compare(recomputedChecksum, request.submittedConfigChecksum) === 0;
+      if (!integrityOk) {
         throw new ActivationServiceError(
           "CHECKSUM_MISMATCH",
-          `submitted_config_checksum no longer matches guild_configuration_versions id=${request.submittedConfigVersionId} — refusing to approve a mutated snapshot`,
+          `recomputed checksum from the real guild_config_* sub-table rows does not agree with guild_configuration_versions.checksum and/or submitted_config_checksum for version id=${request.submittedConfigVersionId} — refusing to approve a mutated/tampered snapshot`,
         );
       }
 
