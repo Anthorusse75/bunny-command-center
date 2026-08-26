@@ -18,6 +18,7 @@ import {
 } from "./onboardingRepo.js";
 import { getLatestActivationRequestForGuild } from "./activationRequestsRepo.js";
 import { setGuildAdminRole } from "../auth/guildPolicyRepo.js";
+import { setGuildNotificationDefault } from "../notifications/repo.js";
 import type { GuildTier } from "../auth/guildAuthorization.js";
 import { lifecyclePermissionsFor } from "./permissionPolicy.js";
 
@@ -194,6 +195,26 @@ export async function saveOnboardingSection(
     // not a duplicate of Step 12's future route.
     if (params.request.section === "adminRolePolicy") {
       await setGuildAdminRole(trx, params.guildId, params.request.data.adminRoleDiscordId);
+    }
+
+    // Step 10 external-review correction round, Section 11: the
+    // "Notifications" section used to be a dead end — round-tripped
+    // through `sections_json` only, with zero real destination and zero
+    // effect on `resolvePreference()`. Mirrors into the new
+    // `dashboard_guild_notification_defaults` table (same "mirror into a
+    // real table alongside the sections_json buffer" pattern as
+    // `adminRolePolicy` immediately above) — plain Guild-Admin-tier is
+    // correct here (this section is listed as editable in every
+    // non-suspended state at the same tier as every other section; the
+    // Owner-only requirement is specific to `adminRolePolicy` and must not
+    // be over-applied here).
+    if (params.request.section === "notifications") {
+      await setGuildNotificationDefault(trx, {
+        guildId: params.guildId,
+        inAppEnabled: params.request.data.inAppEnabled,
+        discordDmEnabled: params.request.data.discordDmEnabled,
+        updatedBy: params.actorDiscordId,
+      });
     }
   });
 

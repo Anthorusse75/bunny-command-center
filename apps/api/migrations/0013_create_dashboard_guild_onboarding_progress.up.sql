@@ -23,19 +23,33 @@
 -- table outside this step's own ownership) or blocking this step entirely
 -- on a cross-step design question, this migration adds ONE new, narrowly-scoped,
 -- genuinely Dashboard-owned table that holds exactly the onboarding-stepper's
--- own UI/progress state (never a second copy of real bot config) --
--- `notification_policy_json`'s value is EXPLICITLY PROVISIONAL, flagged in
--- this step's HANDOVER for Step 09/12's owner to ratify or move to a
--- permanent home, mirroring this project's own established precedent for a
--- disclosed cross-step deviation (Step 08's SEND_DM payload_json shape,
--- 09_notifications_system.md HANDOVER).
+-- own UI/progress state (never a second copy of real bot config).
 --
--- `sections_json` holds the persistent per-section checklist state
--- (section key -> {completedAt, ...}) PLUS the two provisional/no-column
--- values above -- one flexible JSON column rather than seven near-duplicate
--- nullable-timestamp columns that would all need the exact same read/write
--- pattern, matching this codebase's existing precedent for this shape of
--- data (`hero_discovery_config`'s threshold fields aside, compare
+-- ** RECLASSIFIED (Step 10 external-review correction round, Section 6) **:
+-- `sections_json` is TRANSIENT, PARTIAL-FORM-STATE ONLY -- it MAY continue
+-- to hold a section's value ONLY for as long as that section's real
+-- destination table/column set is not yet determinable (the ordering
+-- problem this migration's own header explains below, e.g. a NOT NULL
+-- sub-table column another not-yet-saved section still needs). The moment a
+-- section's real destination becomes determinable, its value MUST
+-- materialize into that real destination immediately on save -- this table
+-- is never again this step's FINAL business-config store for it. Concretely
+-- (post-correction-round): "Notifications" now materializes on every save
+-- into the real, Dashboard-owned `dashboard_guild_notification_defaults`
+-- table (migration 0015) -- the `notification_policy_json` shape this
+-- comment originally described as "EXPLICITLY PROVISIONAL" no longer exists
+-- as this section's real store; "Season & quotas" materializing into the
+-- real `guild_config_selfbot.nb_*`/`guild_season_plans` columns is Section
+-- 9 of this same correction round. This paragraph corrects the PRIOR
+-- version of this comment, which incorrectly framed this table as an
+-- acceptable final store for those two sections.
+--
+-- `sections_json` still holds the persistent per-section checklist state
+-- (section key -> {completedAt, ...}) for every section -- one flexible
+-- JSON column rather than seven near-duplicate nullable-timestamp columns
+-- that would all need the exact same read/write pattern, matching this
+-- codebase's existing precedent for this shape of data
+-- (`hero_discovery_config`'s threshold fields aside, compare
 -- `guild_config_orchestrator.decision_rules_json`,
 -- `hero_discovery_candidates`... `criteria_json`).
 --

@@ -235,11 +235,37 @@ export interface ResolvedPreference {
   readonly discordDmEnabled: boolean;
 }
 
-/** Effective preference for one (user, event_type) — a materialized row wins; absent falls back to the registry default (migration 0010's header comment: no row is ever backfilled at signup). */
+/**
+ * Effective preference for one (user, event_type[, guild]) — Step 10
+ * external-review correction round, Section 11: extends this function with
+ * an optional guild context, implementing exactly this 3-tier precedence:
+ *
+ *  1. An explicit `dashboard_notification_preferences` row for
+ *     (userId, eventType) ALWAYS wins if present — unchanged from before
+ *     this correction (migration 0010's header comment: no row is ever
+ *     backfilled at signup, absence just means "never explicitly changed").
+ *  2. Else, if `guildId` is provided AND the event's registry `group` is
+ *     non-null (a real user-visible, GUILD-scoped preference group — e.g.
+ *     `GUILD_APPROVAL_STATE_CHANGE`'s `"GUILD_NEEDS"` — never a
+ *     platform-only event like `NEW_GUILD_PENDING`, whose `group` is
+ *     `null`), look up that guild's `dashboard_guild_notification_defaults`
+ *     row — if one exists, use it.
+ *  3. Else, fall back to the registry default exactly as before.
+ *
+ * `group === null` events are NEVER guild-suppressible by design — a
+ * platform/Superadmin-only event's delivery is not something any guild's
+ * own default policy can affect, regardless of whether a
+ * `dashboard_guild_notification_defaults` row happens to exist for that
+ * guild. This is a strictly ADDITIVE extension: with no guild default row
+ * anywhere (the pre-Section-11 world), behavior is byte-identical to
+ * before — see the regression tests re-running every existing Step 09
+ * notification preference test.
+ */
 export async function resolvePreference(
   db: Executor,
   userId: number,
   eventType: NotificationEventType,
+  guildId?: string | null,
 ): Promise<ResolvedPreference> {
   const row = await db
     .selectFrom("dashboard_notification_preferences")
@@ -250,8 +276,55 @@ export async function resolvePreference(
   if (row) {
     return { inAppEnabled: row.in_app_enabled === 1, discordDmEnabled: row.discord_dm_enabled === 1 };
   }
+
   const def = NOTIFICATION_EVENT_REGISTRY[eventType];
+  if (guildId != null && def.group !== null) {
+    const guildDefault = await db
+      .selectFrom("dashboard_guild_notification_defaults")
+      .select(["in_app_enabled", "discord_dm_enabled"])
+      .where("guild_id", "=", guildId)
+      .executeTakeFirst();
+    if (guildDefault) {
+      return {
+        inAppEnabled: guildDefault.in_app_enabled === 1,
+        discordDmEnabled: guildDefault.discord_dm_enabled === 1,
+      };
+    }
+  }
+
   return { inAppEnabled: def.defaultInAppEnabled, discordDmEnabled: def.defaultDiscordDmEnabled };
+}
+
+/**
+ * Upserts a guild's default notification policy row (Step 10 external-review
+ * correction round, Section 11) — one row per guild, `updated_by` records
+ * the Discord user id of whoever last set it. Wired into the onboarding
+ * Notifications section's save path (replacing the prior dead-end
+ * `sections_json`-only storage — see `onboardingRepo.ts`).
+ */
+export async function setGuildNotificationDefault(
+  db: Executor,
+  params: {
+    readonly guildId: string;
+    readonly inAppEnabled: boolean;
+    readonly discordDmEnabled: boolean;
+    readonly updatedBy: string;
+  },
+): Promise<void> {
+  await db
+    .insertInto("dashboard_guild_notification_defaults")
+    .values({
+      guild_id: params.guildId,
+      in_app_enabled: params.inAppEnabled ? 1 : 0,
+      discord_dm_enabled: params.discordDmEnabled ? 1 : 0,
+      updated_by: params.updatedBy,
+    })
+    .onDuplicateKeyUpdate({
+      in_app_enabled: params.inAppEnabled ? 1 : 0,
+      discord_dm_enabled: params.discordDmEnabled ? 1 : 0,
+      updated_by: params.updatedBy,
+    })
+    .execute();
 }
 
 /** Every event type's EFFECTIVE preference for one user (`GET /api/notifications/preferences`) — registry defaults merged with any materialized override rows. */

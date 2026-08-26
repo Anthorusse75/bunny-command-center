@@ -98,8 +98,11 @@ export async function createNotification(
       deeplinkPath: params.deeplinkPath,
     });
 
-    // Step 3.
-    const preference = await resolvePreference(trx, params.userId, params.eventType);
+    // Step 3. Step 10 correction round, Section 11: threads `guildId`
+    // through so a guild's own default policy (`dashboard_guild_notification_defaults`)
+    // can apply for guild-scoped, user-visible preference groups — see
+    // `resolvePreference`'s own doc comment for the exact 3-tier precedence.
+    const preference = await resolvePreference(trx, params.userId, params.eventType, guildId);
 
     // Step 4.
     await ensureDeliveryRow(trx, {

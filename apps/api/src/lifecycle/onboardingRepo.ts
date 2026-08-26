@@ -3,16 +3,27 @@
  * SCREENS/ONBOARDING.md). Two layers, deliberately kept distinct:
  *
  *  1. `dashboard_guild_onboarding_progress.sections_json` (migration 0013) —
- *     the LIVE, order-independent edit buffer every section's auto-save
- *     writes to. This is what makes "jump to any section, any order, no
- *     forced sequence" (mission §12) actually work: several of the real
- *     SHARED sub-tables this data eventually lands in have NOT NULL columns
- *     this step's sections don't individually cover in isolation (e.g.
+ *     ** Step 10 external-review correction round, Section 6: RECLASSIFIED. **
+ *     This is transient, PARTIAL-FORM-STATE ONLY, never this step's final
+ *     business-config store for anything that has a determinable real
+ *     destination. It exists SOLELY because several of the real SHARED
+ *     sub-tables this data eventually lands in have NOT NULL columns this
+ *     step's sections don't individually cover in isolation (e.g.
  *     `guild_config_selfbot.herowarbot_channel_id` is NOT NULL, but
  *     SCREENS/ONBOARDING.md lets a Guild Admin fill in "Community channel"
  *     before "Hero channel") — a real SQL row for that sub-table cannot
- *     exist validly until enough fields are known, so the JSON buffer is the
- *     one place that's ALWAYS immediately write-able regardless of order.
+ *     exist validly until enough fields are known, so this buffer is the
+ *     one place that's ALWAYS immediately write-able regardless of order,
+ *     for fields that don't YET have a real destination. The prior version
+ *     of this comment framed this table as an acceptable FINAL store for
+ *     the "Season & quotas"/"Notifications" sections — that framing was
+ *     wrong and has been corrected: "Notifications" now materializes
+ *     immediately into the real `dashboard_guild_notification_defaults`
+ *     table on every save (`onboardingService.ts`, alongside this buffer,
+ *     never instead of it — see that mirror-write) as of this correction
+ *     round; "Season & quotas" materializing into the real
+ *     `guild_config_selfbot.nb_*`/`guild_season_plans` columns is tracked
+ *     separately (Section 9 of this same correction round).
  *
  *  2. The real `guild_configuration_versions` + sub-tables (SHARED,
  *     Self-bot-repo migration authority) — MATERIALIZED from the buffer at
@@ -35,10 +46,7 @@
  * "coordinate scope carefully with Step 12's owner" instruction. Concretely:
  * this step never introduces new `guild_configuration_versions.state`
  * values beyond `DRAFT`/`ACTIVE`/`SUPERSEDED` (no validation sub-states —
- * Step 12's real workflow may need more), and the "Season & quotas"/
- * "Notifications" sections do not yet have a fully real backing store (see
- * `ONBOARDING_NOTIFICATION_POLICY_IS_PROVISIONAL` below and migration
- * 0013's own header comment).
+ * Step 12's real workflow may need more).
  */
 import { sql, type Kysely, type Transaction } from "kysely";
 import type { DB } from "../db/codegen-types.js";
