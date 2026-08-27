@@ -27,7 +27,7 @@
 // prior comment here claiming "no role-catalog endpoint exists yet" was
 // stale/incorrect by the time this correction round started — the endpoint
 // had already shipped, just never consumed by this screen.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
@@ -54,6 +54,7 @@ import type {
 } from "@bunny-command-center/shared";
 import { ONBOARDING_SECTION_KEYS } from "@bunny-command-center/shared";
 import { useGuildOverviewContext } from "../navigation/GuildRouteGuard.js";
+import { useRealtimeChannel } from "../realtime/index.js";
 import { PageHeading } from "../navigation/PageHeading.js";
 import { useToast } from "../design-system/ToastProvider.js";
 import { useBccIcon } from "../design-system/icons.js";
@@ -230,6 +231,39 @@ function OnboardingContent({
   const [showStepper, setShowStepper] = useState(
     state.lifecycleState !== "PENDING_APPROVAL" && state.lifecycleState !== "REJECTED",
   );
+  // Step 10 external-review correction round, Phase 3 (real bug found while
+  // writing the onboarding E2E test): `useState`'s initializer above only
+  // ever runs on the FIRST mount, so a Guild Admin who requests activation
+  // (or gets rejected) DURING an already-open session — never reloading the
+  // page — kept seeing the stepper forever; the marketing Pending/Rejected
+  // view only ever appeared on a fresh page load that started already in
+  // that state. Tracks the previous lifecycleState and resets `showStepper`
+  // to `false` exactly once, only on a genuine transition INTO
+  // PENDING_APPROVAL/REJECTED — never on a same-state refetch (which would
+  // otherwise fight the user's own "Edit configuration" `setShowStepper(true)`).
+  // Live invalidation is generic via `features/onboarding/realtimeWiring.ts`'s
+  // `registerQueryInvalidation` — but per `useRealtimeChannel`'s own "STEP
+  // 06+ CONSUMER CONTRACT" doc comment, THAT registration only maps
+  // eventType -> query keys; it does not by itself make the browser's
+  // underlying `EventSource` attach a native listener for this named event
+  // type (confirmed by reading `NotificationsScreen.tsx`, the one other real
+  // consumer of this exact pattern — it calls this same hook alongside its
+  // own `realtimeWiring.ts` registration for exactly this reason). This
+  // call's only job is to ensure that listener exists while this screen is
+  // mounted; the actual invalidation still happens generically.
+  useRealtimeChannel<{ guildId?: string }>("guild_lifecycle.state_changed", () => {});
+
+  const previousLifecycleStateRef = useRef(state.lifecycleState);
+  useEffect(() => {
+    const previous = previousLifecycleStateRef.current;
+    previousLifecycleStateRef.current = state.lifecycleState;
+    if (
+      previous !== state.lifecycleState &&
+      (state.lifecycleState === "PENDING_APPROVAL" || state.lifecycleState === "REJECTED")
+    ) {
+      setShowStepper(false);
+    }
+  }, [state.lifecycleState]);
 
   // Section 12: "bunnyPermissions" completion is now derived live, never
   // read off `state.sections.bunnyPermissions` (which still only reflects

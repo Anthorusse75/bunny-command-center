@@ -9,6 +9,19 @@ export interface Catalog {
   common: { status: Record<string, string>; nav: Record<string, string> };
   showcase: { title: string };
   errors: { guildNotAccessible: { title: string }; forbiddenGuild: { title: string } };
+  // Step 10 external-review correction round, Phase 3 (onboarding.spec.ts).
+  onboarding: {
+    checklist: { heading: string };
+    sections: Record<string, { title: string }> & {
+      seasonQuotas: { title: string; acceptDefaults: string };
+      notifications: { title: string; inApp: string };
+    };
+    actions: { requestActivation: string; pause: string };
+    pending: { title: string; unlocks: Record<string, string> };
+  };
+  superadmin: {
+    review: { title: string; actions: { approve: string } };
+  };
 }
 
 const CATALOG_DIR = path.join(

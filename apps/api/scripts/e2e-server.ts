@@ -194,29 +194,51 @@ async function main(): Promise<void> {
   //
   // Step 06 addition: optional `?discordUserId=` (defaults to the original
   // Step-04 fixed ID, so every pre-existing spec keeps working unchanged)
-  // and `?guilds=<url-encoded JSON array>` query params. The encrypted
-  // access token this route stores is now always
-  // `discordDouble.state.currentAccessToken` itself (never a second,
-  // independent fake string) so a REAL `GET /api/users/me/guilds` call made
-  // by the browser afterward authenticates against the double correctly —
-  // this is what makes the multi-guild E2E suite's guild list/switcher
-  // genuinely real rather than a client-only fixture.
+  // and `?guilds=<url-encoded JSON array>` query params.
+  //
+  // Step 10 external-review correction round, Phase 3 (real bug found while
+  // writing the onboarding E2E test, the first spec needing TWO co-existing
+  // sessions of DIFFERENT identities at once — every prior spec logs in one
+  // actor at a time): this route used to store
+  // `discordDouble.state.currentAccessToken` (a SINGLE value shared by every
+  // login) and mutate the double's SINGLE shared `state.guilds` fixture
+  // directly. A second `loginAs()` call (e.g. a Superadmin, in a separate
+  // browser context, while a Guild Admin's session/page is still open)
+  // silently overwrote the first session's guild list out from under it —
+  // the Guild Admin's later requests then saw a Discord guild list that no
+  // longer included their own guild, surfacing a real `errors.guilds.notFound`
+  // where nothing had actually gone wrong. `discordTestDouble.ts` was
+  // already fixed for the identical class of bug (its own `guildsByToken`
+  // map, added for a DIFFERENT reason — concurrent requests racing on the
+  // SAME session) but this route never used it: each login now mints a
+  // genuinely unique fake access token and registers it via
+  // `guildsByToken.set(...)`, which the double's own `/users/@me/guilds`
+  // handler already accepts as an alternate valid credential (see that
+  // file's real auth check) — so this fix requires zero changes to the
+  // double itself, only to how this route calls it.
   const testOnlyDb = createKyselyClient(dbConfig);
+  let loginCounter = 0;
   fastify.get<{ Querystring: { discordUserId?: string; guilds?: string } }>(
     "/api/__test__/login",
     async (request, reply) => {
       const discordUserId = request.query.discordUserId ?? "900000000001";
-      if (request.query.guilds) {
-        discordDouble.state.guilds = JSON.parse(request.query.guilds) as typeof discordDouble.state.guilds;
-      }
+      loginCounter += 1;
+      const accessToken = `e2e-login-token-${discordUserId}-${loginCounter}`;
+      // Always registered (an empty array when `?guilds=` is omitted,
+      // matching the double's own pre-existing `[]` default) — the token
+      // must be a recognized credential either way, or the double's auth
+      // check (`token !== currentAccessToken && !isRegisteredToken`) would
+      // 401 every caller that relies on the no-guilds default (e.g.
+      // `auth.setup.ts`, which never passes `?guilds=` at all).
+      discordDouble.state.guildsByToken.set(
+        accessToken,
+        request.query.guilds ? (JSON.parse(request.query.guilds) as typeof discordDouble.state.guilds) : [],
+      );
       const user = await upsertDashboardUser(testOnlyDb, {
         discordUserId,
         username: "E2ETestUser",
         avatarHash: null,
-        encryptedAccessToken: encryptSecret(
-          discordDouble.state.currentAccessToken,
-          config.session.tokenEncryptionKey,
-        ),
+        encryptedAccessToken: encryptSecret(accessToken, config.session.tokenEncryptionKey),
         encryptedRefreshToken: encryptSecret("e2e-fake-refresh-token", config.session.tokenEncryptionKey),
         tokenExpiresAt: new Date(Date.now() + 3600_000),
       });
