@@ -407,7 +407,7 @@
       "adminRolePolicy": {
         "title": "Admin-Rollenrichtlinie",
         "description": "Bestimmen Sie optional eine Discord-Rolle als Dashboard-Admin für diese Gilde. Leer lassen, um standardmäßig die Discord-Administrator-Rolle zu verwenden.",
-        "roleIdLabel": "Admin-Rollen-ID (optional)"
+        "roleLabel": "Admin-Rolle (optional)"
       }
     },
     "channelPicker": {
@@ -416,6 +416,12 @@
       "unavailable": "Die Kanalliste dieses Servers konnte gerade nicht von Bunny geladen werden. Versuchen Sie es in Kürze erneut.",
       "unavailableHint": "Kanalliste nicht verfügbar",
       "staleValue": "Aktuell: {{channelId}} (nicht mehr gefunden)"
+    },
+    "rolePicker": {
+      "none": "Keine (Standard: Discord-Administrator)",
+      "unavailable": "Die Rollenliste dieses Servers konnte gerade nicht von Bunny geladen werden. Versuchen Sie es in Kürze erneut.",
+      "unavailableHint": "Rollenliste nicht verfügbar",
+      "staleValue": "Aktuell: {{roleId}} (nicht mehr gefunden)"
     },
     "actions": {
       "requestActivation": "Aktivierung beantragen",

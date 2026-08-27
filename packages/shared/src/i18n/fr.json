@@ -412,7 +412,7 @@
       "adminRolePolicy": {
         "title": "Politique de rôle admin",
         "description": "Désignez éventuellement un rôle Discord comme admin du Dashboard pour cette guilde. Laissez vide pour utiliser par défaut le rôle Administrateur Discord.",
-        "roleIdLabel": "ID du rôle admin (optionnel)"
+        "roleLabel": "Rôle admin (optionnel)"
       }
     },
     "channelPicker": {
@@ -421,6 +421,12 @@
       "unavailable": "Impossible de charger la liste des salons de ce serveur depuis Bunny pour le moment. Réessayez sous peu.",
       "unavailableHint": "Liste des salons indisponible",
       "staleValue": "Actuel : {{channelId}} (introuvable)"
+    },
+    "rolePicker": {
+      "none": "Aucun (par défaut : Administrateur Discord)",
+      "unavailable": "Impossible de charger la liste des rôles de ce serveur depuis Bunny pour le moment. Réessayez sous peu.",
+      "unavailableHint": "Liste des rôles indisponible",
+      "staleValue": "Actuel : {{roleId}} (introuvable)"
     },
     "actions": {
       "requestActivation": "Demander l'activation",

@@ -5,6 +5,7 @@ import { apiJson } from "../auth/apiClient.js";
 import type {
   LifecycleTransitionResponse,
   OnboardingChannelCatalogResponse,
+  OnboardingRoleCatalogResponse,
   OnboardingSectionSaveRequest,
   OnboardingStateResponse,
   RequestActivationResponse,
@@ -18,6 +19,13 @@ export function fetchOnboardingState(guildId: string): Promise<OnboardingStateRe
 export function fetchOnboardingChannelCatalog(guildId: string): Promise<OnboardingChannelCatalogResponse> {
   return apiJson<OnboardingChannelCatalogResponse>(
     `/api/guilds/${encodeURIComponent(guildId)}/onboarding/channels`,
+  );
+}
+
+/** Step 10 external-review Phase 2, Section 13 — proxies Bunny's real, already-merged role catalog for the Admin Role Policy dropdown. Same "always resolves, available:false is a normal shape" convention as fetchOnboardingChannelCatalog. */
+export function fetchOnboardingRoleCatalog(guildId: string): Promise<OnboardingRoleCatalogResponse> {
+  return apiJson<OnboardingRoleCatalogResponse>(
+    `/api/guilds/${encodeURIComponent(guildId)}/onboarding/roles`,
   );
 }
 

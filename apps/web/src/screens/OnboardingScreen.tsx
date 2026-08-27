@@ -15,9 +15,16 @@
 // Community) now use a real live dropdown (`ChannelPickerSection`) populated
 // from `GET /api/guilds/:guildId/onboarding/channels`, which proxies Bunny's
 // real channel catalog — replacing the prior plain-text-snowflake-input
-// placeholder. `adminRolePolicy` (a Discord ROLE id, not a channel) keeps
-// using the plain `ChannelSection` text input unchanged — no role-catalog
-// endpoint exists yet, out of this correction round's scope.
+// placeholder.
+//
+// Step 10 external-review Phase 2, Section 13: `adminRolePolicy` (a Discord
+// ROLE id, not a channel) now uses the same live-dropdown treatment
+// (`RolePickerSection`, populated from `GET
+// /api/guilds/:guildId/onboarding/roles`, proxying Bunny's real,
+// already-merged role catalog — Step 08 Workstream E, `origin/V2.0`). The
+// prior comment here claiming "no role-catalog endpoint exists yet" was
+// stale/incorrect by the time this correction round started — the endpoint
+// had already shipped, just never consumed by this screen.
 import { useEffect, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -39,6 +46,7 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { useTranslation } from "react-i18next";
 import type {
   OnboardingChannelCatalogResponse,
+  OnboardingRoleCatalogResponse,
   OnboardingSectionKey,
   OnboardingStateResponse,
 } from "@bunny-command-center/shared";
@@ -51,12 +59,11 @@ import { ApiError } from "../features/auth/index.js";
 import {
   useGuildLifecycleActionMutation,
   useOnboardingChannelCatalog,
+  useOnboardingRoleCatalog,
   useOnboardingState,
   useRequestActivationMutation,
   useSaveOnboardingSectionMutation,
 } from "../features/onboarding/index.js";
-
-const SNOWFLAKE_PATTERN = /^\d{15,20}$/;
 
 export function OnboardingScreen(): React.JSX.Element {
   const overview = useGuildOverviewContext();
@@ -120,6 +127,7 @@ function OnboardingContent({
   const requestActivationMutation = useRequestActivationMutation(guildId);
   const lifecycleAction = useGuildLifecycleActionMutation(guildId);
   const channelCatalogQuery = useOnboardingChannelCatalog(guildId);
+  const roleCatalogQuery = useOnboardingRoleCatalog(guildId);
   // PENDING_APPROVAL/REJECTED default to their marketing/reason view
   // (SCREENS/ONBOARDING.md: "never looks like a 403" / "never a dead end")
   // rather than the stepper — both offer an explicit CTA to reveal it.
@@ -268,14 +276,13 @@ function OnboardingContent({
               );
             }}
           />
-          <ChannelSection
-            sectionKey="adminRolePolicy"
+          <RolePickerSection
             value={state.values.adminRoleDiscordId}
-            required={false}
-            labelKeyOverride="onboarding.sections.adminRolePolicy.roleIdLabel"
+            catalog={roleCatalogQuery.data}
+            catalogLoading={roleCatalogQuery.isPending}
             onSave={(adminRoleDiscordId) => {
               saveSection.mutate(
-                { section: "adminRolePolicy", data: { adminRoleDiscordId: adminRoleDiscordId || null } },
+                { section: "adminRolePolicy", data: { adminRoleDiscordId } },
                 { onSuccess: announceSaved },
               );
             }}
@@ -414,48 +421,6 @@ function BunnyPermissionsSection({
   );
 }
 
-function ChannelSection({
-  sectionKey,
-  value,
-  required,
-  labelKeyOverride,
-  onSave,
-}: {
-  sectionKey: OnboardingSectionKey;
-  value: string | null;
-  required: boolean;
-  labelKeyOverride?: string;
-  onSave: (channelId: string) => void;
-}): React.JSX.Element {
-  const { t } = useTranslation();
-  const [draft, setDraft] = useState(value ?? "");
-  const [touched, setTouched] = useState(false);
-  const isValid = draft.length === 0 ? !required : SNOWFLAKE_PATTERN.test(draft);
-
-  function handleBlur(): void {
-    setTouched(true);
-    if (!isValid) return;
-    if (draft === (value ?? "")) return;
-    onSave(draft);
-  }
-
-  return (
-    <SectionShell sectionKey={sectionKey}>
-      <TextField
-        fullWidth
-        size="small"
-        label={t(labelKeyOverride ?? `onboarding.sections.${sectionKey}.channelIdLabel`)}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value.trim())}
-        onBlur={handleBlur}
-        error={touched && !isValid}
-        helperText={touched && !isValid ? t("errors.validation") : undefined}
-        slotProps={{ htmlInput: { inputMode: "numeric" } }}
-      />
-    </SectionShell>
-  );
-}
-
 /**
  * Step 10 correction round, Gap 2 — a real live channel dropdown (MUI's
  * `TextField select`, the SAME form-control family already used everywhere
@@ -542,6 +507,88 @@ export function ChannelPickerSection({
         {channels.map((channel) => (
           <MenuItem key={channel.id} value={channel.id}>
             {`#${channel.name}`}
+          </MenuItem>
+        ))}
+      </TextField>
+    </SectionShell>
+  );
+}
+
+/**
+ * Step 10 external-review Phase 2, Section 13 — the Admin Role Policy
+ * section's real dropdown (MUI's `TextField select`, the same form-control
+ * family `ChannelPickerSection` already uses), populated from `GET
+ * /api/guilds/:guildId/onboarding/roles` (proxying Bunny's real,
+ * already-merged role catalog). Optional, unlike the channel pickers — a
+ * blank selection defaults to Discord's raw ADMINISTRATOR permission bit
+ * (see the section's own description). Degrades the same way
+ * `ChannelPickerSection` does: a DISABLED picker with an inline warning
+ * when Bunny is unreachable, never blocking the rest of onboarding.
+ */
+export function RolePickerSection({
+  value,
+  catalog,
+  catalogLoading,
+  onSave,
+}: {
+  value: string | null;
+  catalog: OnboardingRoleCatalogResponse | undefined;
+  catalogLoading: boolean;
+  onSave: (roleId: string | null) => void;
+}): React.JSX.Element {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(value ?? "");
+
+  useEffect(() => {
+    setDraft(value ?? "");
+  }, [value]);
+
+  const available = catalog?.available ?? false;
+  const roles = catalog?.roles ?? [];
+  const disabled = catalogLoading || !available;
+
+  // The currently-saved role might no longer exist in a fresh catalog fetch
+  // (the role was deleted) — shown as its own selectable-but-flagged entry,
+  // per this codebase's established convention for a stale channel-picker
+  // value, rather than silently keeping a deleted role selected with no
+  // visible warning.
+  const showStaleValueOption = value !== null && !roles.some((r) => r.id === value);
+
+  return (
+    <SectionShell sectionKey="adminRolePolicy">
+      {!catalogLoading && !available ? (
+        <Typography
+          role="alert"
+          color="warning.main"
+          variant="body2"
+          sx={{ marginBlockEnd: 1 }}
+          data-testid="adminRolePolicy-catalog-unavailable"
+        >
+          {t("onboarding.rolePicker.unavailable")}
+        </Typography>
+      ) : null}
+      <TextField
+        select
+        fullWidth
+        size="small"
+        label={t("onboarding.sections.adminRolePolicy.roleLabel")}
+        value={draft}
+        disabled={disabled}
+        data-testid="adminRolePolicy-picker"
+        helperText={disabled && !catalogLoading ? t("onboarding.rolePicker.unavailableHint") : undefined}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          onSave(next.length > 0 ? next : null);
+        }}
+      >
+        <MenuItem value="">{t("onboarding.rolePicker.none")}</MenuItem>
+        {showStaleValueOption && value !== null ? (
+          <MenuItem value={value}>{t("onboarding.rolePicker.staleValue", { roleId: value })}</MenuItem>
+        ) : null}
+        {roles.map((role) => (
+          <MenuItem key={role.id} value={role.id}>
+            {`@${role.name}`}
           </MenuItem>
         ))}
       </TextField>

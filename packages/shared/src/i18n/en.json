@@ -407,7 +407,7 @@
       "adminRolePolicy": {
         "title": "Admin role policy",
         "description": "Optionally designate a Discord role as Dashboard admin for this guild. Leave blank to default to Discord Administrator.",
-        "roleIdLabel": "Admin role ID (optional)"
+        "roleLabel": "Admin role (optional)"
       }
     },
     "channelPicker": {
@@ -416,6 +416,12 @@
       "unavailable": "We couldn't load this server's channel list from Bunny right now. Try again shortly.",
       "unavailableHint": "Channel list unavailable",
       "staleValue": "Current: {{channelId}} (no longer found)"
+    },
+    "rolePicker": {
+      "none": "None (defaults to Discord Administrator)",
+      "unavailable": "We couldn't load this server's role list from Bunny right now. Try again shortly.",
+      "unavailableHint": "Role list unavailable",
+      "staleValue": "Current: {{roleId}} (no longer found)"
     },
     "actions": {
       "requestActivation": "Request activation",

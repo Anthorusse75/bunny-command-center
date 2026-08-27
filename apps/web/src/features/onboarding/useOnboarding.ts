@@ -21,6 +21,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 import type {
   LifecycleTransitionResponse,
   OnboardingChannelCatalogResponse,
+  OnboardingRoleCatalogResponse,
   OnboardingSectionSaveRequest,
   OnboardingStateResponse,
   RequestActivationResponse,
@@ -28,6 +29,7 @@ import type {
 import { ApiError } from "../auth/apiClient.js";
 import {
   fetchOnboardingChannelCatalog,
+  fetchOnboardingRoleCatalog,
   fetchOnboardingState,
   postGuildLifecycleAction,
   requestActivation,
@@ -65,6 +67,27 @@ export function useOnboardingChannelCatalog(
   return useQuery({
     queryKey: onboardingChannelsQueryKey(guildId),
     queryFn: () => fetchOnboardingChannelCatalog(guildId),
+    staleTime: 30_000,
+    retry: 1,
+  });
+}
+
+export function onboardingRolesQueryKey(guildId: string): readonly [string, string, string, string] {
+  return ["guilds", "onboarding", guildId, "roles"] as const;
+}
+
+/**
+ * Step 10 external-review Phase 2, Section 13 — backs the Admin Role Policy
+ * dropdown. Same degradation contract as `useOnboardingChannelCatalog`:
+ * `available: false` is a normal successful shape (never a thrown
+ * `ApiError`), `retry: 1` rather than hammering an unreachable Bunny.
+ */
+export function useOnboardingRoleCatalog(
+  guildId: string,
+): UseQueryResult<OnboardingRoleCatalogResponse, ApiError> {
+  return useQuery({
+    queryKey: onboardingRolesQueryKey(guildId),
+    queryFn: () => fetchOnboardingRoleCatalog(guildId),
     staleTime: 30_000,
     retry: 1,
   });
