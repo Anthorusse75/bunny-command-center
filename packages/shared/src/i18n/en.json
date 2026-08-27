@@ -373,9 +373,20 @@
     "sections": {
       "bunnyPermissions": {
         "title": "Bunny & permissions",
-        "description": "Confirm Bunny's Discord permissions in this server are sufficient (read message history, attach files where needed). Fix any gaps from Discord's Integrations settings, then confirm below.",
+        "description": "Bunny's real, live Discord permissions for the channels you've configured are checked below — this is not something you confirm manually. Fix any gaps from Discord's Integrations settings.",
         "fixItLink": "Open Discord's permission settings",
-        "acknowledge": "Bunny's permissions look correct"
+        "degraded": "We couldn't check Bunny's live permissions right now. Try again shortly.",
+        "noChannelsConfigured": "Configure the incoming channel above to see Bunny's live permission status.",
+        "channelNotFound": "This channel could no longer be found in Bunny's live channel list.",
+        "channelRole": {
+          "incoming": "Incoming channel",
+          "community": "Community channel"
+        },
+        "checks": {
+          "viewChannel": "Bunny can see this channel",
+          "readHistory": "Bunny can read message history here",
+          "sendMessages": "Bunny can send messages here"
+        }
       },
       "incomingChannel": {
         "title": "Incoming channel",

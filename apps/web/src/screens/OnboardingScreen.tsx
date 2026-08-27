@@ -5,11 +5,13 @@
 // tier only (`RequireGuildAdmin`, already wrapping this route in
 // `routes.tsx`).
 //
-// ** Disclosed scope note ** (00_GLOBAL_IMPLEMENTATION_RULES.md rule 1):
-// "Bunny & permissions" is a user attestation checkbox, not a live Discord
-// permission check (no bot-token Discord API client exists anywhere in this
-// codebase — `packages/shared/src/types/lifecycle.ts`'s own comment on
-// `onboardingSectionSaveSchema` has the full rationale).
+// ** UPDATED — Step 10 external-review Phase 2, Section 12 **: the note
+// that used to live here claimed "'Bunny & permissions' is a user
+// attestation checkbox, not a live Discord permission check" — that is no
+// longer true. The checkbox is gone; see `computeBunnyPermissionsStatus`'s
+// doc comment below for the real, live per-channel permission check that
+// replaced it (sourced from the SAME channel catalog the pickers below
+// already fetch, not a new Discord API client).
 //
 // Step 10 correction round, Gap 2: the three channel fields (Incoming/Hero/
 // Community) now use a real live dropdown (`ChannelPickerSection`) populated
@@ -114,6 +116,100 @@ const SECTION_TITLE_KEY: Record<OnboardingSectionKey, string> = {
   adminRolePolicy: "onboarding.sections.adminRolePolicy.title",
 };
 
+/**
+ * Step 10 external-review Phase 2, Section 12 — "Bunny & permissions"
+ * becomes a LIVE status/checklist. Replaces the prior manual attestation
+ * checkbox (`bunnyPermissionsAcknowledged`, still accepted by the save API
+ * for backward compatibility but no longer written by this screen) as the
+ * SOURCE of this section's completion: completion is now derived from the
+ * real, live per-channel permission facts `useOnboardingChannelCatalog`
+ * already fetches, at read time, every time — never a stale stored flag a
+ * Guild Admin could tick once and then let drift from reality (e.g. after
+ * later revoking Bunny's role in Discord).
+ *
+ * Required checks per channel role, verified directly against Bunny's real
+ * runtime code (not assumed) before finalizing:
+ *  - Incoming channel: `canViewChannel` + `canReadHistory` (OCR ingestion
+ *    reads message history/attachments there) AND `canSendMessages` — this
+ *    third requirement was added after re-reading `02_NEW_BOT_OCR`'s real
+ *    `cogs/y_tasks.py`: the monthly Reminder/Top10-publish messages are
+ *    posted to the SAME incoming channel (via
+ *    `_approved_guild_channel_pairs`/`get_channel_incoming`), not a
+ *    separate channel — a checklist that only checked view+read-history
+ *    would show "complete" for a guild where Bunny genuinely cannot post
+ *    its monthly publish messages.
+ *  - Community channel (optional — only checked if configured):
+ *    `canViewChannel` + `canSendMessages`. ** Disclosed judgment call **:
+ *    directly reading Bunny's current code shows ZERO real `.send()` calls
+ *    target `community_channel_id` today (it has no live consumer yet,
+ *    unlike the incoming channel) — this check is intentionally kept
+ *    anyway because `guild_config_selfbot.community_channel_id`/
+ *    `community_updates_enabled` are real, checksummed columns of this
+ *    same Step-10 config model (not speculative schema), so verifying the
+ *    permission ahead of that feature shipping is reasonable UX, not a
+ *    fabricated requirement. Flagged here in case product wants this
+ *    dropped until Bunny actually posts there.
+ */
+export interface BunnyPermissionCheck {
+  readonly key: "viewChannel" | "readHistory" | "sendMessages";
+  readonly pass: boolean;
+}
+export interface BunnyPermissionChannelStatus {
+  readonly role: "incoming" | "community";
+  readonly channelId: string;
+  /** `false` if this channel id is no longer present in a fresh catalog fetch (e.g. deleted in Discord since it was configured). */
+  readonly found: boolean;
+  readonly checks: readonly BunnyPermissionCheck[];
+}
+export type BunnyPermissionsStatus =
+  /** Bunny unreachable/misconfigured/erroring — never fabricate a pass. */
+  | { readonly kind: "degraded" }
+  | {
+      readonly kind: "checked";
+      readonly complete: boolean;
+      readonly channels: readonly BunnyPermissionChannelStatus[];
+    };
+
+export function computeBunnyPermissionsStatus(
+  catalog: OnboardingChannelCatalogResponse | undefined,
+  catalogLoading: boolean,
+  incomingChannelId: string | null,
+  communityChannelId: string | null,
+): BunnyPermissionsStatus {
+  if (catalogLoading || !catalog || !catalog.available) {
+    return { kind: "degraded" };
+  }
+  const channels: BunnyPermissionChannelStatus[] = [];
+  if (incomingChannelId !== null) {
+    const channel = catalog.channels.find((c) => c.id === incomingChannelId);
+    channels.push({
+      role: "incoming",
+      channelId: incomingChannelId,
+      found: channel !== undefined,
+      checks: [
+        { key: "viewChannel", pass: channel?.canViewChannel ?? false },
+        { key: "readHistory", pass: channel?.canReadHistory ?? false },
+        { key: "sendMessages", pass: channel?.canSendMessages ?? false },
+      ],
+    });
+  }
+  if (communityChannelId !== null) {
+    const channel = catalog.channels.find((c) => c.id === communityChannelId);
+    channels.push({
+      role: "community",
+      channelId: communityChannelId,
+      found: channel !== undefined,
+      checks: [
+        { key: "viewChannel", pass: channel?.canViewChannel ?? false },
+        { key: "sendMessages", pass: channel?.canSendMessages ?? false },
+      ],
+    });
+  }
+  const complete =
+    channels.length > 0 && channels.every((c) => c.found && c.checks.every((check) => check.pass));
+  return { kind: "checked", complete, channels };
+}
+
 function OnboardingContent({
   guildId,
   state,
@@ -135,7 +231,27 @@ function OnboardingContent({
     state.lifecycleState !== "PENDING_APPROVAL" && state.lifecycleState !== "REJECTED",
   );
 
-  const completedCount = ONBOARDING_SECTION_KEYS.filter((key) => state.sections[key].completed).length;
+  // Section 12: "bunnyPermissions" completion is now derived live, never
+  // read off `state.sections.bunnyPermissions` (which still only reflects
+  // whether the now-retired attestation checkbox was ever ticked) — this
+  // overridden view is what both the checklist tally below and the
+  // sidebar's per-section icon (`ChecklistLayout`) actually use.
+  const bunnyPermissionsStatus = computeBunnyPermissionsStatus(
+    channelCatalogQuery.data,
+    channelCatalogQuery.isPending,
+    state.values.incomingChannelId,
+    state.values.communityChannelId,
+  );
+  const bunnyPermissionsComplete =
+    bunnyPermissionsStatus.kind === "checked" && bunnyPermissionsStatus.complete;
+  const displaySections: OnboardingStateResponse["sections"] = {
+    ...state.sections,
+    bunnyPermissions: {
+      completed: bunnyPermissionsComplete,
+      completedAt: state.sections.bunnyPermissions.completedAt,
+    },
+  };
+  const completedCount = ONBOARDING_SECTION_KEYS.filter((key) => displaySections[key].completed).length;
 
   function announceSaved(): void {
     showToast({ tone: "success", messageKey: "onboarding.toast.sectionSaved" });
@@ -202,19 +318,11 @@ function OnboardingContent({
       <ChecklistLayout
         completedCount={completedCount}
         totalCount={ONBOARDING_SECTION_KEYS.length}
-        sections={state.sections}
+        sections={displaySections}
         onJump={scrollToSection}
       >
         <Stack spacing={3}>
-          <BunnyPermissionsSection
-            acknowledged={state.values.bunnyPermissionsAcknowledged}
-            onSave={(acknowledged) => {
-              saveSection.mutate(
-                { section: "bunnyPermissions", data: { acknowledged } },
-                { onSuccess: announceSaved },
-              );
-            }}
-          />
+          <BunnyPermissionsSection status={bunnyPermissionsStatus} />
           <ChannelPickerSection
             sectionKey="incomingChannel"
             value={state.values.incomingChannelId}
@@ -399,24 +507,89 @@ function SectionShell({
   );
 }
 
-function BunnyPermissionsSection({
-  acknowledged,
-  onSave,
+function PermissionCheckIcon({ pass }: { pass: boolean }): React.JSX.Element {
+  const PassIcon = useBccIcon("check-circle");
+  const FailIcon = useBccIcon("alert-octagon");
+  return pass ? (
+    <PassIcon fontSize="small" color="success" aria-hidden="true" />
+  ) : (
+    <FailIcon fontSize="small" color="error" aria-hidden="true" />
+  );
+}
+
+function BunnyPermissionChannelCard({
+  channel,
 }: {
-  acknowledged: boolean;
-  onSave: (acknowledged: boolean) => void;
+  channel: BunnyPermissionChannelStatus;
 }): React.JSX.Element {
+  const { t } = useTranslation();
+  return (
+    <Box data-testid={`bunnyPermissions-${channel.role}`}>
+      <Typography variant="subtitle2">
+        {t(`onboarding.sections.bunnyPermissions.channelRole.${channel.role}`)}
+      </Typography>
+      {!channel.found ? (
+        <Typography role="alert" color="error.main" variant="body2">
+          {t("onboarding.sections.bunnyPermissions.channelNotFound")}
+        </Typography>
+      ) : (
+        <List dense sx={{ padding: 0 }}>
+          {channel.checks.map((check) => (
+            <ListItemButton
+              key={check.key}
+              disableRipple
+              disableGutters
+              sx={{ paddingBlock: 0, cursor: "default" }}
+              data-testid={`bunnyPermissions-check-${channel.role}-${check.key}`}
+              data-pass={check.pass}
+            >
+              <ListItemIcon sx={{ minWidth: 32 }}>
+                <PermissionCheckIcon pass={check.pass} />
+              </ListItemIcon>
+              <ListItemText primary={t(`onboarding.sections.bunnyPermissions.checks.${check.key}`)} />
+            </ListItemButton>
+          ))}
+        </List>
+      )}
+    </Box>
+  );
+}
+
+/**
+ * Step 10 external-review Phase 2, Section 12 — see
+ * `computeBunnyPermissionsStatus`'s doc comment above for exactly which
+ * permissions are checked and why. Never presents a fabricated PASS: a
+ * degraded Bunny shows a clearly distinct warning state, never silently
+ * reused stale data or an optimistic default.
+ */
+export function BunnyPermissionsSection({ status }: { status: BunnyPermissionsStatus }): React.JSX.Element {
   const { t } = useTranslation();
   return (
     <SectionShell sectionKey="bunnyPermissions">
       <Link href="https://support.discord.com/hc/en-us/articles/206029707" target="_blank" rel="noreferrer">
         {t("onboarding.sections.bunnyPermissions.fixItLink")}
       </Link>
-      <FormControlLabel
-        sx={{ display: "block", marginBlockStart: 1 }}
-        control={<Checkbox checked={acknowledged} onChange={(e) => onSave(e.target.checked)} />}
-        label={t("onboarding.sections.bunnyPermissions.acknowledge")}
-      />
+      {status.kind === "degraded" ? (
+        <Typography
+          role="alert"
+          color="warning.main"
+          variant="body2"
+          sx={{ marginBlockStart: 1 }}
+          data-testid="bunnyPermissions-degraded"
+        >
+          {t("onboarding.sections.bunnyPermissions.degraded")}
+        </Typography>
+      ) : status.channels.length === 0 ? (
+        <Typography color="text.secondary" variant="body2" sx={{ marginBlockStart: 1 }}>
+          {t("onboarding.sections.bunnyPermissions.noChannelsConfigured")}
+        </Typography>
+      ) : (
+        <Stack spacing={1.5} sx={{ marginBlockStart: 1.5 }}>
+          {status.channels.map((channel) => (
+            <BunnyPermissionChannelCard key={channel.role} channel={channel} />
+          ))}
+        </Stack>
+      )}
     </SectionShell>
   );
 }

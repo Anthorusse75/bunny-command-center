@@ -373,9 +373,20 @@
     "sections": {
       "bunnyPermissions": {
         "title": "Bunny & Berechtigungen",
-        "description": "Bestätigen Sie, dass Bunnys Discord-Berechtigungen auf diesem Server ausreichend sind (Nachrichtenverlauf lesen, Dateien anhängen, falls erforderlich). Beheben Sie etwaige Lücken über die Discord-Integrationseinstellungen und bestätigen Sie anschließend unten.",
+        "description": "Bunnys echte, aktuelle Discord-Berechtigungen für die von Ihnen konfigurierten Kanäle werden unten geprüft — dies ist keine manuelle Bestätigung. Beheben Sie etwaige Lücken über die Discord-Integrationseinstellungen.",
         "fixItLink": "Discord-Berechtigungseinstellungen öffnen",
-        "acknowledge": "Bunnys Berechtigungen sind korrekt"
+        "degraded": "Bunnys aktuelle Berechtigungen konnten gerade nicht geprüft werden. Versuchen Sie es in Kürze erneut.",
+        "noChannelsConfigured": "Konfigurieren Sie oben den Eingangskanal, um Bunnys aktuellen Berechtigungsstatus zu sehen.",
+        "channelNotFound": "Dieser Kanal konnte in Bunnys aktueller Kanalliste nicht mehr gefunden werden.",
+        "channelRole": {
+          "incoming": "Eingangskanal",
+          "community": "Community-Kanal"
+        },
+        "checks": {
+          "viewChannel": "Bunny kann diesen Kanal sehen",
+          "readHistory": "Bunny kann hier den Nachrichtenverlauf lesen",
+          "sendMessages": "Bunny kann hier Nachrichten senden"
+        }
       },
       "incomingChannel": {
         "title": "Eingangskanal",
