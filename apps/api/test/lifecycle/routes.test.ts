@@ -73,7 +73,24 @@ interface OnboardingChannelsBody {
     }>;
   };
 }
+interface OnboardingRolesBody {
+  data: {
+    available: boolean;
+    roles: Array<{
+      id: string;
+      name: string;
+      color: number;
+      position: number;
+      managed: boolean;
+      mentionable: boolean;
+      hoist: boolean;
+    }>;
+  };
+}
 function onboardingBody(response: InjectResponse): OnboardingBody {
+  return response.json();
+}
+function onboardingRolesBody(response: InjectResponse): OnboardingRolesBody {
   return response.json();
 }
 function onboardingValuesBody(response: InjectResponse): OnboardingValuesBody {
@@ -1419,6 +1436,102 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       } finally {
         bunny.state.forcedStatus = undefined;
       }
+    });
+
+    // -----------------------------------------------------------------
+    // Step 10 external-review Phase 2, Section 13 — the Admin Role Policy
+    // section's real dropdown, backed by Bunny's already-merged role
+    // catalog (origin/V2.0, Step 08 Workstream E). Same available:true/false
+    // degradation shape as the channel catalog above.
+    // -----------------------------------------------------------------
+    it("GET .../onboarding/roles returns the real catalog when Bunny is reachable, and a graceful available:false when it is not — never a 500", async () => {
+      const guildId = "600000000000000020";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      bunny.state.rolesByGuild.set(guildId, [
+        {
+          id: "700000000000000010",
+          name: "Officers",
+          color: 255,
+          position: 2,
+          managed: false,
+          mentionable: true,
+          hoist: true,
+        },
+      ]);
+
+      const okRes = await fastify.inject({
+        method: "GET",
+        url: `/api/guilds/${guildId}/onboarding/roles`,
+        headers: { cookie: admin.cookie },
+      });
+      expect(okRes.statusCode).toBe(200);
+      const okBody = onboardingRolesBody(okRes);
+      expect(okBody.data.available).toBe(true);
+      expect(okBody.data.roles).toEqual([
+        {
+          id: "700000000000000010",
+          name: "Officers",
+          color: 255,
+          position: 2,
+          managed: false,
+          mentionable: true,
+          hoist: true,
+        },
+      ]);
+
+      bunny.state.forcedStatus = 503;
+      try {
+        const degradedRes = await fastify.inject({
+          method: "GET",
+          url: `/api/guilds/${guildId}/onboarding/roles`,
+          headers: { cookie: admin.cookie },
+        });
+        expect(degradedRes.statusCode).toBe(200);
+        const degradedBody = onboardingRolesBody(degradedRes);
+        expect(degradedBody.data.available).toBe(false);
+        expect(degradedBody.data.roles).toEqual([]);
+      } finally {
+        bunny.state.forcedStatus = undefined;
+      }
+    });
+
+    it("a role catalog request for guild A never returns guild B's roles (cross-guild isolation)", async () => {
+      const guildA = "600000000000000091";
+      const guildB = "600000000000000092";
+      await seedGuild(guildA);
+      await seedGuild(guildB);
+      const adminA = await makeSession([{ id: guildA, owner: true, permissions: "0" }]);
+      bunny.state.rolesByGuild.set(guildA, [
+        {
+          id: "700000000000000011",
+          name: "A-role",
+          color: 0,
+          position: 1,
+          managed: false,
+          mentionable: true,
+          hoist: false,
+        },
+      ]);
+      bunny.state.rolesByGuild.set(guildB, [
+        {
+          id: "700000000000000012",
+          name: "B-role",
+          color: 0,
+          position: 1,
+          managed: false,
+          mentionable: true,
+          hoist: false,
+        },
+      ]);
+
+      const res = await fastify.inject({
+        method: "GET",
+        url: `/api/guilds/${guildA}/onboarding/roles`,
+        headers: { cookie: adminA.cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(onboardingRolesBody(res).data.roles.map((r) => r.name)).toEqual(["A-role"]);
     });
   });
 

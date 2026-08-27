@@ -322,3 +322,33 @@ export const onboardingChannelCatalogResponseSchema = z
   })
   .strict();
 export type OnboardingChannelCatalogResponse = z.infer<typeof onboardingChannelCatalogResponseSchema>;
+
+/**
+ * Step 10 external-review Phase 2, Section 13 — `GET
+ * /api/guilds/:guildId/onboarding/roles`, proxying Bunny's real, already-
+ * merged `GET /internal/guilds/{guild_id}/roles` (Step 08, Workstream E;
+ * `apps/api/src/integrations/bunnyInternalApi.ts`'s `fetchGuildRoleCatalog`).
+ * Same `available: false` degradation convention as the channel catalog
+ * above — the Admin Role Policy dropdown degrades gracefully rather than
+ * blocking the rest of onboarding when Bunny is unreachable.
+ */
+export const onboardingRoleDtoSchema = z
+  .object({
+    id: discordSnowflakeSchema,
+    name: z.string(),
+    color: z.number(),
+    position: z.number(),
+    managed: z.boolean(),
+    mentionable: z.boolean(),
+    hoist: z.boolean(),
+  })
+  .strict();
+export type OnboardingRoleDto = z.infer<typeof onboardingRoleDtoSchema>;
+
+export const onboardingRoleCatalogResponseSchema = z
+  .object({
+    available: z.boolean(),
+    roles: z.array(onboardingRoleDtoSchema),
+  })
+  .strict();
+export type OnboardingRoleCatalogResponse = z.infer<typeof onboardingRoleCatalogResponseSchema>;

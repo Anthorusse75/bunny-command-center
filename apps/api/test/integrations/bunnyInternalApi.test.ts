@@ -9,7 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AppConfig } from "../../src/config.js";
-import { fetchGuildChannelCatalog } from "../../src/integrations/bunnyInternalApi.js";
+import { fetchGuildChannelCatalog, fetchGuildRoleCatalog } from "../../src/integrations/bunnyInternalApi.js";
 import {
   startBunnyInternalApiTestDouble,
   type BunnyInternalApiTestDouble,
@@ -206,6 +206,141 @@ describe("fetchGuildChannelCatalog (Bunny internal API client)", () => {
     try {
       const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
       const result = await fetchGuildChannelCatalog(config, "600000000000000008");
+      expect(result.ok).toBe(false);
+      if (!result.ok && result.reason === "MALFORMED_RESPONSE") {
+        expect(result.detail).toContain("did not match");
+      } else {
+        expect.fail(`expected MALFORMED_RESPONSE, got ${JSON.stringify(result)}`);
+      }
+    } finally {
+      bunny.state.forcedStatus = undefined;
+      bunny.state.forcedBody = undefined;
+    }
+  });
+});
+
+describe("fetchGuildRoleCatalog (Bunny internal API client, Step 10 external-review Phase 2, Section 13)", () => {
+  let bunny: BunnyInternalApiTestDouble;
+
+  beforeAll(async () => {
+    bunny = await startBunnyInternalApiTestDouble();
+  });
+
+  afterAll(async () => {
+    await bunny.close();
+  });
+
+  it("returns NOT_CONFIGURED when no bunnyInternalApi config is set on this Dashboard instance", async () => {
+    const result = await fetchGuildRoleCatalog(baseConfig(undefined), "600000000000000101");
+    expect(result).toEqual({ ok: false, reason: "NOT_CONFIGURED" });
+  });
+
+  it("returns the real, parsed role catalog on a genuine 200 success", async () => {
+    bunny.state.rolesByGuild.set("600000000000000102", [
+      {
+        id: "700000000000000001",
+        name: "Guild Admin",
+        color: 16711680,
+        position: 3,
+        managed: false,
+        mentionable: true,
+        hoist: true,
+      },
+      {
+        id: "700000000000000002",
+        name: "Bot Role",
+        color: 0,
+        position: 1,
+        managed: true,
+        mentionable: false,
+        hoist: false,
+      },
+    ]);
+    const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
+    const result = await fetchGuildRoleCatalog(config, "600000000000000102");
+    expect(result).toEqual({
+      ok: true,
+      roles: [
+        {
+          id: "700000000000000001",
+          name: "Guild Admin",
+          color: 16711680,
+          position: 3,
+          managed: false,
+          mentionable: true,
+          hoist: true,
+        },
+        {
+          id: "700000000000000002",
+          name: "Bot Role",
+          color: 0,
+          position: 1,
+          managed: true,
+          mentionable: false,
+          hoist: false,
+        },
+      ],
+    });
+  });
+
+  it("returns UNREACHABLE when Bunny cannot be reached at all (connection refused)", async () => {
+    const config = baseConfig({ baseUrl: "http://127.0.0.1:1", token: "irrelevant" });
+    const result = await fetchGuildRoleCatalog(config, "600000000000000103");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("UNREACHABLE");
+    }
+  });
+
+  it("returns GUILD_NOT_FOUND on a real 404 (Bunny is not a member of the guild)", async () => {
+    bunny.state.forcedStatus = 404;
+    try {
+      const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
+      const result = await fetchGuildRoleCatalog(config, "600000000000000104");
+      expect(result).toEqual({ ok: false, reason: "GUILD_NOT_FOUND" });
+    } finally {
+      bunny.state.forcedStatus = undefined;
+    }
+  });
+
+  it("returns UPSTREAM_ERROR with the real status on a non-200/404 response (401/503/502)", async () => {
+    for (const status of [401, 502, 503]) {
+      bunny.state.forcedStatus = status;
+      try {
+        const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
+        const result = await fetchGuildRoleCatalog(config, "600000000000000105");
+        expect(result).toEqual({ ok: false, reason: "UPSTREAM_ERROR", status });
+      } finally {
+        bunny.state.forcedStatus = undefined;
+      }
+    }
+  });
+
+  it("returns MALFORMED_RESPONSE when the 200 body doesn't match the documented contract", async () => {
+    bunny.state.forcedStatus = 200;
+    bunny.state.forcedBody = { totally: "not the right shape" };
+    try {
+      const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
+      const result = await fetchGuildRoleCatalog(config, "600000000000000106");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("MALFORMED_RESPONSE");
+      }
+    } finally {
+      bunny.state.forcedStatus = undefined;
+      bunny.state.forcedBody = undefined;
+    }
+  });
+
+  it("returns MALFORMED_RESPONSE when a role entry is missing a required field", async () => {
+    bunny.state.forcedStatus = 200;
+    bunny.state.forcedBody = {
+      guild_id: "600000000000000107",
+      roles: [{ id: "700000000000000001", name: "Guild Admin" /* missing color/position/managed/... */ }],
+    };
+    try {
+      const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
+      const result = await fetchGuildRoleCatalog(config, "600000000000000107");
       expect(result.ok).toBe(false);
       if (!result.ok && result.reason === "MALFORMED_RESPONSE") {
         expect(result.detail).toContain("did not match");

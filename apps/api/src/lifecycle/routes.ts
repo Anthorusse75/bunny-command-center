@@ -36,7 +36,7 @@ import {
 import { buildRequireAuth, requireCsrfHeader } from "../auth/requireAuth.js";
 import { getOnboardingState, saveOnboardingSection, OnboardingRejectedError } from "./onboardingService.js";
 import { getMaterializedConfigSnapshot } from "./onboardingRepo.js";
-import { fetchGuildChannelCatalog } from "../integrations/bunnyInternalApi.js";
+import { fetchGuildChannelCatalog, fetchGuildRoleCatalog } from "../integrations/bunnyInternalApi.js";
 import { transitionGuildLifecycle, LifecycleTransitionRejectedError } from "./lifecycleService.js";
 import {
   approveActivationRequest,
@@ -297,6 +297,47 @@ export function buildLifecycleRoutes(
               canReadHistory: c.canReadHistory,
               canViewChannel: c.canViewChannel,
               canSendMessages: c.canSendMessages,
+            })),
+          },
+        };
+      },
+    );
+
+    // -----------------------------------------------------------------
+    // GET /api/guilds/:guildId/onboarding/roles — Step 10 external-review
+    // Phase 2, Section 13: proxies Bunny's real, already-merged live role
+    // catalog (`origin/V2.0`'s Step 08 Workstream E endpoint — unmodified
+    // by this correction round) for the Admin Role Policy section's real
+    // dropdown. Same degrade-gracefully convention as the channel-catalog
+    // route immediately above: a Bunny-unreachable/misconfigured/error
+    // outcome is `{ available: false, roles: [] }`, never a 500 — this one
+    // dropdown degrades, the rest of onboarding keeps working.
+    // -----------------------------------------------------------------
+    fastify.get(
+      "/api/guilds/:guildId/onboarding/roles",
+      { preHandler: [requireAuth, validateGuildIdParam, requireGuildAdmin] },
+      async (request, reply) => {
+        if (reply.sent) return undefined;
+        const { guildId } = request.guildAuthorization!;
+        const result = await fetchGuildRoleCatalog(config, guildId);
+        if (!result.ok) {
+          request.log.warn(
+            { guildId, reason: result.reason },
+            "onboarding/roles: Bunny catalog unavailable — degrading to available:false",
+          );
+          return { data: { available: false, roles: [] } };
+        }
+        return {
+          data: {
+            available: true,
+            roles: result.roles.map((r) => ({
+              id: r.id,
+              name: r.name,
+              color: r.color,
+              position: r.position,
+              managed: r.managed,
+              mentionable: r.mentionable,
+              hoist: r.hoist,
             })),
           },
         };
