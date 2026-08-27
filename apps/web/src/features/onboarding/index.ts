@@ -17,3 +17,4 @@ export {
   useRequestActivationMutation,
   useGuildLifecycleActionMutation,
 } from "./useOnboarding.js";
+export { initOnboardingRealtimeWiring } from "./realtimeWiring.js";

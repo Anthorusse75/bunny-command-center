@@ -49,6 +49,10 @@ import {
   testSuperadminConfig,
 } from "../test/helpers/testAuthConfig.js";
 import { startDiscordTestDouble, type DiscordTestDouble } from "../test/helpers/discordTestDouble.js";
+import {
+  startBunnyInternalApiTestDouble,
+  type BunnyInternalApiTestDouble,
+} from "../test/helpers/bunnyInternalApiTestDouble.js";
 
 const REAL_MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 // Step 06 addition: the SHARED self-bot schema migrations (`guilds` table —
@@ -134,6 +138,17 @@ async function main(): Promise<void> {
   // multi-guild spec is the first E2E suite that needs one.
   const discordDouble: DiscordTestDouble = await startDiscordTestDouble();
 
+  // Step 10 correction round, Phase 3: a REAL local Bunny internal-API test
+  // double (the exact same one `apps/api/test/lifecycle/routes.test.ts`/
+  // `apps/api/test/integrations/bunnyInternalApi.test.ts` use), so the
+  // onboarding E2E suite's real channel/role pickers have something real to
+  // call. Its default fixture already grants full permissions
+  // (view/read_history/send_messages) on a synthetic catalog covering the
+  // "500000000000000NNN" channel-id and "600000000000000NNN" role-id
+  // numbering conventions this whole test suite already uses — no per-guild
+  // registration needed for the E2E spec to pick a real channel/role id.
+  const bunnyDouble: BunnyInternalApiTestDouble = await startBunnyInternalApiTestDouble();
+
   const config: AppConfig = {
     port: Number(process.env["PORT"] ?? 8090),
     logLevel: process.env["LOG_LEVEL"] ?? "info",
@@ -155,6 +170,7 @@ async function main(): Promise<void> {
     },
     session: testSessionConfig(),
     superadmin: testSuperadminConfig(),
+    bunnyInternalApi: { baseUrl: bunnyDouble.baseUrl, token: bunnyDouble.state.token },
   };
 
   const fastify = await buildServer(config);

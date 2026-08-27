@@ -1,22 +1,16 @@
 // TanStack Query hooks for Step 10's onboarding/lifecycle workflow.
 //
-// ** Disclosed scope note ** (00_GLOBAL_IMPLEMENTATION_RULES.md rule 1):
-// SCREENS/ONBOARDING.md's own §SSE EVENTS line calls for a live
-// `permissions.changed`-adjacent guild-lifecycle-state SSE event so an
-// approval/rejection arriving updates this screen without a manual refresh.
-// That requires a NEW SSE source-adapter registration on the backend
-// (03_realtime_infrastructure.md's extension point, the same mechanism Step
-// 09 used for `notification.created`) — genuinely new backend wiring beyond
-// this step's own SCOPE list ("Create: ... lifecycle-state-write service,
-// state-machine service, onboarding stepper screens, snapshot-based
-// approval API endpoints" — no new SSE source is named). Not built in this
-// pass; this screen instead refetches on every mutation it performs itself
-// (`invalidateQueries` below) and on normal query staleness/refocus, so a
-// Guild Admin who took the action themselves always sees the fresh result —
-// only a truly cross-tab/cross-user live push (e.g. a Superadmin approving
-// from a different browser while this screen is open) is not instant. Left
-// as an explicit, disclosed gap for a follow-up step rather than silently
-// claimed as done.
+// ** Realtime status (corrected, Step 10 external-review correction round,
+// Phase 3) **: an earlier draft of this file disclosed that a genuine
+// cross-tab/cross-user live push (e.g. a Superadmin approving from a
+// different browser while this screen is open) was NOT instant — only this
+// screen's own mutations (`invalidateQueries` below) and normal query
+// staleness/refocus kept it fresh. That gap is now closed:
+// `features/onboarding/realtimeWiring.ts` registers
+// `guild_lifecycle.state_changed` (a real, live backend SSE source since an
+// earlier correction round, `apps/api/src/lifecycle/lifecycleSseAdapter.ts`)
+// into the same generic SSE -> invalidation-registry mechanism Step 09 uses
+// for `notification.created` — see that file for the exact wiring.
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import type {
   LifecycleTransitionResponse,
