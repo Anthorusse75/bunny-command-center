@@ -62,7 +62,15 @@ interface OnboardingValuesBody {
 interface OnboardingChannelsBody {
   data: {
     available: boolean;
-    channels: Array<{ id: string; name: string; position: number; type: string; canReadHistory: boolean }>;
+    channels: Array<{
+      id: string;
+      name: string;
+      position: number;
+      type: string;
+      canReadHistory: boolean;
+      canViewChannel: boolean;
+      canSendMessages: boolean;
+    }>;
   };
 }
 function onboardingBody(response: InjectResponse): OnboardingBody {
@@ -1332,6 +1340,8 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
           position: 0,
           type: "text",
           can_read_history: true,
+          can_view_channel: true,
+          can_send_messages: true,
         },
       ]);
 
@@ -1370,6 +1380,8 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
           position: 3,
           type: "text",
           can_read_history: true,
+          can_view_channel: true,
+          can_send_messages: false,
         },
       ]);
 
@@ -1388,6 +1400,8 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
           position: 3,
           type: "text",
           canReadHistory: true,
+          canViewChannel: true,
+          canSendMessages: false,
         },
       ]);
 

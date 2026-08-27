@@ -295,6 +295,8 @@ export function buildLifecycleRoutes(
               position: c.position,
               type: c.type,
               canReadHistory: c.canReadHistory,
+              canViewChannel: c.canViewChannel,
+              canSendMessages: c.canSendMessages,
             })),
           },
         };

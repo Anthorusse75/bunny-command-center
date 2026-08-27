@@ -305,6 +305,12 @@ export const onboardingChannelDtoSchema = z
     position: z.number(),
     type: z.string(),
     canReadHistory: z.boolean(),
+    // Step 10 external-review Phase 2, Section 12: VIEW_CHANNEL and
+    // SEND_MESSAGES, alongside the pre-existing READ_MESSAGE_HISTORY —
+    // backs the "Bunny & permissions" live checklist (derived from these
+    // real facts at read time, never a stored attestation).
+    canViewChannel: z.boolean(),
+    canSendMessages: z.boolean(),
   })
   .strict();
 export type OnboardingChannelDto = z.infer<typeof onboardingChannelDtoSchema>;

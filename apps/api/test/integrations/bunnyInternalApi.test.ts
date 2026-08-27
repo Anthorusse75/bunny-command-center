@@ -68,16 +68,48 @@ describe("fetchGuildChannelCatalog (Bunny internal API client)", () => {
 
   it("returns the real, parsed channel catalog on a genuine 200 success", async () => {
     bunny.state.channelsByGuild.set("600000000000000002", [
-      { id: "500000000000000001", name: "incoming", position: 0, type: "text", can_read_history: true },
-      { id: "500000000000000002", name: "hero", position: 1, type: "text", can_read_history: false },
+      {
+        id: "500000000000000001",
+        name: "incoming",
+        position: 0,
+        type: "text",
+        can_read_history: true,
+        can_view_channel: true,
+        can_send_messages: false,
+      },
+      {
+        id: "500000000000000002",
+        name: "hero",
+        position: 1,
+        type: "text",
+        can_read_history: false,
+        can_view_channel: false,
+        can_send_messages: false,
+      },
     ]);
     const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
     const result = await fetchGuildChannelCatalog(config, "600000000000000002");
     expect(result).toEqual({
       ok: true,
       channels: [
-        { id: "500000000000000001", name: "incoming", position: 0, type: "text", canReadHistory: true },
-        { id: "500000000000000002", name: "hero", position: 1, type: "text", canReadHistory: false },
+        {
+          id: "500000000000000001",
+          name: "incoming",
+          position: 0,
+          type: "text",
+          canReadHistory: true,
+          canViewChannel: true,
+          canSendMessages: false,
+        },
+        {
+          id: "500000000000000002",
+          name: "hero",
+          position: 1,
+          type: "text",
+          canReadHistory: false,
+          canViewChannel: false,
+          canSendMessages: false,
+        },
       ],
     });
   });
@@ -142,6 +174,38 @@ describe("fetchGuildChannelCatalog (Bunny internal API client)", () => {
     try {
       const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
       const result = await fetchGuildChannelCatalog(config, "600000000000000007");
+      expect(result.ok).toBe(false);
+      if (!result.ok && result.reason === "MALFORMED_RESPONSE") {
+        expect(result.detail).toContain("did not match");
+      } else {
+        expect.fail(`expected MALFORMED_RESPONSE, got ${JSON.stringify(result)}`);
+      }
+    } finally {
+      bunny.state.forcedStatus = undefined;
+      bunny.state.forcedBody = undefined;
+    }
+  });
+
+  it("returns MALFORMED_RESPONSE when a channel entry is missing can_view_channel/can_send_messages (Phase 2 fields)", async () => {
+    bunny.state.forcedStatus = 200;
+    bunny.state.forcedBody = {
+      guild_id: "600000000000000008",
+      channels: [
+        {
+          id: "500000000000000001",
+          name: "incoming",
+          position: 0,
+          type: "text",
+          can_read_history: true,
+          // can_view_channel/can_send_messages deliberately omitted — an
+          // older/un-upgraded Bunny instance must never be silently treated
+          // as if the new permission facts were known.
+        },
+      ],
+    };
+    try {
+      const config = baseConfig({ baseUrl: bunny.baseUrl, token: bunny.state.token });
+      const result = await fetchGuildChannelCatalog(config, "600000000000000008");
       expect(result.ok).toBe(false);
       if (!result.ok && result.reason === "MALFORMED_RESPONSE") {
         expect(result.detail).toContain("did not match");

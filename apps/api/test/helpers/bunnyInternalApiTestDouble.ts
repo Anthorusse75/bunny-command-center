@@ -27,6 +27,8 @@ export interface BunnyChannelFixture {
   position: number;
   type: string;
   can_read_history: boolean;
+  can_view_channel: boolean;
+  can_send_messages: boolean;
 }
 
 export interface BunnyInternalApiTestDoubleState {
@@ -50,7 +52,15 @@ function buildDefaultChannels(): BunnyChannelFixture[] {
   const channels: BunnyChannelFixture[] = [];
   for (let n = 1; n <= 200; n += 1) {
     const id = `50000000000000${String(n).padStart(4, "0")}`;
-    channels.push({ id, name: `test-channel-${n}`, position: n, type: "text", can_read_history: true });
+    channels.push({
+      id,
+      name: `test-channel-${n}`,
+      position: n,
+      type: "text",
+      can_read_history: true,
+      can_view_channel: true,
+      can_send_messages: true,
+    });
   }
   return channels;
 }

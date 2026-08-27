@@ -13,7 +13,17 @@
  *   `Authorization: Bearer <BUNNY_INTERNAL_API_TOKEN>`
  *   200 `{ "guild_id": "<snowflake string>", "channels": [{ "id": string,
  *        "name": string, "position": number, "type": string,
- *        "can_read_history": boolean }] }`
+ *        "can_read_history": boolean, "can_view_channel": boolean,
+ *        "can_send_messages": boolean }] }`
+ *   — `can_view_channel`/`can_send_messages` added by
+ *     `02_NEW_BOT_OCR`'s `dashboard/step-10-channel-catalog` branch, commit
+ *     on top of the original Gap 2 endpoint (Step 10 external-review Phase
+ *     2): VIEW_CHANNEL and READ_MESSAGE_HISTORY are distinct Discord
+ *     permission bits (read-history alone never implies visibility), and
+ *     SEND_MESSAGES backs the "Bunny & permissions" live checklist's
+ *     community-channel requirement. All three booleans are computed off
+ *     the SAME `permissions_for(guild.me)` call on Bunny's side and are
+ *     always present (never omitted) in every channel entry.
  *   400 non-numeric guild id (should never happen here — this client is
  *       always called with an already-snowflake-validated guildId)
  *   401 missing/bad bearer token
@@ -35,6 +45,8 @@ export interface BunnyChannel {
   readonly position: number;
   readonly type: string;
   readonly canReadHistory: boolean;
+  readonly canViewChannel: boolean;
+  readonly canSendMessages: boolean;
 }
 
 export type BunnyChannelCatalogResult =
@@ -65,7 +77,9 @@ function parseChannelsBody(guildId: string, body: unknown): BunnyChannel[] | und
       typeof (raw as { name?: unknown }).name !== "string" ||
       typeof (raw as { position?: unknown }).position !== "number" ||
       typeof (raw as { type?: unknown }).type !== "string" ||
-      typeof (raw as { can_read_history?: unknown }).can_read_history !== "boolean"
+      typeof (raw as { can_read_history?: unknown }).can_read_history !== "boolean" ||
+      typeof (raw as { can_view_channel?: unknown }).can_view_channel !== "boolean" ||
+      typeof (raw as { can_send_messages?: unknown }).can_send_messages !== "boolean"
     ) {
       return undefined;
     }
@@ -75,6 +89,8 @@ function parseChannelsBody(guildId: string, body: unknown): BunnyChannel[] | und
       position: number;
       type: string;
       can_read_history: boolean;
+      can_view_channel: boolean;
+      can_send_messages: boolean;
     };
     channels.push({
       id: r.id,
@@ -82,6 +98,8 @@ function parseChannelsBody(guildId: string, body: unknown): BunnyChannel[] | und
       position: r.position,
       type: r.type,
       canReadHistory: r.can_read_history,
+      canViewChannel: r.can_view_channel,
+      canSendMessages: r.can_send_messages,
     });
   }
   return channels;
