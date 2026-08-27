@@ -270,6 +270,22 @@ export const activationRequestDetailResponseSchema = z
 export type ActivationRequestDetailResponse = z.infer<typeof activationRequestDetailResponseSchema>;
 
 /**
+ * `POST /api/admin/activation-requests/:requestId/{approve,reject,request-changes}`
+ * — matches `activationRequestsService.ts`'s `DecisionResult` exactly
+ * (`{ requestId, lifecycleState }`). `lifecycleState` is `null` for
+ * reject/request-changes (those decisions do not change the GUILD's
+ * lifecycle state, only the request's own `state`) and the guild's new
+ * state (typically `ACTIVE`) for approve.
+ */
+export const activationDecisionResponseSchema = z
+  .object({
+    requestId: z.string(),
+    lifecycleState: lifecycleStateSchema.nullable(),
+  })
+  .strict();
+export type ActivationDecisionResponse = z.infer<typeof activationDecisionResponseSchema>;
+
+/**
  * Step 10 correction round, Gap 2 — `GET /api/guilds/:guildId/onboarding/channels`,
  * proxying Bunny OCR's real `GET /internal/guilds/{guild_id}/channels`
  * (`apps/api/src/integrations/bunnyInternalApi.ts`). `available: false`

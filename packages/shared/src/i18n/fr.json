@@ -485,6 +485,60 @@
         "title": "Découverte de héros",
         "body": "Les candidats de reconnaissance et le catalogue de référence ne sont pas encore construits — ceci est un espace réservé pour la route et sa navigation."
       }
+    },
+    "review": {
+      "title": "Examiner la demande d'activation",
+      "guildMismatch": "Cette demande n'appartient pas au serveur indiqué dans le lien. Par sécurité, rien n'est affiché.",
+      "metadata": {
+        "title": "Demande",
+        "guildId": "ID du serveur",
+        "state": "Statut",
+        "requestedBy": "Demandé par",
+        "requestedAt": "Demandé le",
+        "reviewedBy": "Examiné par",
+        "reviewedAt": "Examiné le",
+        "decisionReason": "Motif"
+      },
+      "state": {
+        "PENDING": "En attente d'examen",
+        "CHANGES_REQUESTED": "Modifications demandées",
+        "APPROVED": "Approuvée",
+        "REJECTED": "Rejetée"
+      },
+      "snapshot": {
+        "title": "Configuration soumise (figée)",
+        "description": "Voici exactement ce qui a été soumis pour approbation. Elle ne peut pas changer pendant votre examen — toute nouvelle modification par l'Admin du serveur crée une soumission nouvelle et distincte.",
+        "unavailable": "La configuration soumise pour cette demande n'a pas pu être chargée.",
+        "notSet": "Non défini",
+        "quotasTitle": "Quotas de saison",
+        "quotas": {
+          "gcHero": "GC Hero",
+          "gcTitan": "GC Titan",
+          "hol": "HOL",
+          "hero": "Hero",
+          "titan": "Titan"
+        }
+      },
+      "liveScope": {
+        "title": "Ne fait pas partie de cette configuration figée",
+        "body": "La politique de rôle admin, les préférences de notification par défaut et le statut réel des permissions Discord de Bunny sont des réglages courants et évolutifs — ils ne sont jamais figés par la configuration soumise de cette demande et ne sont pas affichés ici."
+      },
+      "alreadyDecided": {
+        "title": "Cette demande a déjà été traitée"
+      },
+      "actions": {
+        "title": "Décision",
+        "approve": "Approuver",
+        "requestChanges": "Demander des modifications",
+        "requestChangesReasonLabel": "Qu'est-ce qui doit changer ?",
+        "reject": "Rejeter",
+        "rejectReasonLabel": "Motif du rejet"
+      },
+      "toast": {
+        "approved": "Demande approuvée",
+        "changesRequested": "Modifications demandées",
+        "rejected": "Demande rejetée"
+      }
     }
   },
   "technical": {

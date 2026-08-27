@@ -480,6 +480,60 @@
         "title": "Hero Discovery",
         "body": "Hero recognition candidates and the reference catalog aren't built yet — this is a placeholder for the route and its navigation."
       }
+    },
+    "review": {
+      "title": "Review activation request",
+      "guildMismatch": "This request doesn't belong to the guild in the link. For your safety, nothing is shown.",
+      "metadata": {
+        "title": "Request",
+        "guildId": "Guild ID",
+        "state": "Status",
+        "requestedBy": "Requested by",
+        "requestedAt": "Requested at",
+        "reviewedBy": "Reviewed by",
+        "reviewedAt": "Reviewed at",
+        "decisionReason": "Reason"
+      },
+      "state": {
+        "PENDING": "Pending review",
+        "CHANGES_REQUESTED": "Changes requested",
+        "APPROVED": "Approved",
+        "REJECTED": "Rejected"
+      },
+      "snapshot": {
+        "title": "Submitted configuration (frozen)",
+        "description": "This is exactly what was submitted for approval. It cannot change while you review it — a further edit by the Guild Admin creates a new, separate submission.",
+        "unavailable": "This request's submitted configuration could not be loaded.",
+        "notSet": "Not set",
+        "quotasTitle": "Season quotas",
+        "quotas": {
+          "gcHero": "GC Hero",
+          "gcTitan": "GC Titan",
+          "hol": "HOL",
+          "hero": "Hero",
+          "titan": "Titan"
+        }
+      },
+      "liveScope": {
+        "title": "Not part of this snapshot",
+        "body": "Admin role policy, notification defaults, and Bunny's live Discord permission status are current, ongoing settings — they are never frozen by this request's submitted configuration and are not shown here."
+      },
+      "alreadyDecided": {
+        "title": "This request has already been decided"
+      },
+      "actions": {
+        "title": "Decision",
+        "approve": "Approve",
+        "requestChanges": "Request changes",
+        "requestChangesReasonLabel": "What needs to change?",
+        "reject": "Reject",
+        "rejectReasonLabel": "Reason for rejection"
+      },
+      "toast": {
+        "approved": "Request approved",
+        "changesRequested": "Changes requested",
+        "rejected": "Request rejected"
+      }
     }
   },
   "technical": {

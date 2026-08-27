@@ -21,6 +21,7 @@ import { NotificationsScreen } from "../screens/NotificationsScreen.js";
 import { NotificationPreferencesScreen } from "../screens/NotificationPreferencesScreen.js";
 import { SuperadminScreen } from "../screens/SuperadminScreen.js";
 import { HeroDiscoveryScreen } from "../screens/HeroDiscoveryScreen.js";
+import { ActivationRequestReviewScreen } from "../screens/ActivationRequestReviewScreen.js";
 import { ProfileScreen } from "../screens/ProfileScreen.js";
 import { NotFoundScreen } from "../screens/NotFoundScreen.js";
 import { DesignSystemShowcase } from "../showcase/DesignSystemShowcase.js";
@@ -116,6 +117,18 @@ export function createAppRouter(): ReturnType<typeof createBrowserRouter> {
           element: (
             <SuperadminRouteGuard>
               <HeroDiscoveryScreen />
+            </SuperadminRouteGuard>
+          ),
+        },
+        {
+          // Step 10 external-review Phase 2, Section 3: the deep-link
+          // activationRequestsService.ts:102 generates on request-activation
+          // (surfaced to the Superadmin via the NEW_GUILD_PENDING
+          // notification) — previously a dead end with no matching route.
+          path: "/admin/platform/guilds/:guildId/review/:requestId",
+          element: (
+            <SuperadminRouteGuard>
+              <ActivationRequestReviewScreen />
             </SuperadminRouteGuard>
           ),
         },

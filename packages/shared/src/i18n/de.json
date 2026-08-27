@@ -480,6 +480,60 @@
         "title": "Heldenerkennung",
         "body": "Erkennungskandidaten und der Referenzkatalog sind noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
       }
+    },
+    "review": {
+      "title": "Aktivierungsanfrage prüfen",
+      "guildMismatch": "Diese Anfrage gehört nicht zu dem Server im Link. Aus Sicherheitsgründen wird nichts angezeigt.",
+      "metadata": {
+        "title": "Anfrage",
+        "guildId": "Server-ID",
+        "state": "Status",
+        "requestedBy": "Angefragt von",
+        "requestedAt": "Angefragt am",
+        "reviewedBy": "Geprüft von",
+        "reviewedAt": "Geprüft am",
+        "decisionReason": "Begründung"
+      },
+      "state": {
+        "PENDING": "Ausstehende Prüfung",
+        "CHANGES_REQUESTED": "Änderungen angefordert",
+        "APPROVED": "Genehmigt",
+        "REJECTED": "Abgelehnt"
+      },
+      "snapshot": {
+        "title": "Eingereichte Konfiguration (eingefroren)",
+        "description": "Dies ist genau das, was zur Genehmigung eingereicht wurde. Es kann sich während Ihrer Prüfung nicht ändern — eine weitere Änderung durch den Server-Admin erstellt eine neue, separate Einreichung.",
+        "unavailable": "Die eingereichte Konfiguration dieser Anfrage konnte nicht geladen werden.",
+        "notSet": "Nicht festgelegt",
+        "quotasTitle": "Saisonkontingente",
+        "quotas": {
+          "gcHero": "GC Hero",
+          "gcTitan": "GC Titan",
+          "hol": "HOL",
+          "hero": "Hero",
+          "titan": "Titan"
+        }
+      },
+      "liveScope": {
+        "title": "Nicht Teil dieser eingefrorenen Konfiguration",
+        "body": "Die Admin-Rollenrichtlinie, die Standard-Benachrichtigungseinstellungen und der aktuelle Discord-Berechtigungsstatus von Bunny sind laufende, aktuelle Einstellungen — sie werden von der eingereichten Konfiguration dieser Anfrage nie eingefroren und werden hier nicht angezeigt."
+      },
+      "alreadyDecided": {
+        "title": "Über diese Anfrage wurde bereits entschieden"
+      },
+      "actions": {
+        "title": "Entscheidung",
+        "approve": "Genehmigen",
+        "requestChanges": "Änderungen anfordern",
+        "requestChangesReasonLabel": "Was muss geändert werden?",
+        "reject": "Ablehnen",
+        "rejectReasonLabel": "Grund für die Ablehnung"
+      },
+      "toast": {
+        "approved": "Anfrage genehmigt",
+        "changesRequested": "Änderungen angefordert",
+        "rejected": "Anfrage abgelehnt"
+      }
     }
   },
   "technical": {
