@@ -75,6 +75,22 @@ function buildDefaultChannels(): BunnyChannelFixture[] {
       can_send_messages: true,
     });
   }
+  // Step 10 FINAL correction round, Section 6: one deterministic
+  // under-permissioned channel (id 201, outside the 1-200 range every
+  // other test in this repo already relies on for full permissions) so the
+  // real-browser E2E suite has a genuine catalog entry it can select via
+  // the live picker to prove an under-permissioned Incoming channel save is
+  // rejected — no per-guild `channelsByGuild` registration needed for that
+  // proof to work against the shared e2e-server.ts process.
+  channels.push({
+    id: "500000000000000201",
+    name: "under-permissioned-channel",
+    position: 201,
+    type: "text",
+    can_read_history: true,
+    can_view_channel: true,
+    can_send_messages: false,
+  });
   return channels;
 }
 

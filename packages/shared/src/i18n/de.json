@@ -124,6 +124,7 @@
       "checklistNotPassed": "Vervollständigen Sie den Eingangskanal, den Hero-Kanal und den Abschnitt Saison & Quoten, bevor Sie die Aktivierung beantragen.",
       "channelVerificationFailed": "Dieser Kanal konnte gerade nicht bei Bunny verifiziert werden. Bitte versuchen Sie es erneut.",
       "channelNotFound": "Dieser Kanal existiert auf diesem Server nicht mehr. Wählen Sie einen anderen aus.",
+      "channelPermissionsMissing": "Bunny benötigt in diesem Kanal die Berechtigungen Kanal ansehen, Nachrichtenverlauf lesen und Nachrichten senden, um Erinnerungen und Top-10-Updates zu posten. Passen Sie die Berechtigungen an und versuchen Sie es erneut.",
       "quotaOverrideRequired": "Akzeptieren Sie die Plattform-Standardwerte oder geben Sie mindestens eine benutzerdefinierte Quote ein."
     },
     "notFoundPage": {
@@ -378,6 +379,7 @@
         "degraded": "Bunnys aktuelle Berechtigungen konnten gerade nicht geprüft werden. Versuchen Sie es in Kürze erneut.",
         "noChannelsConfigured": "Konfigurieren Sie oben den Eingangskanal, um Bunnys aktuellen Berechtigungsstatus zu sehen.",
         "channelNotFound": "Dieser Kanal konnte in Bunnys aktueller Kanalliste nicht mehr gefunden werden.",
+        "existsOnly": "Dieser Kanal existiert — derzeit ist keine zusätzliche Bunny-Berechtigung dafür erforderlich.",
         "channelRole": {
           "incoming": "Eingangskanal",
           "community": "Community-Kanal"

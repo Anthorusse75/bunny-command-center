@@ -37,19 +37,24 @@ export type OnboardingSectionKey = z.infer<typeof onboardingSectionKeySchema>;
  * section/data pairing is rejected by Zod itself, never by ad hoc
  * `if (section === ...)` branching deep in a route handler.
  *
- * `bunnyPermissions` is a user attestation, NOT a live Discord permission
- * check (disclosed deviation, this step's HANDOVER: no bot-token Discord API
- * client exists anywhere in this codebase today — only the OAuth
- * user-token flow, `apps/api/src/auth/discordClient.ts` — building one is
- * judged out of proportion to add silently within this step).
+ * `bunnyPermissions` is deliberately ABSENT from this union — Step 10
+ * FINAL external-review correction, Section 4. It remains one of the 7
+ * `ONBOARDING_SECTION_KEYS` display/checklist keys (the UI still shows it
+ * as a section with a completion state), but it is no longer a
+ * user-savable section at all: an earlier pass modeled it as a manual
+ * `{acknowledged: boolean}` attestation checkbox, which was replaced by a
+ * LIVE, server-computed permission check derived from Bunny's real channel
+ * catalog (`apps/web/src/screens/OnboardingScreen.tsx`'s
+ * `computeBunnyPermissionsStatus`) — there is no longer anything for a
+ * client to "save" here. The branch was removed entirely (not merely
+ * unused) so a `PATCH .../onboarding` with `{section: "bunnyPermissions", ...}`
+ * now fails Zod validation outright, per the explicit instruction "there
+ * must no longer be two contradictory meanings of 'bunnyPermissions
+ * completed'": the live, derived check is the ONLY canonical completion
+ * signal — this section's own `dashboard_guild_onboarding_progress` status
+ * is intentionally never authoritative and is not writable.
  */
 export const onboardingSectionSaveSchema = z.discriminatedUnion("section", [
-  z
-    .object({
-      section: z.literal("bunnyPermissions"),
-      data: z.object({ acknowledged: z.boolean() }).strict(),
-    })
-    .strict(),
   z
     .object({
       section: z.literal("incomingChannel"),
@@ -175,7 +180,6 @@ export const onboardingStateResponseSchema = z
         notificationsInAppEnabled: z.boolean().nullable(),
         notificationsDiscordDmEnabled: z.boolean().nullable(),
         adminRoleDiscordId: discordSnowflakeSchema.nullable(),
-        bunnyPermissionsAcknowledged: z.boolean(),
       })
       .strict(),
   })

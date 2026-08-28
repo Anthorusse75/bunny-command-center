@@ -24,7 +24,7 @@ function renderPicker(props: Partial<React.ComponentProps<typeof ChannelPickerSe
           required
           catalog={undefined}
           catalogLoading={false}
-          onSave={vi.fn()}
+          onSave={vi.fn().mockResolvedValue(undefined)}
           {...props}
         />
       </BccI18nProvider>
@@ -56,7 +56,7 @@ describe("ChannelPickerSection — live Bunny channel catalog picker (Gap 2)", (
   });
 
   it("available state: no warning shown, the picker is enabled, and real channel options are selectable", async () => {
-    const onSave = vi.fn();
+    const onSave = vi.fn().mockResolvedValue(undefined);
     renderPicker({
       catalog: {
         available: true,

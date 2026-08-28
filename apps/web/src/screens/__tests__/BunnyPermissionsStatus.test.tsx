@@ -93,9 +93,9 @@ describe("computeBunnyPermissionsStatus", () => {
     });
   });
 
-  it("checks the community channel (view + send only) when configured, independently of the incoming channel", () => {
+  it("the community channel is existence-only when configured — no Bunny permission requirement, since Bunny has no real .send() consumer targeting it", () => {
     const incoming = channel({ id: "500000000000000001" });
-    const community = channel({ id: "500000000000000002", canSendMessages: false });
+    const community = channel({ id: "500000000000000002", canSendMessages: false, canViewChannel: false });
     const result = computeBunnyPermissionsStatus(
       catalog([incoming, community]),
       false,
@@ -103,10 +103,12 @@ describe("computeBunnyPermissionsStatus", () => {
       "500000000000000002",
     ) as Extract<BunnyPermissionsStatus, { kind: "checked" }>;
 
-    expect(result.complete).toBe(false);
+    // Incoming still fully satisfied and community merely exists — overall
+    // complete despite community holding NO Bunny permissions at all.
+    expect(result.complete).toBe(true);
     const communityStatus = result.channels.find((c) => c.role === "community")!;
-    expect(communityStatus.checks.map((c) => c.key)).toEqual(["viewChannel", "sendMessages"]);
-    expect(communityStatus.checks.find((c) => c.key === "sendMessages")?.pass).toBe(false);
+    expect(communityStatus.found).toBe(true);
+    expect(communityStatus.checks).toEqual([]);
   });
 
   it("flags a configured channel id no longer present in the live catalog as not found, never fabricating a pass", () => {

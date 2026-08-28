@@ -7,7 +7,7 @@ import type { Kysely } from "kysely";
 import type { DB } from "../db/codegen-types.js";
 import type { OnboardingSectionSaveRequest, OnboardingStateResponse } from "@bunny-command-center/shared";
 import type { AppConfig } from "../config.js";
-import { fetchGuildChannelCatalog } from "../integrations/bunnyInternalApi.js";
+import { fetchGuildChannelCatalog, type BunnyChannel } from "../integrations/bunnyInternalApi.js";
 import { getGuildLifecycleRow } from "./lifecycleRepo.js";
 import { transitionGuildLifecycleInTransaction } from "./lifecycleService.js";
 import {
@@ -18,6 +18,7 @@ import {
   saveOnboardingSectionData,
   sectionStatuses,
   ConfigVersionRaceError,
+  type Executor,
 } from "./onboardingRepo.js";
 import { getLatestActivationRequestForGuild } from "./activationRequestsRepo.js";
 import { setGuildAdminRole } from "../auth/guildPolicyRepo.js";
@@ -34,6 +35,7 @@ export class OnboardingRejectedError extends Error {
       | "NOT_EDITABLE"
       | "CHANNEL_VERIFICATION_FAILED"
       | "CHANNEL_NOT_FOUND"
+      | "CHANNEL_PERMISSIONS_MISSING"
       | "QUOTA_OVERRIDE_REQUIRED"
       | "CONCURRENT_MODIFICATION",
     message: string,
@@ -43,25 +45,52 @@ export class OnboardingRejectedError extends Error {
   }
 }
 
+type ChannelSection = "incomingChannel" | "heroChannel" | "communityChannel";
+
 /**
  * Step 10 correction round, Gap 2 (`11_GUILD_CONFIGURATION.md`'s explicit
  * audit-gap closure: "never silently accept an unverified channel id"). The
  * three channel-selecting sections get a LIVE existence check against
- * Bunny's real channel catalog before their save is accepted — this was
- * flagged as a known gap in the prior pass and explicitly required to be
- * closed in this one. Called BEFORE `saveOnboardingSection`'s DB transaction
- * opens (an outbound HTTP call must never happen while holding a MySQL
- * transaction/row locks open). Bunny-unreachable (or any other non-success
- * outcome) fails the save CLOSED — never a silent accept of an unverified id
- * — per this step's explicit brief: "Bunny-unreachable during a save must
- * fail the save closed with a clear 'couldn't verify channel, try again'
- * error."
+ * Bunny's real channel catalog before their save is accepted. Called BEFORE
+ * `saveOnboardingSection`'s DB transaction opens (an outbound HTTP call must
+ * never happen while holding a MySQL transaction/row locks open).
+ * Bunny-unreachable (or any other non-success outcome) fails the save CLOSED
+ * — never a silent accept of an unverified id.
+ *
+ * Step 10 FINAL external-review correction: existence alone is not enough —
+ * "Channel save validation must verify the permissions actually required for
+ * that field, not merely that an ID exists." The required-permission profile
+ * is per-section, grounded in Bunny's REAL current runtime behavior (no
+ * speculative requirements):
+ *
+ *  - `incomingChannel`: Bunny genuinely reads history there for OCR
+ *    ingestion AND posts its reminder/Top10 publication into this SAME
+ *    channel (`cogs/y_tasks.py`, confirmed by direct code inspection — Bunny
+ *    has no separate "community channel" send path today). Requires
+ *    `canViewChannel` + `canReadHistory` + `canSendMessages` all `true`.
+ *  - `heroChannel`: a Self-bot-only field — Bunny's catalog is merely a
+ *    convenient shared channel-id source for it, Bunny itself has no
+ *    operational need for any permission there. Existence-only.
+ *  - `communityChannel`: `guild_config_selfbot.community_channel_id` exists
+ *    in the SHARED schema, but Bunny's live code has ZERO real `.send()`
+ *    call targeting it today (verified directly — the "Community" send path
+ *    an earlier pass assumed does not exist; Bunny's actual reminder/Top10
+ *    posts go to the incoming channel, covered above). Requiring
+ *    `canSendMessages` here would be exactly the speculative permission
+ *    requirement the correction round explicitly forbids. Existence-only,
+ *    unless a real Bunny consumer is found in a future pass — do not
+ *    reintroduce this requirement without a fresh, cited source.
  */
-const CHANNEL_SECTIONS = new Set(["incomingChannel", "heroChannel", "communityChannel"]);
+const REQUIRED_INCOMING_CHANNEL_PERMISSIONS: ReadonlyArray<{
+  readonly key: "canViewChannel" | "canReadHistory" | "canSendMessages";
+}> = [{ key: "canViewChannel" }, { key: "canReadHistory" }, { key: "canSendMessages" }];
 
-async function verifyChannelExistsOrThrow(
+const CHANNEL_SECTIONS = new Set<ChannelSection>(["incomingChannel", "heroChannel", "communityChannel"]);
+
+async function verifyChannelSaveOrThrow(
   config: AppConfig,
   guildId: string,
+  section: ChannelSection,
   channelId: string,
 ): Promise<void> {
   const result = await fetchGuildChannelCatalog(config, guildId);
@@ -71,12 +100,26 @@ async function verifyChannelExistsOrThrow(
       `onboarding: could not verify channel ${channelId} against Bunny's live catalog for guild ${guildId} (${result.reason}) — refusing to accept an unverified channel id`,
     );
   }
-  if (!result.channels.some((c) => c.id === channelId)) {
+  const channel: BunnyChannel | undefined = result.channels.find((c) => c.id === channelId);
+  if (!channel) {
     throw new OnboardingRejectedError(
       "CHANNEL_NOT_FOUND",
       `onboarding: channel ${channelId} does not exist in guild ${guildId}'s live Bunny channel catalog`,
     );
   }
+  if (section === "incomingChannel") {
+    const missing = REQUIRED_INCOMING_CHANNEL_PERMISSIONS.filter(({ key }) => !channel[key]).map(
+      ({ key }) => key,
+    );
+    if (missing.length > 0) {
+      throw new OnboardingRejectedError(
+        "CHANNEL_PERMISSIONS_MISSING",
+        `onboarding: channel ${channelId} is missing required Bunny permission(s) for incomingChannel: ${missing.join(", ")}`,
+      );
+    }
+  }
+  // heroChannel/communityChannel: existence-only, per this function's own
+  // doc comment — no permission bit is required for either today.
 }
 
 // Step 10 external-review correction round, Section 14: this used to be its
@@ -114,7 +157,6 @@ async function buildResponse(db: Kysely<DB>, guildId: string): Promise<Onboardin
     { inAppEnabled?: boolean; discordDmEnabled?: boolean } | undefined;
   const adminRole = progress.sections.adminRolePolicy?.data as
     { adminRoleDiscordId?: string | null } | undefined;
-  const bunnyPermissions = progress.sections.bunnyPermissions?.data as { acknowledged?: boolean } | undefined;
 
   return {
     guildId,
@@ -137,13 +179,84 @@ async function buildResponse(db: Kysely<DB>, guildId: string): Promise<Onboardin
       notificationsInAppEnabled: notifications?.inAppEnabled ?? null,
       notificationsDiscordDmEnabled: notifications?.discordDmEnabled ?? null,
       adminRoleDiscordId: adminRole?.adminRoleDiscordId ?? null,
-      bunnyPermissionsAcknowledged: bunnyPermissions?.acknowledged ?? false,
     },
   };
 }
 
 export async function getOnboardingState(db: Kysely<DB>, guildId: string): Promise<OnboardingStateResponse> {
   return buildResponse(db, guildId);
+}
+
+/** The 4 sections whose real destination is the SHARED `guild_configuration_versions` + sub-tables (never `dashboard_guild_notification_defaults`/`dashboard_guild_policy`, which are separate, non-versioned mirror-writes handled inline in `saveOnboardingSection` above). */
+const VERSIONED_SECTIONS = new Set(["incomingChannel", "heroChannel", "communityChannel", "seasonQuotas"]);
+
+/**
+ * Step 10 external-review FINAL correction, Section 1: the single shared
+ * save-time materialization path every VERSIONED section
+ * (incomingChannel/heroChannel/communityChannel/seasonQuotas) feeds — called
+ * from inside `saveOnboardingSection`'s transaction, AFTER
+ * `saveOnboardingSectionData` has already committed this save's own value
+ * into the buffer (read-your-own-writes within the same transaction/
+ * connection, so this always sees the just-written value).
+ *
+ * Readiness gate: a real DRAFT version becomes SQL-materializable the moment
+ * BOTH `incomingChannel` and `heroChannel` are known — those are the only
+ * versioned NOT NULL channel columns (`guild_config_bunny.incoming_channel_id`,
+ * `guild_config_selfbot.herowarbot_channel_id`); `communityChannel` is
+ * nullable and `seasonQuotas` already has canonical platform defaults, so
+ * neither blocks materialization. Before that point, the buffer remains
+ * legitimately transient (this function is a safe, cheap no-op) — this is
+ * NOT the same gate as the minimum-checklist gate `request-activation` still
+ * separately enforces (incoming + hero + a SAVED seasonQuotas section): a
+ * DRAFT can exist and be genuinely valid SQL before the guild is eligible to
+ * request activation.
+ *
+ * Once ready: reuses `materializeDraftConfigVersion` (already handles
+ * "create the first version" vs. "rotate onto a new draft if the current one
+ * is immutable" vs. "update the existing mutable draft in place" uniformly,
+ * and is itself a safe no-op if the freshly computed checksum already
+ * matches the current draft's stored one — see its own doc comment) exactly
+ * the same way `request-activation`'s own defensive call does. On a normal
+ * completed onboarding, request-activation will therefore usually find an
+ * already-materialized, byte-identical current DRAFT rather than being the
+ * first point where channel/quota data becomes real SQL.
+ */
+async function materializeVersionedOnboardingConfigIfReady(
+  db: Executor,
+  params: { readonly guildId: string; readonly authorDiscordId: string },
+): Promise<void> {
+  const progress = await getOnboardingProgressOrEmpty(db, params.guildId);
+  const incomingKnown = Boolean(
+    (progress.sections.incomingChannel?.data as { channelId?: string } | undefined)?.channelId,
+  );
+  const heroKnown = Boolean(
+    (progress.sections.heroChannel?.data as { channelId?: string } | undefined)?.channelId,
+  );
+  if (!incomingKnown || !heroKnown) {
+    return;
+  }
+  const currentDraftIsImmutable =
+    progress.draftConfigVersionId !== null
+      ? await isVersionImmutable(db, progress.draftConfigVersionId)
+      : false;
+  const { versionId, effectiveQuotas } = await materializeDraftConfigVersion(db, {
+    guildId: params.guildId,
+    authorDiscordId: params.authorDiscordId,
+    sections: progress.sections,
+    currentDraftVersionId: progress.draftConfigVersionId,
+    currentDraftIsImmutable,
+  });
+  // Separately: an eligible current season, if any, gets its own
+  // guild_season_plans row created-or-updated with these same effective
+  // values. If NO eligible season exists, this is a deliberate no-op — the
+  // nb_* values just materialized above already durably hold the effective
+  // quota as this guild's per-guild default, to be consumed whenever a
+  // future season plan is created.
+  await materializeSeasonPlanForOpenSeasonIfAny(db, {
+    guildId: params.guildId,
+    quotas: effectiveQuotas,
+    materializedVersionId: versionId,
+  });
 }
 
 export async function saveOnboardingSection(
@@ -158,15 +271,21 @@ export async function saveOnboardingSection(
     readonly request: OnboardingSectionSaveRequest;
   },
 ): Promise<OnboardingStateResponse> {
-  // Step 10 correction round, Gap 2: live channel-existence check BEFORE the
-  // transaction below even opens (an outbound HTTP call to Bunny must never
-  // happen while holding a MySQL transaction open). `communityChannel`'s
-  // `channelId` is nullable (optional section) — `null` skips the check
-  // entirely, matching the existing "clear the community channel" save path.
-  if (CHANNEL_SECTIONS.has(params.request.section)) {
+  // Step 10 correction round, Gap 2 (+ FINAL correction, Section 2): live
+  // channel existence + required-permission check BEFORE the transaction
+  // below even opens (an outbound HTTP call to Bunny must never happen while
+  // holding a MySQL transaction open). `communityChannel`'s `channelId` is
+  // nullable (optional section) — `null` skips the check entirely, matching
+  // the existing "clear the community channel" save path.
+  if (CHANNEL_SECTIONS.has(params.request.section as ChannelSection)) {
     const channelId = (params.request.data as { channelId: string | null }).channelId;
     if (channelId !== null) {
-      await verifyChannelExistsOrThrow(config, params.guildId, channelId);
+      await verifyChannelSaveOrThrow(
+        config,
+        params.guildId,
+        params.request.section as ChannelSection,
+        channelId,
+      );
     }
   }
 
@@ -248,62 +367,19 @@ export async function saveOnboardingSection(
         });
       }
 
-      // Step 10 external-review correction round, Sections 6/9: "Season &
-      // quotas" materializes into the REAL `guild_config_selfbot.nb_*`
-      // columns immediately on save — but ONLY once BOTH `incomingChannel`
-      // and `heroChannel` are already known in the buffer (whether from an
-      // earlier save, or this very save happens to complete the pair —
-      // doesn't matter which, `materializeDraftConfigVersion` itself
-      // already handles "create the first version" vs. "rotate/update an
-      // existing one" uniformly), because `guild_config_bunny`/
-      // `guild_config_selfbot`'s NOT NULL channel columns cannot be validly
-      // populated until both are known. If not yet both known, the value
-      // simply stays in the `sections_json` buffer for now (this section's
-      // real destination genuinely is NOT YET determinable) —
-      // `materializeDraftConfigVersion`'s own request-activation-time call
-      // already re-applies whatever is in the buffer once the checklist
-      // requires both channels to be known, so nothing here is ever lost,
-      // only deferred exactly as far as the ordering constraint requires.
-      // ** Documented scope limitation **: this does NOT generalize
-      // immediate materialization to the CHANNEL sections themselves (they
-      // still materialize only at request-activation, unchanged) — that
-      // broader change was judged too large/risky to make safely within
-      // this correction round's remaining scope and is flagged for a
-      // follow-up pass.
-      if (params.request.section === "seasonQuotas") {
-        const progress = await getOnboardingProgressOrEmpty(trx, params.guildId);
-        const incomingKnown = Boolean(
-          (progress.sections.incomingChannel?.data as { channelId?: string } | undefined)?.channelId,
-        );
-        const heroKnown = Boolean(
-          (progress.sections.heroChannel?.data as { channelId?: string } | undefined)?.channelId,
-        );
-        if (incomingKnown && heroKnown) {
-          const currentDraftIsImmutable =
-            progress.draftConfigVersionId !== null
-              ? await isVersionImmutable(trx, progress.draftConfigVersionId)
-              : false;
-          const { versionId, effectiveQuotas } = await materializeDraftConfigVersion(trx, {
-            guildId: params.guildId,
-            authorDiscordId: params.actorDiscordId,
-            sections: progress.sections,
-            currentDraftVersionId: progress.draftConfigVersionId,
-            currentDraftIsImmutable,
-          });
-          // Separately: an eligible current season, if any, gets its own
-          // guild_season_plans row created-or-updated with these same
-          // effective values. If NO eligible season exists, this is a
-          // deliberate no-op — the nb_* values just materialized above
-          // already durably hold the effective quota as this guild's
-          // per-guild default, to be consumed whenever a future season plan
-          // is created (see `seasonPlansRepo.ts`'s own doc comment and the
-          // accompanying regression test proving this exact behavior).
-          await materializeSeasonPlanForOpenSeasonIfAny(trx, {
-            guildId: params.guildId,
-            quotas: effectiveQuotas,
-            materializedVersionId: versionId,
-          });
-        }
+      // Step 10 external-review FINAL correction, Section 1: ONE central
+      // save-time materialization path for every VERSIONED section
+      // (incomingChannel/heroChannel/communityChannel/seasonQuotas) — an
+      // earlier pass only ran this after a `seasonQuotas` save, leaving
+      // channel sections materializing solely at request-activation time
+      // (a real, disclosed gap this correction closes). See
+      // `materializeVersionedOnboardingConfigIfReady`'s own doc comment for
+      // the exact readiness/rotation semantics.
+      if (VERSIONED_SECTIONS.has(params.request.section)) {
+        await materializeVersionedOnboardingConfigIfReady(trx, {
+          guildId: params.guildId,
+          authorDiscordId: params.actorDiscordId,
+        });
       }
     });
   } catch (err) {

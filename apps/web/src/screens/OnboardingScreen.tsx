@@ -119,20 +119,26 @@ const SECTION_TITLE_KEY: Record<OnboardingSectionKey, string> = {
 
 /**
  * Step 10 external-review Phase 2, Section 12 — "Bunny & permissions"
- * becomes a LIVE status/checklist. Replaces the prior manual attestation
- * checkbox (`bunnyPermissionsAcknowledged`, still accepted by the save API
- * for backward compatibility but no longer written by this screen) as the
- * SOURCE of this section's completion: completion is now derived from the
- * real, live per-channel permission facts `useOnboardingChannelCatalog`
+ * becomes a LIVE status/checklist. **FINAL correction, Section 4**: the
+ * prior manual attestation checkbox (`{section: "bunnyPermissions", data:
+ * {acknowledged}}`) has been removed ENTIRELY — it is no longer accepted by
+ * the save API at all (not even for backward compatibility; this branch was
+ * unpublished). `bunnyPermissions` remains one of the 7 display/checklist
+ * section keys, but it is not user-savable — completion is derived SOLELY
+ * from the real, live per-channel permission facts `useOnboardingChannelCatalog`
  * already fetches, at read time, every time — never a stale stored flag a
  * Guild Admin could tick once and then let drift from reality (e.g. after
- * later revoking Bunny's role in Discord).
+ * later revoking Bunny's role in Discord). There is exactly one canonical
+ * meaning of "bunnyPermissions completed" now: this live computation.
  *
  * Required checks per channel role, verified directly against Bunny's real
- * runtime code (not assumed) before finalizing:
+ * runtime code (not assumed) before finalizing — Step 10 FINAL external
+ * review correction, Section 3: an earlier pass required
+ * `canSendMessages` on the Community channel too, which the reviewer
+ * correctly flagged as speculative (see the correction below):
  *  - Incoming channel: `canViewChannel` + `canReadHistory` (OCR ingestion
  *    reads message history/attachments there) AND `canSendMessages` — this
- *    third requirement was added after re-reading `02_NEW_BOT_OCR`'s real
+ *    third requirement is grounded in `02_NEW_BOT_OCR`'s real
  *    `cogs/y_tasks.py`: the monthly Reminder/Top10-publish messages are
  *    posted to the SAME incoming channel (via
  *    `_approved_guild_channel_pairs`/`get_channel_incoming`), not a
@@ -140,16 +146,21 @@ const SECTION_TITLE_KEY: Record<OnboardingSectionKey, string> = {
  *    would show "complete" for a guild where Bunny genuinely cannot post
  *    its monthly publish messages.
  *  - Community channel (optional — only checked if configured):
- *    `canViewChannel` + `canSendMessages`. ** Disclosed judgment call **:
- *    directly reading Bunny's current code shows ZERO real `.send()` calls
- *    target `community_channel_id` today (it has no live consumer yet,
- *    unlike the incoming channel) — this check is intentionally kept
- *    anyway because `guild_config_selfbot.community_channel_id`/
- *    `community_updates_enabled` are real, checksummed columns of this
- *    same Step-10 config model (not speculative schema), so verifying the
- *    permission ahead of that feature shipping is reasonable UX, not a
- *    fabricated requirement. Flagged here in case product wants this
- *    dropped until Bunny actually posts there.
+ *    EXISTENCE ONLY, no permission bit required. **Corrected 2026-08-27**:
+ *    a prior pass additionally required `canSendMessages` here, reasoned as
+ *    "reasonable UX ahead of a feature shipping" — external review rejected
+ *    that as exactly the speculative permission requirement this step's own
+ *    rules forbid (`guild_config_selfbot.community_channel_id` is a real
+ *    checksummed column, but that is not proof Bunny currently needs
+ *    `SEND_MESSAGES` there — Bunny's live code has ZERO real `.send()` call
+ *    targeting it today, confirmed by direct inspection). Do not
+ *    reintroduce a permission requirement here without citing a real Bunny
+ *    consumer.
+ *  - Hero channel is intentionally absent from this checklist entirely — it
+ *    is a Self-bot-only field (Bunny's channel catalog is merely a
+ *    convenient shared channel-id source for its picker); Bunny has no
+ *    operational need for any permission there, so it is never presented as
+ *    a "Bunny permission" requirement.
  */
 export interface BunnyPermissionCheck {
   readonly key: "viewChannel" | "readHistory" | "sendMessages";
@@ -196,14 +207,13 @@ export function computeBunnyPermissionsStatus(
   }
   if (communityChannelId !== null) {
     const channel = catalog.channels.find((c) => c.id === communityChannelId);
+    // Existence-only (see this function's doc comment) — no permission
+    // check for Community, since Bunny has no real current consumer of it.
     channels.push({
       role: "community",
       channelId: communityChannelId,
       found: channel !== undefined,
-      checks: [
-        { key: "viewChannel", pass: channel?.canViewChannel ?? false },
-        { key: "sendMessages", pass: channel?.canSendMessages ?? false },
-      ],
+      checks: [],
     });
   }
   const complete =
@@ -291,6 +301,16 @@ function OnboardingContent({
     showToast({ tone: "success", messageKey: "onboarding.toast.sectionSaved" });
   }
 
+  // Step 10 FINAL correction round, Section 6: a channel save rejected by
+  // the server (e.g. CHANNEL_PERMISSIONS_MISSING) previously failed
+  // silently — the picker just reverted to its last-saved value with no
+  // explanation. Every channel section now surfaces the real rejection,
+  // same pattern as the Request Activation button's own onError below.
+  function announceSaveFailed(err: unknown): void {
+    const key = err instanceof ApiError && err.body ? err.body.message_key : "errors.server";
+    showToast({ tone: "error", messageKey: key });
+  }
+
   function scrollToSection(key: OnboardingSectionKey): void {
     document
       .getElementById(`onboarding-section-${key}`)
@@ -364,11 +384,13 @@ function OnboardingContent({
             catalog={channelCatalogQuery.data}
             catalogLoading={channelCatalogQuery.isPending}
             onSave={(channelId) => {
-              if (!channelId) return;
-              saveSection.mutate(
-                { section: "incomingChannel", data: { channelId } },
-                { onSuccess: announceSaved },
-              );
+              if (!channelId) return Promise.resolve();
+              return saveSection
+                .mutateAsync({ section: "incomingChannel", data: { channelId } })
+                .then(announceSaved, (err: unknown) => {
+                  announceSaveFailed(err);
+                  throw err;
+                });
             }}
           />
           <ChannelPickerSection
@@ -378,11 +400,13 @@ function OnboardingContent({
             catalog={channelCatalogQuery.data}
             catalogLoading={channelCatalogQuery.isPending}
             onSave={(channelId) => {
-              if (!channelId) return;
-              saveSection.mutate(
-                { section: "heroChannel", data: { channelId } },
-                { onSuccess: announceSaved },
-              );
+              if (!channelId) return Promise.resolve();
+              return saveSection
+                .mutateAsync({ section: "heroChannel", data: { channelId } })
+                .then(announceSaved, (err: unknown) => {
+                  announceSaveFailed(err);
+                  throw err;
+                });
             }}
           />
           <ChannelPickerSection
@@ -392,10 +416,12 @@ function OnboardingContent({
             catalog={channelCatalogQuery.data}
             catalogLoading={channelCatalogQuery.isPending}
             onSave={(channelId) => {
-              saveSection.mutate(
-                { section: "communityChannel", data: { channelId } },
-                { onSuccess: announceSaved },
-              );
+              return saveSection
+                .mutateAsync({ section: "communityChannel", data: { channelId } })
+                .then(announceSaved, (err: unknown) => {
+                  announceSaveFailed(err);
+                  throw err;
+                });
             }}
           />
           <SeasonQuotasSection
@@ -566,6 +592,16 @@ function BunnyPermissionChannelCard({
         <Typography role="alert" color="error.main" variant="body2">
           {t("onboarding.sections.bunnyPermissions.channelNotFound")}
         </Typography>
+      ) : channel.checks.length === 0 ? (
+        // Existence-only channel (Community — see computeBunnyPermissionsStatus's
+        // doc comment for why no permission bit applies here).
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          data-testid={`bunnyPermissions-${channel.role}-existsOnly`}
+        >
+          {t("onboarding.sections.bunnyPermissions.existsOnly")}
+        </Typography>
       ) : (
         <List dense sx={{ padding: 0 }}>
           {channel.checks.map((check) => (
@@ -651,7 +687,13 @@ export function ChannelPickerSection({
   required: boolean;
   catalog: OnboardingChannelCatalogResponse | undefined;
   catalogLoading: boolean;
-  onSave: (channelId: string | null) => void;
+  // Returns a promise so a REJECTED save (e.g. CHANNEL_PERMISSIONS_MISSING)
+  // can revert the optimistic `draft` below back to the last server-
+  // confirmed `value` — otherwise the picker would keep showing the
+  // rejected selection as if it had saved (Step 10 FINAL correction round,
+  // Section 6: proving an under-permissioned Incoming channel is REJECTED
+  // requires the picker to visibly not adopt it).
+  onSave: (channelId: string | null) => Promise<unknown>;
 }): React.JSX.Element {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(value ?? "");
@@ -697,8 +739,11 @@ export function ChannelPickerSection({
         helperText={disabled && !catalogLoading ? t("onboarding.channelPicker.unavailableHint") : undefined}
         onChange={(e) => {
           const next = e.target.value;
+          const previous = value ?? "";
           setDraft(next);
-          onSave(next.length > 0 ? next : null);
+          onSave(next.length > 0 ? next : null).catch(() => {
+            setDraft(previous);
+          });
         }}
       >
         {!required ? (

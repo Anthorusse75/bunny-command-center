@@ -889,13 +889,15 @@ export async function materializeDraftConfigVersion(
   }
 
   // `guild_config_bunny`/`guild_config_selfbot` are written with the FULL
-  // merged row on every call (carry-forward + this call's touched
-  // fields) — on a genuine fresh INSERT (needsNewVersion branch above)
-  // every column physically lands in the new row; on a mutate-in-place
-  // collision (`onDuplicateKeyUpdate`), only the columns explicitly listed
-  // there are actually applied — `merged`'s OTHER fields are byte-identical
-  // to what that row already holds (loaded from this SAME versionId just
-  // above), so supplying the full object in `.values()` is always safe.
+  // merged row on every call (carry-forward + this call's touched fields).
+  // Materialization can now be triggered independently by any of the 4
+  // versioned onboarding sections (incoming/hero/community/quotas), in any
+  // order, against the SAME draft row — so a mutate-in-place collision
+  // (`onDuplicateKeyUpdate`) must update every column `.values()` sets, not
+  // just the field the triggering section owns. Updating only a subset
+  // silently drops changes made by a later save of a DIFFERENT section
+  // (e.g. a quota override saved after channels already materialized a
+  // draft with default quotas never reaching the row).
   await db
     .insertInto("guild_config_bunny")
     .values({
@@ -915,7 +917,22 @@ export async function materializeDraftConfigVersion(
       max_attachment_bytes: bindBigIntUnsigned(merged.bunny.maxAttachmentBytes),
       allowed_mime_json: sql`CAST(${JSON.stringify(merged.bunny.allowedMime)} AS JSON)`,
     })
-    .onDuplicateKeyUpdate({ incoming_channel_id: bindBigIntUnsigned(merged.bunny.incomingChannelId) })
+    .onDuplicateKeyUpdate({
+      incoming_channel_id: bindBigIntUnsigned(merged.bunny.incomingChannelId),
+      processed_channel_id:
+        merged.bunny.processedChannelId === null ? null : bindBigIntUnsigned(merged.bunny.processedChannelId),
+      ingestion_enabled: merged.bunny.ingestionEnabled ? 1 : 0,
+      source_delete_policy: merged.bunny.sourceDeletePolicy,
+      save_processed_copy: merged.bunny.saveProcessedCopy ? 1 : 0,
+      ocr_engine: merged.bunny.ocrEngine,
+      ocr_profile: merged.bunny.ocrProfile,
+      per_guild_concurrency: merged.bunny.perGuildConcurrency,
+      max_ocr_attempts: merged.bunny.maxOcrAttempts,
+      retry_base_seconds: merged.bunny.retryBaseSeconds,
+      catchup_interval_seconds: merged.bunny.catchupIntervalSeconds,
+      max_attachment_bytes: bindBigIntUnsigned(merged.bunny.maxAttachmentBytes),
+      allowed_mime_json: sql`CAST(${JSON.stringify(merged.bunny.allowedMime)} AS JSON)`,
+    })
     .execute();
 
   await db
@@ -950,10 +967,30 @@ export async function materializeDraftConfigVersion(
     })
     .onDuplicateKeyUpdate({
       herowarbot_channel_id: bindBigIntUnsigned(merged.selfbot.herowarbotChannelId),
+      screenshots_channel_id:
+        merged.selfbot.screenshotsChannelId === null
+          ? null
+          : bindBigIntUnsigned(merged.selfbot.screenshotsChannelId),
       community_channel_id:
         merged.selfbot.communityChannelId === null
           ? null
           : bindBigIntUnsigned(merged.selfbot.communityChannelId),
+      automation_enabled: merged.selfbot.automationEnabled ? 1 : 0,
+      profile_enabled: merged.selfbot.profileEnabled ? 1 : 0,
+      profile_timeout_seconds: merged.selfbot.profileTimeoutSeconds,
+      profile_stale_seconds: merged.selfbot.profileStaleSeconds,
+      hero_response_timeout_seconds: merged.selfbot.heroResponseTimeoutSeconds,
+      max_delivery_attempts: merged.selfbot.maxDeliveryAttempts,
+      community_updates_enabled: merged.selfbot.communityUpdatesEnabled ? 1 : 0,
+      everyone_mentions_enabled: merged.selfbot.everyoneMentionsEnabled ? 1 : 0,
+      reminder_enabled: merged.selfbot.reminderEnabled ? 1 : 0,
+      nb_gc_hero: merged.selfbot.nbGcHero,
+      nb_gc_titan: merged.selfbot.nbGcTitan,
+      nb_hol: merged.selfbot.nbHol,
+      nb_hero: merged.selfbot.nbHero,
+      nb_titan: merged.selfbot.nbTitan,
+      auto_profile_interval_seconds: merged.selfbot.autoProfileIntervalSeconds,
+      auto_max_per_cycle: merged.selfbot.autoMaxPerCycle,
     })
     .execute();
 

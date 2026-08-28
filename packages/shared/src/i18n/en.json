@@ -124,6 +124,7 @@
       "checklistNotPassed": "Complete the incoming channel, Hero channel, and Season & Quotas section before requesting activation.",
       "channelVerificationFailed": "We couldn't verify that channel with Bunny right now. Please try again.",
       "channelNotFound": "That channel doesn't exist in this server anymore. Pick another one.",
+      "channelPermissionsMissing": "Bunny needs View Channel, Read Message History, and Send Messages in this channel to post reminders and Top 10 updates. Adjust its permissions and try again.",
       "quotaOverrideRequired": "Accept the platform defaults or enter at least one custom quota."
     },
     "notFoundPage": {
@@ -378,6 +379,7 @@
         "degraded": "We couldn't check Bunny's live permissions right now. Try again shortly.",
         "noChannelsConfigured": "Configure the incoming channel above to see Bunny's live permission status.",
         "channelNotFound": "This channel could no longer be found in Bunny's live channel list.",
+        "existsOnly": "This channel exists — no additional Bunny permission is required for it today.",
         "channelRole": {
           "incoming": "Incoming channel",
           "community": "Community channel"

@@ -2035,7 +2035,12 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       await insertOpenSeason(seasonId, "SEA0001", "PPT0001");
       const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
 
-      // First save: creates the draft version + a NEW guild_season_plans row.
+      // First save: incoming + hero both known already materializes the
+      // draft (Section 1 of the final correction — materialization is no
+      // longer gated behind quotas) AND, per that same correction, season
+      // plan materialization runs on that channel-completion trigger too —
+      // so the guild_season_plans row is created here with default quotas,
+      // then UPDATEd (not re-created) once the quota override is saved.
       await patchOnboarding(admin.cookie, guildId, {
         section: "incomingChannel",
         data: { channelId: "500000000000000001" },
@@ -2062,7 +2067,10 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       };
       expect(firstPlan.quota_gc_hero).toBe(1000);
       expect(firstPlan.operational_state).toBe("ACTIVE");
-      expect(firstPlan.row_version).toBe(1);
+      // row_version 2: created on the hero-save's channel-completion
+      // materialization (default quotas), then updated in place when the
+      // seasonQuotas override arrived — never a second INSERT.
+      expect(firstPlan.row_version).toBe(2);
 
       // A paired guild_season_progress row exists, all counters 0.
       const [progressRows] = await pool.query<mysql.RowDataPacket[]>(
@@ -2088,7 +2096,357 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       const secondPlan = secondPlanRows[0] as { plan_id: string; quota_gc_hero: number; row_version: number };
       expect(secondPlan.plan_id).toBe(firstPlan.plan_id);
       expect(secondPlan.quota_gc_hero).toBe(1050);
-      expect(secondPlan.row_version).toBe(2);
+      expect(secondPlan.row_version).toBe(3);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Step 10 FINAL EXTERNAL REVALIDATION CORRECTION, Section 5 — the
+  // materialization refactor (Blocker 1: ALL FOUR versioned sections feed
+  // ONE shared `materializeVersionedOnboardingConfigIfReady` helper, gated
+  // on incoming+hero both known) and the permission-aware channel save
+  // validation (Blocker 2) each get their own focused real-MySQL proof
+  // here, distinct from the pre-existing broader-flow tests above.
+  // -----------------------------------------------------------------------
+  describe("FINAL correction, Section 5 — draft materialization & permission validation", () => {
+    async function draftVersionId(guildId: string): Promise<number | null> {
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT draft_config_version_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+        [guildId],
+      );
+      if (rows.length === 0) return null;
+      return (rows[0] as { draft_config_version_id: number | null }).draft_config_version_id;
+    }
+
+    async function versionRow(versionId: number): Promise<{ state: string; checksum: Buffer } | undefined> {
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT state, checksum FROM guild_configuration_versions WHERE id = ?",
+        [versionId],
+      );
+      return rows[0] as { state: string; checksum: Buffer } | undefined;
+    }
+
+    async function nbGcHero(versionId: number): Promise<number> {
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT nb_gc_hero FROM guild_config_selfbot WHERE configuration_version_id = ?",
+        [versionId],
+      );
+      return (rows[0] as { nb_gc_hero: number }).nb_gc_hero;
+    }
+
+    async function incomingChannelOf(versionId: number): Promise<string> {
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT CAST(incoming_channel_id AS CHAR) as incomingChannelId FROM guild_config_bunny WHERE configuration_version_id = ?",
+        [versionId],
+      );
+      return (rows[0] as { incomingChannelId: string }).incomingChannelId;
+    }
+
+    async function heroChannelOf(versionId: number): Promise<string> {
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT CAST(herowarbot_channel_id AS CHAR) as heroChannelId FROM guild_config_selfbot WHERE configuration_version_id = ?",
+        [versionId],
+      );
+      return (rows[0] as { heroChannelId: string }).heroChannelId;
+    }
+
+    // -- 5.1 -----------------------------------------------------------
+    it("5.1: a DRAFT only materializes once the SECOND required channel (hero, after incoming) arrives — quota-first-then-channels and incoming-first-then-hero both land on the same rule", async () => {
+      // Case: quota-first-then-channels — saving seasonQuotas alone, with
+      // NEITHER channel known yet, must NOT materialize a draft (canonical
+      // defaults exist for quotas, but the readiness gate is incoming+hero,
+      // never quotas).
+      const guildIdQuotaFirst = "600000000000000040";
+      await seedGuild(guildIdQuotaFirst);
+      const adminQuotaFirst = await makeSession([{ id: guildIdQuotaFirst, owner: true, permissions: "0" }]);
+      expect(
+        (
+          await patchOnboarding(adminQuotaFirst.cookie, guildIdQuotaFirst, {
+            section: "seasonQuotas",
+            data: { acceptPlatformDefaults: true, quotaOverrides: {} },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(await draftVersionId(guildIdQuotaFirst)).toBeNull();
+
+      // Case: incoming-first-then-hero — incoming alone must not
+      // materialize either (only ONE of the two required channels known).
+      const guildId = "600000000000000041";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "incomingChannel",
+            data: { channelId: "500000000000000001" },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(await draftVersionId(guildId)).toBeNull();
+
+      // The moment hero (the SECOND required channel) is saved, a real
+      // DRAFT materializes immediately — no request-activation needed.
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "heroChannel",
+            data: { channelId: "500000000000000042" },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const versionId = await draftVersionId(guildId);
+      expect(versionId).not.toBeNull();
+      const row = await versionRow(versionId!);
+      expect(row?.state).toBe("DRAFT");
+      expect(await incomingChannelOf(versionId!)).toBe("500000000000000001");
+      expect(await heroChannelOf(versionId!)).toBe("500000000000000042");
+      // Quotas were never touched for this guild — canonical defaults.
+      expect(await nbGcHero(versionId!)).toBe(912);
+    });
+
+    // -- 5.2 -------------------------------------------------------------
+    it("5.2: editing a channel while an activation request is PENDING creates a new draft B immediately, without touching submitted request A's version", async () => {
+      const guildId = "600000000000000043";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      const superadmin = await makeSession(
+        [{ id: guildId, owner: false, permissions: "0" }],
+        TEST_SUPERADMIN_DISCORD_ID,
+      );
+
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000044");
+      const versionA = await draftVersionId(guildId);
+      expect(versionA).not.toBeNull();
+
+      const requestRes = await fastify.inject({
+        method: "POST",
+        url: `/api/guilds/${guildId}/request-activation`,
+        headers: csrf(admin.cookie),
+      });
+      expect(requestRes.statusCode).toBe(200);
+      const { requestId } = activationCreatedBody(requestRes).data;
+
+      // Edit a channel WHILE PENDING: must create draft B immediately
+      // (channel-completion materialization fires on every versioned
+      // section save, not just at request-activation time).
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "incomingChannel",
+            data: { channelId: "500000000000000045" },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const versionB = await draftVersionId(guildId);
+      expect(versionB).not.toBeNull();
+      expect(versionB).not.toBe(versionA);
+
+      // Request A's submitted version is untouched: same id, same content.
+      const [requestRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT submitted_config_version_id, state FROM dashboard_guild_activation_requests WHERE request_id = ?",
+        [requestId],
+      );
+      const requestRow = requestRows[0] as { submitted_config_version_id: number; state: string };
+      expect(requestRow.submitted_config_version_id).toBe(versionA);
+      expect(requestRow.state).toBe("PENDING");
+      expect(await incomingChannelOf(versionA!)).toBe("500000000000000001");
+
+      // Draft B carries the edit.
+      expect(await incomingChannelOf(versionB!)).toBe("500000000000000045");
+
+      // Approval activates ONLY request A's (original) version.
+      const approveRes = await fastify.inject({
+        method: "POST",
+        url: `/api/admin/activation-requests/${requestId}/approve`,
+        headers: csrf(superadmin.cookie),
+      });
+      expect(approveRes.statusCode).toBe(200);
+      const [guildRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT active_config_version_id FROM guilds WHERE guild_id = ?",
+        [guildId],
+      );
+      expect((guildRows[0] as { active_config_version_id: number }).active_config_version_id).toBe(versionA);
+    });
+
+    // -- 5.3 -------------------------------------------------------------
+    it("5.3: editing a channel once the guild is ACTIVE materializes a brand-new draft immediately, never mutating the ACTIVE version", async () => {
+      const guildId = "600000000000000046";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+      const superadmin = await makeSession(
+        [{ id: guildId, owner: false, permissions: "0" }],
+        TEST_SUPERADMIN_DISCORD_ID,
+      );
+
+      await saveMinimumChecklist(admin.cookie, guildId, "500000000000000047");
+      const { requestId } = activationCreatedBody(
+        await fastify.inject({
+          method: "POST",
+          url: `/api/guilds/${guildId}/request-activation`,
+          headers: csrf(admin.cookie),
+        }),
+      ).data;
+      await fastify.inject({
+        method: "POST",
+        url: `/api/admin/activation-requests/${requestId}/approve`,
+        headers: csrf(superadmin.cookie),
+      });
+      const [activeRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT active_config_version_id FROM guilds WHERE guild_id = ?",
+        [guildId],
+      );
+      const activeVersionId = (activeRows[0] as { active_config_version_id: number })
+        .active_config_version_id;
+      // The onboarding progress pointer still references that version (it
+      // was never re-pointed at "no draft") — but it is no longer a real
+      // DRAFT (`state` is now ACTIVE), which is exactly what makes the next
+      // edit below immutable and forces a NEW version rather than mutating
+      // the ACTIVE row in place.
+      expect(await draftVersionId(guildId)).toBe(activeVersionId);
+      expect((await versionRow(activeVersionId))?.state).toBe("ACTIVE");
+
+      // Editing a channel now (guild is ACTIVE) must immediately
+      // materialize a NEW draft, never mutate the ACTIVE row.
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "heroChannel",
+            data: { channelId: "500000000000000048" },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const newDraftId = await draftVersionId(guildId);
+      expect(newDraftId).not.toBeNull();
+      expect(newDraftId).not.toBe(activeVersionId);
+      expect(await heroChannelOf(newDraftId!)).toBe("500000000000000048");
+      // The ACTIVE version's own row is untouched.
+      expect(await heroChannelOf(activeVersionId)).toBe("500000000000000047");
+      const [stillActiveRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT active_config_version_id FROM guilds WHERE guild_id = ?",
+        [guildId],
+      );
+      expect((stillActiveRows[0] as { active_config_version_id: number }).active_config_version_id).toBe(
+        activeVersionId,
+      );
+    });
+
+    // -- 5.4 -------------------------------------------------------------
+    it("5.4: repeated saves against a still-mutable DRAFT update the SAME version row in place — never a new version per save", async () => {
+      const guildId = "600000000000000049";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "incomingChannel",
+        data: { channelId: "500000000000000001" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000050" },
+      });
+      const firstVersionId = await draftVersionId(guildId);
+      expect(firstVersionId).not.toBeNull();
+
+      // Two further saves against the same still-DRAFT (never submitted)
+      // version — each must mutate that SAME row, not create new ones.
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000051" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "seasonQuotas",
+        data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 925 } },
+      });
+
+      const secondVersionId = await draftVersionId(guildId);
+      expect(secondVersionId).toBe(firstVersionId);
+      expect(await heroChannelOf(secondVersionId!)).toBe("500000000000000051");
+      expect(await nbGcHero(secondVersionId!)).toBe(925);
+
+      const [countRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT COUNT(*) as c FROM guild_configuration_versions WHERE guild_id = ?",
+        [guildId],
+      );
+      expect((countRows[0] as { c: number }).c).toBe(1);
+    });
+
+    // -- 5.5 -------------------------------------------------------------
+    it("5.5: incoming channel save is rejected when missing a required Bunny permission; hero and community remain existence-only", async () => {
+      const guildId = "600000000000000052";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      bunny.state.channelsByGuild.set(guildId, [
+        {
+          id: "500000000000000053",
+          name: "no-send",
+          position: 1,
+          type: "text",
+          can_read_history: true,
+          can_view_channel: true,
+          can_send_messages: false,
+        },
+        {
+          id: "500000000000000054",
+          name: "no-perms-at-all",
+          position: 2,
+          type: "text",
+          can_read_history: false,
+          can_view_channel: false,
+          can_send_messages: false,
+        },
+      ]);
+
+      // Incoming with a missing permission (canSendMessages) is rejected.
+      const rejectedRes = await patchOnboarding(admin.cookie, guildId, {
+        section: "incomingChannel",
+        data: { channelId: "500000000000000053" },
+      });
+      expect(rejectedRes.statusCode).toBe(400);
+      expect(errorBody(rejectedRes).error_code).toBe("CHANNEL_PERMISSIONS_MISSING");
+
+      // Hero channel with ZERO Bunny permissions still saves fine —
+      // existence-only, no Bunny permission requirement at all.
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "heroChannel",
+            data: { channelId: "500000000000000054" },
+          })
+        ).statusCode,
+      ).toBe(200);
+
+      // Community channel with ZERO Bunny permissions also saves fine —
+      // existence-only, the speculative SEND_MESSAGES requirement removed.
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "communityChannel",
+            data: { channelId: "500000000000000054" },
+          })
+        ).statusCode,
+      ).toBe(200);
+    });
+
+    // -- 5.6 -------------------------------------------------------------
+    it("5.6: the retired manual attestation section ('bunnyPermissions') PATCH now fails schema validation — no write path may store an acknowledged boolean", async () => {
+      const guildId = "600000000000000055";
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      const res = await patchOnboarding(admin.cookie, guildId, {
+        section: "bunnyPermissions",
+        data: { acknowledged: true },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(errorBody(res).error_code).toBe("VALIDATION_ERROR");
+
+      // No progress row was ever created by this rejected call.
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT guild_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+        [guildId],
+      );
+      expect(rows).toHaveLength(0);
     });
   });
 });

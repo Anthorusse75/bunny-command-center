@@ -8,7 +8,14 @@ export interface Catalog {
   app: { title: string };
   common: { status: Record<string, string>; nav: Record<string, string> };
   showcase: { title: string };
-  errors: { guildNotAccessible: { title: string }; forbiddenGuild: { title: string } };
+  errors: {
+    guildNotAccessible: { title: string };
+    forbiddenGuild: { title: string };
+    // Step 10 FINAL correction round, Section 6: proof that an
+    // under-permissioned Incoming channel save surfaces this exact
+    // real error toast, not a silent failure.
+    onboarding: { channelPermissionsMissing: string };
+  };
   // Step 10 external-review correction round, Phase 3 (onboarding.spec.ts).
   onboarding: {
     checklist: { heading: string };

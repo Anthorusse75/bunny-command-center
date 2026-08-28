@@ -134,6 +134,15 @@ async function sendServiceError(reply: FastifyReply, code: string): Promise<void
       errorCode: "CHANNEL_NOT_FOUND",
       messageKey: "errors.onboarding.channelNotFound",
     },
+    // Step 10 FINAL correction round, Blocker 2: the incoming channel must
+    // hold real Bunny permissions (it genuinely posts into it) — a channel
+    // that exists but lacks one of the required bits fails closed with its
+    // own typed code, distinct from "doesn't exist at all".
+    CHANNEL_PERMISSIONS_MISSING: {
+      status: 400,
+      errorCode: "CHANNEL_PERMISSIONS_MISSING",
+      messageKey: "errors.onboarding.channelPermissionsMissing",
+    },
     // Step 10 external-review correction round, Section 9: seasonQuotas
     // save-time validation — acceptPlatformDefaults=false with no explicit
     // override.

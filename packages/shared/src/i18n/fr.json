@@ -126,6 +126,7 @@
       "checklistNotPassed": "Complétez le salon entrant, le salon Hero, et la section Saison & Quotas avant de demander l'activation.",
       "channelVerificationFailed": "Impossible de vérifier ce salon auprès de Bunny pour le moment. Veuillez réessayer.",
       "channelNotFound": "Ce salon n'existe plus sur ce serveur. Choisissez-en un autre.",
+      "channelPermissionsMissing": "Bunny a besoin des permissions Voir le salon, Lire l'historique des messages et Envoyer des messages dans ce salon pour publier les rappels et le Top 10. Ajustez ses permissions et réessayez.",
       "quotaOverrideRequired": "Acceptez les valeurs par défaut de la plateforme ou saisissez au moins un quota personnalisé."
     },
     "notFoundPage": {
@@ -383,6 +384,7 @@
         "degraded": "Impossible de vérifier les permissions en temps réel de Bunny pour le moment. Réessayez sous peu.",
         "noChannelsConfigured": "Configurez le salon entrant ci-dessus pour voir le statut des permissions de Bunny en temps réel.",
         "channelNotFound": "Ce salon est introuvable dans la liste des salons en temps réel de Bunny.",
+        "existsOnly": "Ce salon existe — aucune permission Bunny supplémentaire n'est requise pour l'instant.",
         "channelRole": {
           "incoming": "Salon entrant",
           "community": "Salon communautaire"

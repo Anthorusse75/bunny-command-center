@@ -145,21 +145,117 @@ test.describe("Step 10 — full onboarding, request-activation, Superadmin revie
 
     // Incoming / Hero channel: real live pickers backed by the Bunny test
     // double (Phase 2) — no plain text input, exact snowflake ids.
-    await selectMuiOption(page, "incomingChannel-picker", "#test-channel-1");
-    await selectMuiOption(page, "heroChannel-picker", "#test-channel-2");
+    //
+    // Both saves are explicitly sequenced on their OWN PATCH response
+    // (matched by request body content, not just method+URL — every
+    // section PATCHes the same `/onboarding` URL, and earlier saves in
+    // this test, e.g. seasonQuotas/notifications, are still fire-and-forget
+    // above) for two reasons: (1) `selectMuiOption` itself only waits for
+    // the click, and the very next assertion below reads hero's save's
+    // materialization side effect directly from the database, so it must
+    // not race ahead of that specific request; (2) incoming must be fully
+    // COMMITTED before hero's save fires, since the server-side
+    // readiness gate reads a fresh snapshot of BOTH — two genuinely
+    // concurrent requests would race on which the server sees first.
+    await Promise.all([
+      page.waitForResponse(
+        (res) =>
+          res.url().includes("/onboarding") &&
+          res.request().method() === "PATCH" &&
+          (res.request().postData() ?? "").includes("incomingChannel"),
+      ),
+      selectMuiOption(page, "incomingChannel-picker", "#test-channel-1"),
+    ]);
+    await Promise.all([
+      page.waitForResponse(
+        (res) =>
+          res.url().includes("/onboarding") &&
+          res.request().method() === "PATCH" &&
+          (res.request().postData() ?? "").includes("heroChannel"),
+      ),
+      selectMuiOption(page, "heroChannel-picker", "#test-channel-2"),
+    ]);
+
+    // --- Step 10 FINAL correction round, Section 6, proof 1: a real DRAFT
+    // `guild_configuration_versions` row already exists right here — BOTH
+    // required channels are now known — well BEFORE Request Activation is
+    // ever clicked. This is the save-time materialization Blocker 1
+    // required (`materializeVersionedOnboardingConfigIfReady`), not the
+    // OLD request-activation-time-only behavior. ---
+    {
+      const draftCheckPool = mysql.createPool(DB_CONFIG);
+      try {
+        const [progressRows] = await draftCheckPool.query<mysql.RowDataPacket[]>(
+          "SELECT draft_config_version_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+          [gA],
+        );
+        const draftRow = progressRows[0] as { draft_config_version_id: number | null } | undefined;
+        expect(draftRow).toBeDefined();
+        expect(draftRow?.draft_config_version_id).not.toBeNull();
+
+        const [versionRows] = await draftCheckPool.query<mysql.RowDataPacket[]>(
+          "SELECT state FROM guild_configuration_versions WHERE id = ?",
+          [draftRow!.draft_config_version_id],
+        );
+        expect((versionRows[0] as { state: string } | undefined)?.state).toBe("DRAFT");
+      } finally {
+        await draftCheckPool.end();
+      }
+    }
+
+    // --- Step 10 FINAL correction round, Section 6, proof 3: an
+    // under-permissioned Incoming channel is REJECTED, never silently
+    // saved. Channel id 201 is the shared Bunny test double's own
+    // deterministic under-permissioned fixture (missing SEND_MESSAGES —
+    // see apps/api/test/helpers/bunnyInternalApiTestDouble.ts). ---
+    await selectMuiOption(page, "incomingChannel-picker", "#under-permissioned-channel");
+    const errorToast = page
+      .getByTestId("toast")
+      .filter({ hasText: en.errors.onboarding.channelPermissionsMissing });
+    await expect(errorToast).toBeVisible({ timeout: 10_000 });
+    await expect(errorToast).toHaveAttribute("data-status-tone", "error");
+    // The picker visibly reverts to the last real, server-confirmed value —
+    // never keeps showing the rejected selection as if it had saved.
+    await expect(page.getByTestId("incomingChannel-picker")).toHaveText(/#test-channel-1/);
+    {
+      const rejectCheckPool = mysql.createPool(DB_CONFIG);
+      try {
+        const [progressRows] = await rejectCheckPool.query<mysql.RowDataPacket[]>(
+          "SELECT draft_config_version_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+          [gA],
+        );
+        const versionId = (progressRows[0] as { draft_config_version_id: number }).draft_config_version_id;
+        const [bunnyRows] = await rejectCheckPool.query<mysql.RowDataPacket[]>(
+          "SELECT CAST(incoming_channel_id AS CHAR) as incomingChannelId FROM guild_config_bunny WHERE configuration_version_id = ?",
+          [versionId],
+        );
+        expect((bunnyRows[0] as { incomingChannelId: string }).incomingChannelId).toBe(INCOMING_CHANNEL_ID);
+      } finally {
+        await rejectCheckPool.end();
+      }
+    }
 
     // Admin role policy: real role dropdown (Phase 2), Owner-only to change
     // — this session IS the Owner (seeded above), so this must succeed.
     await selectMuiOption(page, "adminRolePolicy-picker", "@test-role-1");
 
-    // Bunny & permissions is now a LIVE, derived checklist (Phase 2) — no
-    // attestation checkbox exists any more. With the incoming channel above
-    // granted full permissions by the test double's default fixture, it
-    // must show complete without any user action.
+    // --- Step 10 FINAL correction round, Section 6, proof 2: the live
+    // checklist represents the REAL required Incoming permissions (all 3
+    // Bunny actually needs), and Hero is not presented as a Bunny
+    // permission requirement at all (Section 3 of the correction). ---
     await expect(page.getByTestId("bunnyPermissions-check-incoming-viewChannel")).toHaveAttribute(
       "data-pass",
       "true",
     );
+    await expect(page.getByTestId("bunnyPermissions-check-incoming-readHistory")).toHaveAttribute(
+      "data-pass",
+      "true",
+    );
+    await expect(page.getByTestId("bunnyPermissions-check-incoming-sendMessages")).toHaveAttribute(
+      "data-pass",
+      "true",
+    );
+    await expect(page.getByTestId("bunnyPermissions-hero")).not.toBeVisible();
 
     // Server-side minimum checklist (incoming + hero + a saved quota
     // section) is now genuinely satisfied — Request Activation must become
