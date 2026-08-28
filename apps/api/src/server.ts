@@ -28,6 +28,7 @@ import {
   type SessionSweepHandle,
 } from "./auth/index.js";
 import { buildGuildRoutes } from "./guilds/index.js";
+import { buildLifecycleRoutes, registerLifecycleEventsSse } from "./lifecycle/index.js";
 import {
   buildNotificationRoutes,
   registerNotificationsSse,
@@ -145,6 +146,10 @@ export async function buildServer(config = loadAppConfig()) {
   // schedules `config.sse.pollIntervalMs` in the future, never immediately),
   // so registering here is safely ahead of it.
   registerNotificationsSse(db);
+  // Step 10 correction round, Gap 3: same extension-point discipline as the
+  // notifications registration immediately above — registered here, at real
+  // server startup, before the poller's first tick.
+  registerLifecycleEventsSse(db);
   const poller = startSsePoller({
     hub,
     cursorRepo,
@@ -194,6 +199,13 @@ export async function buildServer(config = loadAppConfig()) {
   // `isGuildAdminCapableAnywhere` reuses the one 60s `GuildAuthCache`, never
   // a second independent one).
   await fastify.register(buildNotificationRoutes(db, config, guildAuthDeps));
+  // Step 10 (guild lifecycle, onboarding, snapshot-based approval workflow):
+  // GET/PATCH /api/guilds/:guildId/onboarding, POST .../request-activation,
+  // POST .../{pause,resume,reopen}, POST /api/admin/platform/guilds/:guildId/{suspend,
+  // unsuspend}, POST /api/admin/activation-requests/:requestId/*.
+  // Shares the SAME guildAuthDeps instance as the routes above (one 60s
+  // GuildAuthCache for the whole process, per ADR/Step 05's own convention).
+  await fastify.register(buildLifecycleRoutes(db, config, guildAuthDeps));
   const notificationReconciliationWatcher: NotificationReconciliationWatcherHandle =
     startNotificationReconciliationWatcher({
       db,
@@ -203,7 +215,7 @@ export async function buildServer(config = loadAppConfig()) {
     });
   fastify.decorate("notificationTestHooks", { watcher: notificationReconciliationWatcher });
 
-  await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db }));
+  await fastify.register(buildSseRoutePlugin({ hub, cursorRepo, config, db, guildAuthDeps }));
   fastify.decorate("sseTestHooks", { hub, cursorRepo, poller });
 
   // `preClose`, not `onClose`: Fastify's OWN internal "stop the HTTP server"

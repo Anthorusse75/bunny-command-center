@@ -41,6 +41,7 @@ import { isSuperadmin } from "./superadmin.js";
 import {
   assertGuildMembership,
   resolveGuildAuthorization,
+  isCallerGuildOwner,
   GUILD_TIER_RANK,
   type AuthorizationFreshness,
   type GuildAuthDeps,
@@ -218,4 +219,84 @@ export function buildRequireTier(deps: GuildAuthDeps) {
     };
   }
   return requireTier;
+}
+
+/**
+ * Step 10 correction round, Gap 1: gates a route on the literal Discord guild
+ * Owner (`isCallerGuildOwner`), NOT on `GUILD_ADMIN` tier — a Guild Admin who
+ * holds the configured admin role or the Discord ADMINISTRATOR bit but is
+ * not the guild's Owner must be rejected. Superadmin still bypasses (matches
+ * `isCallerGuildOwner`'s own documented Superadmin bypass).
+ *
+ * Deliberately mirrors `buildRequireTier`'s guild-scoped form structurally
+ * (`requireAuth` precondition, `assertGuildMembership` first for the
+ * documented 404-not-403 non-member behavior, then the actual gate) rather
+ * than being a copy-pasted RBAC re-derivation — the only new decision this
+ * function makes is Owner-vs-not; membership and tier resolution are the
+ * exact same calls `buildRequireTier` makes.
+ *
+ * `request.guildAuthorization` is still populated (via `resolveGuildAuthorization`)
+ * so downstream service calls (`transitionGuildLifecycle`) receive the
+ * caller's real tier (`GUILD_ADMIN` for a genuine Owner — `resolveGuildAuthorization`'s
+ * Owner branch always resolves to `GUILD_ADMIN` unconditionally; `SUPERADMIN`
+ * for the platform Superadmin) exactly as every other route already expects.
+ */
+export function buildRequireGuildOwner(deps: GuildAuthDeps) {
+  return function requireGuildOwner(guildIdParam: string, options?: RequireTierOptions): PreHandler {
+    const freshness: AuthorizationFreshness = options?.freshness ?? "READ";
+    return async (request, reply) => {
+      if (!request.authUser) {
+        await reply.code(401).send({
+          error_code: "UNAUTHENTICATED",
+          message_key: "errors.auth.unauthenticated",
+          parameters: {},
+        });
+        return;
+      }
+      const guildId = extractGuildId(request, guildIdParam);
+      if (!guildId) {
+        await reply
+          .code(404)
+          .send({ error_code: "GUILD_NOT_FOUND", message_key: "errors.guilds.notFound", parameters: {} });
+        return;
+      }
+
+      const caller = { id: request.authUser.id, discordUserId: request.authUser.discordUserId };
+
+      try {
+        const isMember = await assertGuildMembership(deps, caller, guildId, freshness);
+        if (!isMember) {
+          await reply
+            .code(404)
+            .send({ error_code: "GUILD_NOT_FOUND", message_key: "errors.guilds.notFound", parameters: {} });
+          return;
+        }
+
+        const [isOwner, tier] = await Promise.all([
+          isCallerGuildOwner(deps, caller, guildId, freshness),
+          resolveGuildAuthorization(deps, caller, guildId, freshness),
+        ]);
+        if (!isOwner) {
+          request.log.warn(
+            { route: request.routeOptions?.url, guildId, resolvedTier: tier },
+            "requireGuildOwner: 403 (guild membership confirmed, caller is not the guild Owner)",
+          );
+          await reply.code(403).send({
+            error_code: "FORBIDDEN",
+            message_key: "errors.auth.insufficientPermissions",
+            parameters: {},
+          });
+          return;
+        }
+
+        request.guildAuthorization = { guildId, tier };
+      } catch (err) {
+        if (err instanceof DiscordReauthRequiredError) {
+          await respondReauthRequired(deps, request, reply);
+          return;
+        }
+        throw err;
+      }
+    };
+  };
 }

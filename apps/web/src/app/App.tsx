@@ -29,6 +29,7 @@ import { AuthProvider, AuthGate } from "../features/auth/index.js";
 import { createAppRouter } from "../navigation/routes.js";
 import { initGuildRealtimeWiring } from "../features/guilds/index.js";
 import { initNotificationsRealtimeWiring } from "../features/notifications/realtimeWiring.js";
+import { initOnboardingRealtimeWiring } from "../features/onboarding/index.js";
 
 // Step 06 addition (03_realtime_infrastructure.md's Step-06+ extension
 // point) — registers the multi-guild model's SSE -> invalidation mapping
@@ -41,6 +42,11 @@ initGuildRealtimeWiring();
 // comment. Unlike the guild wiring above, this one has a real server-side
 // emitter as of this step.
 initNotificationsRealtimeWiring();
+// Step 10 external-review correction round, Phase 3 — see
+// features/onboarding/realtimeWiring.ts's own doc comment. The backend
+// `guild_lifecycle.state_changed` source has existed since an earlier
+// correction round; this call is what was actually missing.
+initOnboardingRealtimeWiring();
 
 // STEP 04 UPDATE (04_discord_oauth_sessions.md): `AuthProvider` sits inside
 // `QueryClientProvider`/`BccI18nProvider` (its Login/error screens are

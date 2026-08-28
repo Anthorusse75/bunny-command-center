@@ -80,7 +80,7 @@ export default defineConfig({
       // scope and never see those events, which is correct Step-04 behavior
       // but not what this Step-03 regression suite is proving (see its own
       // `realtime-chromium` project below, unchanged from Step 03).
-      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts|multi-guild(-mobile)?\.spec\.ts/,
+      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts|multi-guild(-mobile)?\.spec\.ts|onboarding\.spec\.ts/,
     },
     {
       // Mobile: a real device profile (touch, DPR, UA), so the bottom-nav layout and the
@@ -88,7 +88,7 @@ export default defineConfig({
       name: "mobile-chromium",
       use: { ...devices["Pixel 7"], storageState: STORAGE_STATE_PATH },
       dependencies: ["setup"],
-      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts|multi-guild(-mobile)?\.spec\.ts/,
+      testIgnore: /auth\.spec\.ts|realtime\.spec\.ts|multi-guild(-mobile)?\.spec\.ts|onboarding\.spec\.ts/,
     },
     {
       // Step 04: the real (unauthenticated) Login/OAuth-error/logout flows,
@@ -131,6 +131,17 @@ export default defineConfig({
       name: "multi-guild-mobile-chromium",
       use: { ...devices["Pixel 7"] },
       testMatch: /multi-guild-mobile\.spec\.ts$/,
+    },
+    {
+      // Step 10 external-review correction round, Phase 3: onboarding.spec.ts
+      // logs in itself per-actor (Guild Admin, then a Superadmin in a SEPARATE
+      // browser context) via the same E2E-only login route — like
+      // multi-guild.spec.ts, it does NOT use the shared `setup` project's
+      // storageState. Desktop viewport: exercises the real checklist-rail
+      // layout the "jump to a non-first section" assertion depends on.
+      name: "onboarding-chromium",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+      testMatch: /onboarding\.spec\.ts$/,
     },
   ],
   webServer: [

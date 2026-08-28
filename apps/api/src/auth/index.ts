@@ -39,6 +39,7 @@ export {
   resolveGuildAuthorization,
   getCallerGuildsForListing,
   isGuildAdminCapableAnywhere,
+  isCallerGuildOwner,
   createGuildAuthDeps,
   GUILD_TIER_RANK,
   type GuildTier,
@@ -48,6 +49,7 @@ export {
 } from "./guildAuthorization.js";
 export {
   buildRequireTier,
+  buildRequireGuildOwner,
   respondReauthRequired,
   type ResolvedGuildAuthorization,
   type RequireTierOptions,

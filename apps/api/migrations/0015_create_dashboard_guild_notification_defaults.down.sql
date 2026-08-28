@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS dashboard_guild_notification_defaults;

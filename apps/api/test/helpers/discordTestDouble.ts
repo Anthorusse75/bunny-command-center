@@ -54,6 +54,26 @@ export interface DiscordTestDoubleState {
   /** Overrides the guild-list response status UNCONDITIONALLY (ignores the Bearer-token check entirely) — for simulating a non-401 failure, or a 401 that persists even after a real refresh ("repeated 401 after refresh" regression case). */
   guildsForcedStatus: number | undefined;
   guildsForcedBody: unknown;
+  /**
+   * Step 10 correction round, Gap 5: OPTIONAL per-access-token guild-list
+   * fixture, additive to `guilds`/`currentAccessToken`'s single-shared-fixture
+   * design above. A genuinely CONCURRENT multi-session test
+   * (`Promise.all([...])` firing two different real sessions' HTTP requests
+   * at the same moment, needed for real race-condition coverage) cannot
+   * correctly rely on `guilds` being re-synced by a mutable-shared-field side
+   * effect immediately before each request — two concurrent requests race on
+   * whose side effect "wins" before either request's async handler actually
+   * reads `state.guilds`, non-deterministically cross-contaminating which
+   * caller's fixture is seen (found for real: `routes.test.ts`'s
+   * pause-racing-suspend test spuriously 403'd because the Owner's request
+   * observed the Superadmin's fixture instead of its own). When a request's
+   * Bearer token is a registered key in this map, its EXACT own guild list
+   * is returned regardless of what `state.guilds` currently holds — every
+   * EXISTING test that has never heard of this field is unaffected (empty
+   * Map, every lookup misses, falls through to `state.guilds` exactly as
+   * before).
+   */
+  guildsByToken: Map<string, DiscordGuildFixture[]>;
 
   /** Per-guild member `roles` fixture (`GET /users/@me/guilds/{id}/member` success body). */
   memberRolesByGuild: Map<string, string[]>;
@@ -107,6 +127,7 @@ export async function startDiscordTestDouble(): Promise<DiscordTestDouble> {
     guilds: [],
     guildsForcedStatus: undefined,
     guildsForcedBody: undefined,
+    guildsByToken: new Map(),
 
     memberRolesByGuild: new Map(),
     memberForcedStatus: undefined,
@@ -217,13 +238,14 @@ export async function startDiscordTestDouble(): Promise<DiscordTestDouble> {
           return;
         }
         const token = bearerToken(req);
-        if (token !== state.currentAccessToken) {
+        const isRegisteredToken = token !== undefined && state.guildsByToken.has(token);
+        if (token !== state.currentAccessToken && !isRegisteredToken) {
           res.writeHead(401, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ message: "401: Unauthorized", code: 0 }));
           return;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(state.guilds));
+        res.end(JSON.stringify(isRegisteredToken ? state.guildsByToken.get(token)! : state.guilds));
         return;
       }
 

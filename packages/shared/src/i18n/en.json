@@ -111,6 +111,22 @@
     "notifications": {
       "notFound": "We couldn't find that notification for your account."
     },
+    "lifecycle": {
+      "illegalTransition": "This action isn't available for the guild's current status.",
+      "corruptSuspensionState": "Something went wrong restoring this guild's status. It has been logged for support.",
+      "concurrentModification": "Someone else changed this guild's status while you were working. Reload to see the latest version.",
+      "notEditable": "This guild's configuration is read-only while it's suspended.",
+      "requestNotFound": "We couldn't find that activation request.",
+      "requestAlreadyDecided": "This activation request has already been decided.",
+      "checksumMismatch": "The submitted configuration changed since it was reviewed. Ask the Guild Admin to re-submit."
+    },
+    "onboarding": {
+      "checklistNotPassed": "Complete the incoming channel, Hero channel, and Season & Quotas section before requesting activation.",
+      "channelVerificationFailed": "We couldn't verify that channel with Bunny right now. Please try again.",
+      "channelNotFound": "That channel doesn't exist in this server anymore. Pick another one.",
+      "channelPermissionsMissing": "Bunny needs View Channel, Read Message History, and Send Messages in this channel to post reminders and Top 10 updates. Adjust its permissions and try again.",
+      "quotaOverrideRequired": "Accept the platform defaults or enter at least one custom quota."
+    },
     "notFoundPage": {
       "title": "This page doesn't exist",
       "body": "The link may be out of date, or the address may be mistyped.",
@@ -350,10 +366,122 @@
     }
   },
   "onboarding": {
-    "placeholder": {
-      "title": "Guild Onboarding",
-      "body": "The onboarding stepper isn't built yet — this is a placeholder for the route and its navigation."
-    }
+    "title": "Set up {{guildName}}",
+    "checklist": {
+      "sectionsComplete": "{{completed}}/{{total}} sections complete",
+      "heading": "Sections"
+    },
+    "sections": {
+      "bunnyPermissions": {
+        "title": "Bunny & permissions",
+        "description": "Bunny's real, live Discord permissions for the channels you've configured are checked below — this is not something you confirm manually. Fix any gaps from Discord's Integrations settings.",
+        "fixItLink": "Open Discord's permission settings",
+        "degraded": "We couldn't check Bunny's live permissions right now. Try again shortly.",
+        "noChannelsConfigured": "Configure the incoming channel above to see Bunny's live permission status.",
+        "channelNotFound": "This channel could no longer be found in Bunny's live channel list.",
+        "existsOnly": "This channel exists — no additional Bunny permission is required for it today.",
+        "channelRole": {
+          "incoming": "Incoming channel",
+          "community": "Community channel"
+        },
+        "checks": {
+          "viewChannel": "Bunny can see this channel",
+          "readHistory": "Bunny can read message history here",
+          "sendMessages": "Bunny can send messages here"
+        }
+      },
+      "incomingChannel": {
+        "title": "Incoming channel",
+        "description": "Select the Discord channel Bunny watches for screenshots.",
+        "channelIdLabel": "Channel ID"
+      },
+      "heroChannel": {
+        "title": "Hero channel",
+        "description": "Select the channel Self-bot uses to dialogue with Hero Warbot.",
+        "channelIdLabel": "Channel ID"
+      },
+      "communityChannel": {
+        "title": "Community channel",
+        "description": "Select the channel for status and reminder publications (optional).",
+        "channelIdLabel": "Channel ID (optional)"
+      },
+      "seasonQuotas": {
+        "title": "Season & quotas",
+        "description": "Set initial category quotas, or accept the platform defaults.",
+        "categoriesLabel": "Quota categories (comma-separated)",
+        "acceptDefaults": "Accept platform defaults"
+      },
+      "notifications": {
+        "title": "Notifications",
+        "description": "Set this guild's default notification policy.",
+        "inApp": "In-app notifications",
+        "discordDm": "Discord DM notifications"
+      },
+      "adminRolePolicy": {
+        "title": "Admin role policy",
+        "description": "Optionally designate a Discord role as Dashboard admin for this guild. Leave blank to default to Discord Administrator.",
+        "roleLabel": "Admin role (optional)"
+      }
+    },
+    "channelPicker": {
+      "placeholder": "Select a channel…",
+      "none": "None",
+      "unavailable": "We couldn't load this server's channel list from Bunny right now. Try again shortly.",
+      "unavailableHint": "Channel list unavailable",
+      "staleValue": "Current: {{channelId}} (no longer found)"
+    },
+    "rolePicker": {
+      "none": "None (defaults to Discord Administrator)",
+      "unavailable": "We couldn't load this server's role list from Bunny right now. Try again shortly.",
+      "unavailableHint": "Role list unavailable",
+      "staleValue": "Current: {{roleId}} (no longer found)"
+    },
+    "actions": {
+      "requestActivation": "Request activation",
+      "requestActivationPending": "Pending…",
+      "requestActivationDisabledHint": "Complete the incoming channel, Hero channel, and at least one quota category (or accept platform defaults) to request activation.",
+      "pause": "Pause",
+      "resume": "Resume",
+      "editAndResubmit": "Edit and re-submit"
+    },
+    "toast": {
+      "sectionSaved": "Section saved",
+      "activationRequested": "Activation requested"
+    },
+    "pending": {
+      "title": "Your guild is awaiting approval",
+      "body": "Once approved, you'll unlock:",
+      "unlocks": {
+        "bulkUpload": "Bulk upload",
+        "ocr": "OCR",
+        "statistics": "Statistics",
+        "premiumPlus": "PremiumPlus",
+        "stockAcrossSeasons": "Stock across seasons",
+        "automation": "Automation",
+        "leaderboards": "Leaderboards",
+        "notifications": "Notifications",
+        "forecasts": "Forecasts",
+        "historyAndBadges": "History & badges"
+      },
+      "editConfiguration": "Edit configuration"
+    },
+    "rejected": {
+      "title": "Your request was rejected",
+      "reasonLabel": "Superadmin's reason"
+    },
+    "changesRequested": {
+      "title": "Changes requested",
+      "reasonLabel": "Superadmin's reason"
+    },
+    "suspended": {
+      "title": "This guild is platform-suspended",
+      "body": "Configuration is read-only while the platform suspension is in effect."
+    },
+    "activePaused": {
+      "title": "This guild is paused",
+      "body": "Bunny isn't scanning while this guild is paused. Resume to continue."
+    },
+    "titleFallback": "Set up this guild"
   },
   "adminGuild": {
     "placeholder": {
@@ -370,6 +498,60 @@
       "placeholder": {
         "title": "Hero Discovery",
         "body": "Hero recognition candidates and the reference catalog aren't built yet — this is a placeholder for the route and its navigation."
+      }
+    },
+    "review": {
+      "title": "Review activation request",
+      "guildMismatch": "This request doesn't belong to the guild in the link. For your safety, nothing is shown.",
+      "metadata": {
+        "title": "Request",
+        "guildId": "Guild ID",
+        "state": "Status",
+        "requestedBy": "Requested by",
+        "requestedAt": "Requested at",
+        "reviewedBy": "Reviewed by",
+        "reviewedAt": "Reviewed at",
+        "decisionReason": "Reason"
+      },
+      "state": {
+        "PENDING": "Pending review",
+        "CHANGES_REQUESTED": "Changes requested",
+        "APPROVED": "Approved",
+        "REJECTED": "Rejected"
+      },
+      "snapshot": {
+        "title": "Submitted configuration (frozen)",
+        "description": "This is exactly what was submitted for approval. It cannot change while you review it — a further edit by the Guild Admin creates a new, separate submission.",
+        "unavailable": "This request's submitted configuration could not be loaded.",
+        "notSet": "Not set",
+        "quotasTitle": "Season quotas",
+        "quotas": {
+          "gcHero": "GC Hero",
+          "gcTitan": "GC Titan",
+          "hol": "HOL",
+          "hero": "Hero",
+          "titan": "Titan"
+        }
+      },
+      "liveScope": {
+        "title": "Not part of this snapshot",
+        "body": "Admin role policy, notification defaults, and Bunny's live Discord permission status are current, ongoing settings — they are never frozen by this request's submitted configuration and are not shown here."
+      },
+      "alreadyDecided": {
+        "title": "This request has already been decided"
+      },
+      "actions": {
+        "title": "Decision",
+        "approve": "Approve",
+        "requestChanges": "Request changes",
+        "requestChangesReasonLabel": "What needs to change?",
+        "reject": "Reject",
+        "rejectReasonLabel": "Reason for rejection"
+      },
+      "toast": {
+        "approved": "Request approved",
+        "changesRequested": "Changes requested",
+        "rejected": "Request rejected"
       }
     }
   },

@@ -113,6 +113,22 @@
     "notifications": {
       "notFound": "Nous n'avons pas trouvé cette notification pour votre compte."
     },
+    "lifecycle": {
+      "illegalTransition": "Cette action n'est pas disponible pour le statut actuel du serveur.",
+      "corruptSuspensionState": "Un problème est survenu lors de la restauration du statut de ce serveur. Il a été enregistré pour le support.",
+      "concurrentModification": "Quelqu'un d'autre a modifié le statut de ce serveur pendant votre travail. Rechargez pour voir la dernière version.",
+      "notEditable": "La configuration de ce serveur est en lecture seule tant qu'il est suspendu.",
+      "requestNotFound": "Nous n'avons pas trouvé cette demande d'activation.",
+      "requestAlreadyDecided": "Cette demande d'activation a déjà été traitée.",
+      "checksumMismatch": "La configuration soumise a changé depuis sa revue. Demandez à l'administrateur du serveur de la soumettre à nouveau."
+    },
+    "onboarding": {
+      "checklistNotPassed": "Complétez le salon entrant, le salon Hero, et la section Saison & Quotas avant de demander l'activation.",
+      "channelVerificationFailed": "Impossible de vérifier ce salon auprès de Bunny pour le moment. Veuillez réessayer.",
+      "channelNotFound": "Ce salon n'existe plus sur ce serveur. Choisissez-en un autre.",
+      "channelPermissionsMissing": "Bunny a besoin des permissions Voir le salon, Lire l'historique des messages et Envoyer des messages dans ce salon pour publier les rappels et le Top 10. Ajustez ses permissions et réessayez.",
+      "quotaOverrideRequired": "Acceptez les valeurs par défaut de la plateforme ou saisissez au moins un quota personnalisé."
+    },
     "notFoundPage": {
       "title": "Cette page n'existe pas",
       "body": "Le lien est peut-être obsolète, ou l'adresse mal saisie.",
@@ -355,10 +371,122 @@
     }
   },
   "onboarding": {
-    "placeholder": {
-      "title": "Intégration de la guilde",
-      "body": "L'assistant d'intégration n'est pas encore construit — ceci est un espace réservé pour la route et sa navigation."
-    }
+    "title": "Configurer {{guildName}}",
+    "checklist": {
+      "sectionsComplete": "{{completed}}/{{total}} sections complètes",
+      "heading": "Sections"
+    },
+    "sections": {
+      "bunnyPermissions": {
+        "title": "Bunny et permissions",
+        "description": "Les permissions Discord réelles de Bunny pour les salons que vous avez configurés sont vérifiées ci-dessous — ce n'est pas quelque chose à confirmer manuellement. Corrigez les éventuels manques depuis les paramètres d'intégrations de Discord.",
+        "fixItLink": "Ouvrir les paramètres de permissions Discord",
+        "degraded": "Impossible de vérifier les permissions en temps réel de Bunny pour le moment. Réessayez sous peu.",
+        "noChannelsConfigured": "Configurez le salon entrant ci-dessus pour voir le statut des permissions de Bunny en temps réel.",
+        "channelNotFound": "Ce salon est introuvable dans la liste des salons en temps réel de Bunny.",
+        "existsOnly": "Ce salon existe — aucune permission Bunny supplémentaire n'est requise pour l'instant.",
+        "channelRole": {
+          "incoming": "Salon entrant",
+          "community": "Salon communautaire"
+        },
+        "checks": {
+          "viewChannel": "Bunny peut voir ce salon",
+          "readHistory": "Bunny peut lire l'historique des messages ici",
+          "sendMessages": "Bunny peut envoyer des messages ici"
+        }
+      },
+      "incomingChannel": {
+        "title": "Salon entrant",
+        "description": "Sélectionnez le salon Discord que Bunny surveille pour les captures d'écran.",
+        "channelIdLabel": "ID du salon"
+      },
+      "heroChannel": {
+        "title": "Salon Hero",
+        "description": "Sélectionnez le salon utilisé par Self-bot pour dialoguer avec Hero Warbot.",
+        "channelIdLabel": "ID du salon"
+      },
+      "communityChannel": {
+        "title": "Salon communautaire",
+        "description": "Sélectionnez le salon pour les publications de statut et de rappels (optionnel).",
+        "channelIdLabel": "ID du salon (optionnel)"
+      },
+      "seasonQuotas": {
+        "title": "Saison et quotas",
+        "description": "Définissez les quotas de catégories initiaux, ou acceptez les valeurs par défaut de la plateforme.",
+        "categoriesLabel": "Catégories de quotas (séparées par des virgules)",
+        "acceptDefaults": "Accepter les valeurs par défaut de la plateforme"
+      },
+      "notifications": {
+        "title": "Notifications",
+        "description": "Définissez la politique de notification par défaut de cette guilde.",
+        "inApp": "Notifications dans l'application",
+        "discordDm": "Notifications par message privé Discord"
+      },
+      "adminRolePolicy": {
+        "title": "Politique de rôle admin",
+        "description": "Désignez éventuellement un rôle Discord comme admin du Dashboard pour cette guilde. Laissez vide pour utiliser par défaut le rôle Administrateur Discord.",
+        "roleLabel": "Rôle admin (optionnel)"
+      }
+    },
+    "channelPicker": {
+      "placeholder": "Sélectionnez un salon…",
+      "none": "Aucun",
+      "unavailable": "Impossible de charger la liste des salons de ce serveur depuis Bunny pour le moment. Réessayez sous peu.",
+      "unavailableHint": "Liste des salons indisponible",
+      "staleValue": "Actuel : {{channelId}} (introuvable)"
+    },
+    "rolePicker": {
+      "none": "Aucun (par défaut : Administrateur Discord)",
+      "unavailable": "Impossible de charger la liste des rôles de ce serveur depuis Bunny pour le moment. Réessayez sous peu.",
+      "unavailableHint": "Liste des rôles indisponible",
+      "staleValue": "Actuel : {{roleId}} (introuvable)"
+    },
+    "actions": {
+      "requestActivation": "Demander l'activation",
+      "requestActivationPending": "En attente…",
+      "requestActivationDisabledHint": "Complétez le salon entrant, le salon Hero, et au moins une catégorie de quota (ou acceptez les valeurs par défaut) pour demander l'activation.",
+      "pause": "Mettre en pause",
+      "resume": "Reprendre",
+      "editAndResubmit": "Modifier et soumettre à nouveau"
+    },
+    "toast": {
+      "sectionSaved": "Section enregistrée",
+      "activationRequested": "Activation demandée"
+    },
+    "pending": {
+      "title": "Votre guilde est en attente d'approbation",
+      "body": "Une fois approuvée, vous débloquerez :",
+      "unlocks": {
+        "bulkUpload": "Import en masse",
+        "ocr": "OCR",
+        "statistics": "Statistiques",
+        "premiumPlus": "PremiumPlus",
+        "stockAcrossSeasons": "Stock inter-saisons",
+        "automation": "Automatisation",
+        "leaderboards": "Classements",
+        "notifications": "Notifications",
+        "forecasts": "Prévisions",
+        "historyAndBadges": "Historique et badges"
+      },
+      "editConfiguration": "Modifier la configuration"
+    },
+    "rejected": {
+      "title": "Votre demande a été rejetée",
+      "reasonLabel": "Raison du Superadmin"
+    },
+    "changesRequested": {
+      "title": "Modifications demandées",
+      "reasonLabel": "Raison du Superadmin"
+    },
+    "suspended": {
+      "title": "Cette guilde est suspendue par la plateforme",
+      "body": "La configuration est en lecture seule tant que la suspension de la plateforme est en vigueur."
+    },
+    "activePaused": {
+      "title": "Cette guilde est en pause",
+      "body": "Bunny n'analyse pas tant que cette guilde est en pause. Reprenez pour continuer."
+    },
+    "titleFallback": "Configurer ce serveur"
   },
   "adminGuild": {
     "placeholder": {
@@ -375,6 +503,60 @@
       "placeholder": {
         "title": "Découverte de héros",
         "body": "Les candidats de reconnaissance et le catalogue de référence ne sont pas encore construits — ceci est un espace réservé pour la route et sa navigation."
+      }
+    },
+    "review": {
+      "title": "Examiner la demande d'activation",
+      "guildMismatch": "Cette demande n'appartient pas au serveur indiqué dans le lien. Par sécurité, rien n'est affiché.",
+      "metadata": {
+        "title": "Demande",
+        "guildId": "ID du serveur",
+        "state": "Statut",
+        "requestedBy": "Demandé par",
+        "requestedAt": "Demandé le",
+        "reviewedBy": "Examiné par",
+        "reviewedAt": "Examiné le",
+        "decisionReason": "Motif"
+      },
+      "state": {
+        "PENDING": "En attente d'examen",
+        "CHANGES_REQUESTED": "Modifications demandées",
+        "APPROVED": "Approuvée",
+        "REJECTED": "Rejetée"
+      },
+      "snapshot": {
+        "title": "Configuration soumise (figée)",
+        "description": "Voici exactement ce qui a été soumis pour approbation. Elle ne peut pas changer pendant votre examen — toute nouvelle modification par l'Admin du serveur crée une soumission nouvelle et distincte.",
+        "unavailable": "La configuration soumise pour cette demande n'a pas pu être chargée.",
+        "notSet": "Non défini",
+        "quotasTitle": "Quotas de saison",
+        "quotas": {
+          "gcHero": "GC Hero",
+          "gcTitan": "GC Titan",
+          "hol": "HOL",
+          "hero": "Hero",
+          "titan": "Titan"
+        }
+      },
+      "liveScope": {
+        "title": "Ne fait pas partie de cette configuration figée",
+        "body": "La politique de rôle admin, les préférences de notification par défaut et le statut réel des permissions Discord de Bunny sont des réglages courants et évolutifs — ils ne sont jamais figés par la configuration soumise de cette demande et ne sont pas affichés ici."
+      },
+      "alreadyDecided": {
+        "title": "Cette demande a déjà été traitée"
+      },
+      "actions": {
+        "title": "Décision",
+        "approve": "Approuver",
+        "requestChanges": "Demander des modifications",
+        "requestChangesReasonLabel": "Qu'est-ce qui doit changer ?",
+        "reject": "Rejeter",
+        "rejectReasonLabel": "Motif du rejet"
+      },
+      "toast": {
+        "approved": "Demande approuvée",
+        "changesRequested": "Modifications demandées",
+        "rejected": "Demande rejetée"
       }
     }
   },

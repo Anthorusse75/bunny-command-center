@@ -253,6 +253,45 @@ export async function isGuildAdminCapableAnywhere(
 }
 
 /**
+ * Step 10 correction round, Gap 1 (DASHBOARD/10_GUILD_ONBOARDING_AND_APPROVAL.md's
+ * permission matrix: "ACTIVE | Owner: pause", "USER_PAUSED | Owner: resume" —
+ * literal Discord guild Owner, NOT merely `GUILD_ADMIN` tier. There is no
+ * separate `OWNER` entry in `GUILD_TIER_RANK` — Owner-ness is a raw Discord
+ * fact (`DiscordGuildSummary.owner`), orthogonal to tier. This is NOT a
+ * second, parallel "who is the owner" check: it reuses the exact same
+ * private `getCallerGuilds` fetch/cache `resolveGuildAuthorization` already
+ * calls internally and reads the exact same `summary.owner` field that
+ * function's own Owner branch (above) reads — merely exposed as its own
+ * named predicate so `tier.ts`'s `buildRequireGuildOwner` can gate a route on
+ * it without re-deriving anything.
+ *
+ * Superadmin bypasses unconditionally (returns `true`, no Discord call at
+ * all) — consistent with `assertGuildMembership`'s own Superadmin bypass
+ * immediately above, and with 08_AUTHORIZATION_AND_RBAC.md's general
+ * "Platform Superadmin supersedes every other check" pattern this codebase
+ * applies everywhere else (there was no pre-existing Owner-gated action to
+ * confirm this against, so this is the operator's explicit judgment call,
+ * documented here rather than silently assumed).
+ *
+ * Returns `false` (never throws) for "not the owner" or "not even a member"
+ * — callers MUST have already run `assertGuildMembership` for this exact
+ * `guildId` first (same precondition `resolveGuildAuthorization` documents).
+ */
+export async function isCallerGuildOwner(
+  deps: GuildAuthDeps,
+  caller: AuthorizedCaller,
+  guildId: string,
+  freshness: AuthorizationFreshness = "READ",
+): Promise<boolean> {
+  if (isSuperadmin(caller.discordUserId, deps.config)) {
+    return true;
+  }
+  const guilds = await getCallerGuilds(deps, caller, freshness);
+  const summary = guilds.find((g) => g.id === guildId);
+  return summary?.owner ?? false;
+}
+
+/**
  * Guild Admin Resolution (08_AUTHORIZATION_AND_RBAC.md's flowchart, minus
  * the Bunny role-deletion-detection branch -- see this module's header
  * comment). MUST only be called after `assertGuildMembership` has already

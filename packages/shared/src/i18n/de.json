@@ -111,6 +111,22 @@
     "notifications": {
       "notFound": "Wir konnten diese Benachrichtigung für Ihr Konto nicht finden."
     },
+    "lifecycle": {
+      "illegalTransition": "Diese Aktion ist für den aktuellen Status des Servers nicht verfügbar.",
+      "corruptSuspensionState": "Beim Wiederherstellen des Serverstatus ist ein Problem aufgetreten. Es wurde für den Support protokolliert.",
+      "concurrentModification": "Jemand anderes hat den Status dieses Servers während Ihrer Bearbeitung geändert. Laden Sie neu, um die aktuelle Version zu sehen.",
+      "notEditable": "Die Konfiguration dieses Servers ist schreibgeschützt, solange er gesperrt ist.",
+      "requestNotFound": "Wir konnten diese Aktivierungsanfrage nicht finden.",
+      "requestAlreadyDecided": "Über diese Aktivierungsanfrage wurde bereits entschieden.",
+      "checksumMismatch": "Die eingereichte Konfiguration hat sich seit der Prüfung geändert. Bitten Sie den Server-Administrator, sie erneut einzureichen."
+    },
+    "onboarding": {
+      "checklistNotPassed": "Vervollständigen Sie den Eingangskanal, den Hero-Kanal und den Abschnitt Saison & Quoten, bevor Sie die Aktivierung beantragen.",
+      "channelVerificationFailed": "Dieser Kanal konnte gerade nicht bei Bunny verifiziert werden. Bitte versuchen Sie es erneut.",
+      "channelNotFound": "Dieser Kanal existiert auf diesem Server nicht mehr. Wählen Sie einen anderen aus.",
+      "channelPermissionsMissing": "Bunny benötigt in diesem Kanal die Berechtigungen Kanal ansehen, Nachrichtenverlauf lesen und Nachrichten senden, um Erinnerungen und Top-10-Updates zu posten. Passen Sie die Berechtigungen an und versuchen Sie es erneut.",
+      "quotaOverrideRequired": "Akzeptieren Sie die Plattform-Standardwerte oder geben Sie mindestens eine benutzerdefinierte Quote ein."
+    },
     "notFoundPage": {
       "title": "Diese Seite gibt es nicht",
       "body": "Der Link ist möglicherweise veraltet oder die Adresse falsch eingegeben.",
@@ -350,10 +366,122 @@
     }
   },
   "onboarding": {
-    "placeholder": {
-      "title": "Gilden-Einführung",
-      "body": "Der Einführungsassistent ist noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
-    }
+    "title": "{{guildName}} einrichten",
+    "checklist": {
+      "sectionsComplete": "{{completed}}/{{total}} Abschnitte abgeschlossen",
+      "heading": "Abschnitte"
+    },
+    "sections": {
+      "bunnyPermissions": {
+        "title": "Bunny & Berechtigungen",
+        "description": "Bunnys echte, aktuelle Discord-Berechtigungen für die von Ihnen konfigurierten Kanäle werden unten geprüft — dies ist keine manuelle Bestätigung. Beheben Sie etwaige Lücken über die Discord-Integrationseinstellungen.",
+        "fixItLink": "Discord-Berechtigungseinstellungen öffnen",
+        "degraded": "Bunnys aktuelle Berechtigungen konnten gerade nicht geprüft werden. Versuchen Sie es in Kürze erneut.",
+        "noChannelsConfigured": "Konfigurieren Sie oben den Eingangskanal, um Bunnys aktuellen Berechtigungsstatus zu sehen.",
+        "channelNotFound": "Dieser Kanal konnte in Bunnys aktueller Kanalliste nicht mehr gefunden werden.",
+        "existsOnly": "Dieser Kanal existiert — derzeit ist keine zusätzliche Bunny-Berechtigung dafür erforderlich.",
+        "channelRole": {
+          "incoming": "Eingangskanal",
+          "community": "Community-Kanal"
+        },
+        "checks": {
+          "viewChannel": "Bunny kann diesen Kanal sehen",
+          "readHistory": "Bunny kann hier den Nachrichtenverlauf lesen",
+          "sendMessages": "Bunny kann hier Nachrichten senden"
+        }
+      },
+      "incomingChannel": {
+        "title": "Eingangskanal",
+        "description": "Wählen Sie den Discord-Kanal, den Bunny auf Screenshots überwacht.",
+        "channelIdLabel": "Kanal-ID"
+      },
+      "heroChannel": {
+        "title": "Hero-Kanal",
+        "description": "Wählen Sie den Kanal, in dem Self-bot mit Hero Warbot kommuniziert.",
+        "channelIdLabel": "Kanal-ID"
+      },
+      "communityChannel": {
+        "title": "Community-Kanal",
+        "description": "Wählen Sie den Kanal für Status- und Erinnerungsveröffentlichungen (optional).",
+        "channelIdLabel": "Kanal-ID (optional)"
+      },
+      "seasonQuotas": {
+        "title": "Saison & Quoten",
+        "description": "Legen Sie anfängliche Kategoriequoten fest oder übernehmen Sie die Plattform-Standardwerte.",
+        "categoriesLabel": "Quotenkategorien (kommagetrennt)",
+        "acceptDefaults": "Plattform-Standardwerte übernehmen"
+      },
+      "notifications": {
+        "title": "Benachrichtigungen",
+        "description": "Legen Sie die Standard-Benachrichtigungsrichtlinie dieser Gilde fest.",
+        "inApp": "In-App-Benachrichtigungen",
+        "discordDm": "Discord-DM-Benachrichtigungen"
+      },
+      "adminRolePolicy": {
+        "title": "Admin-Rollenrichtlinie",
+        "description": "Bestimmen Sie optional eine Discord-Rolle als Dashboard-Admin für diese Gilde. Leer lassen, um standardmäßig die Discord-Administrator-Rolle zu verwenden.",
+        "roleLabel": "Admin-Rolle (optional)"
+      }
+    },
+    "channelPicker": {
+      "placeholder": "Kanal auswählen…",
+      "none": "Keiner",
+      "unavailable": "Die Kanalliste dieses Servers konnte gerade nicht von Bunny geladen werden. Versuchen Sie es in Kürze erneut.",
+      "unavailableHint": "Kanalliste nicht verfügbar",
+      "staleValue": "Aktuell: {{channelId}} (nicht mehr gefunden)"
+    },
+    "rolePicker": {
+      "none": "Keine (Standard: Discord-Administrator)",
+      "unavailable": "Die Rollenliste dieses Servers konnte gerade nicht von Bunny geladen werden. Versuchen Sie es in Kürze erneut.",
+      "unavailableHint": "Rollenliste nicht verfügbar",
+      "staleValue": "Aktuell: {{roleId}} (nicht mehr gefunden)"
+    },
+    "actions": {
+      "requestActivation": "Aktivierung beantragen",
+      "requestActivationPending": "Ausstehend…",
+      "requestActivationDisabledHint": "Vervollständigen Sie den Eingangskanal, den Hero-Kanal und mindestens eine Quotenkategorie (oder übernehmen Sie die Standardwerte), um die Aktivierung zu beantragen.",
+      "pause": "Pausieren",
+      "resume": "Fortsetzen",
+      "editAndResubmit": "Bearbeiten und erneut einreichen"
+    },
+    "toast": {
+      "sectionSaved": "Abschnitt gespeichert",
+      "activationRequested": "Aktivierung beantragt"
+    },
+    "pending": {
+      "title": "Ihre Gilde wartet auf Genehmigung",
+      "body": "Nach der Genehmigung schalten Sie frei:",
+      "unlocks": {
+        "bulkUpload": "Massen-Upload",
+        "ocr": "OCR",
+        "statistics": "Statistiken",
+        "premiumPlus": "PremiumPlus",
+        "stockAcrossSeasons": "Bestand über Saisons hinweg",
+        "automation": "Automatisierung",
+        "leaderboards": "Ranglisten",
+        "notifications": "Benachrichtigungen",
+        "forecasts": "Prognosen",
+        "historyAndBadges": "Verlauf & Abzeichen"
+      },
+      "editConfiguration": "Konfiguration bearbeiten"
+    },
+    "rejected": {
+      "title": "Ihr Antrag wurde abgelehnt",
+      "reasonLabel": "Begründung des Superadmins"
+    },
+    "changesRequested": {
+      "title": "Änderungen angefordert",
+      "reasonLabel": "Begründung des Superadmins"
+    },
+    "suspended": {
+      "title": "Diese Gilde ist von der Plattform gesperrt",
+      "body": "Die Konfiguration ist schreibgeschützt, solange die Plattformsperre aktiv ist."
+    },
+    "activePaused": {
+      "title": "Diese Gilde ist pausiert",
+      "body": "Bunny scannt nicht, solange diese Gilde pausiert ist. Setzen Sie fort, um weiterzumachen."
+    },
+    "titleFallback": "Diesen Server einrichten"
   },
   "adminGuild": {
     "placeholder": {
@@ -370,6 +498,60 @@
       "placeholder": {
         "title": "Heldenerkennung",
         "body": "Erkennungskandidaten und der Referenzkatalog sind noch nicht gebaut — dies ist ein Platzhalter für die Route und ihre Navigation."
+      }
+    },
+    "review": {
+      "title": "Aktivierungsanfrage prüfen",
+      "guildMismatch": "Diese Anfrage gehört nicht zu dem Server im Link. Aus Sicherheitsgründen wird nichts angezeigt.",
+      "metadata": {
+        "title": "Anfrage",
+        "guildId": "Server-ID",
+        "state": "Status",
+        "requestedBy": "Angefragt von",
+        "requestedAt": "Angefragt am",
+        "reviewedBy": "Geprüft von",
+        "reviewedAt": "Geprüft am",
+        "decisionReason": "Begründung"
+      },
+      "state": {
+        "PENDING": "Ausstehende Prüfung",
+        "CHANGES_REQUESTED": "Änderungen angefordert",
+        "APPROVED": "Genehmigt",
+        "REJECTED": "Abgelehnt"
+      },
+      "snapshot": {
+        "title": "Eingereichte Konfiguration (eingefroren)",
+        "description": "Dies ist genau das, was zur Genehmigung eingereicht wurde. Es kann sich während Ihrer Prüfung nicht ändern — eine weitere Änderung durch den Server-Admin erstellt eine neue, separate Einreichung.",
+        "unavailable": "Die eingereichte Konfiguration dieser Anfrage konnte nicht geladen werden.",
+        "notSet": "Nicht festgelegt",
+        "quotasTitle": "Saisonkontingente",
+        "quotas": {
+          "gcHero": "GC Hero",
+          "gcTitan": "GC Titan",
+          "hol": "HOL",
+          "hero": "Hero",
+          "titan": "Titan"
+        }
+      },
+      "liveScope": {
+        "title": "Nicht Teil dieser eingefrorenen Konfiguration",
+        "body": "Die Admin-Rollenrichtlinie, die Standard-Benachrichtigungseinstellungen und der aktuelle Discord-Berechtigungsstatus von Bunny sind laufende, aktuelle Einstellungen — sie werden von der eingereichten Konfiguration dieser Anfrage nie eingefroren und werden hier nicht angezeigt."
+      },
+      "alreadyDecided": {
+        "title": "Über diese Anfrage wurde bereits entschieden"
+      },
+      "actions": {
+        "title": "Entscheidung",
+        "approve": "Genehmigen",
+        "requestChanges": "Änderungen anfordern",
+        "requestChangesReasonLabel": "Was muss geändert werden?",
+        "reject": "Ablehnen",
+        "rejectReasonLabel": "Grund für die Ablehnung"
+      },
+      "toast": {
+        "approved": "Anfrage genehmigt",
+        "changesRequested": "Änderungen angefordert",
+        "rejected": "Anfrage abgelehnt"
       }
     }
   },
