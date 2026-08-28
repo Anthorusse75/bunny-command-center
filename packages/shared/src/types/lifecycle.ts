@@ -43,9 +43,12 @@ export type OnboardingSectionKey = z.infer<typeof onboardingSectionKeySchema>;
  * as a section with a completion state), but it is no longer a
  * user-savable section at all: an earlier pass modeled it as a manual
  * `{acknowledged: boolean}` attestation checkbox, which was replaced by a
- * LIVE, server-computed permission check derived from Bunny's real channel
- * catalog (`apps/web/src/screens/OnboardingScreen.tsx`'s
- * `computeBunnyPermissionsStatus`) — there is no longer anything for a
+ * LIVE, client-derived completion check computed from a server-PROXIED
+ * Bunny channel catalog (`GET /api/guilds/:guildId/onboarding/channels`
+ * relays Bunny's real permission bits; `apps/web/src/screens/OnboardingScreen.tsx`'s
+ * `computeBunnyPermissionsStatus` derives the pass/fail check from that data
+ * client-side — the API itself does not compute a "completed" verdict for
+ * this section) — there is no longer anything for a
  * client to "save" here. The branch was removed entirely (not merely
  * unused) so a `PATCH .../onboarding` with `{section: "bunnyPermissions", ...}`
  * now fails Zod validation outright, per the explicit instruction "there

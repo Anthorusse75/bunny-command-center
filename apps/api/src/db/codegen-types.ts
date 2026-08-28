@@ -1428,6 +1428,22 @@ export interface ReminderObservationWindows {
   window_start: Date;
 }
 
+export interface SchemaMigrations {
+  applied_at: Date | null;
+  applied_by: string | null;
+  checksum: Buffer;
+  description: string | null;
+  duration_ms: number | null;
+  error_detail: string | null;
+  finished_at: Date | null;
+  last_statement_index: number | null;
+  last_statement_preview: string | null;
+  started_at: Date;
+  state: Generated<string>;
+  success: number | null;
+  version: string;
+}
+
 export interface ScreenshotErrors {
   date: Date;
   filename: string;
@@ -1751,6 +1767,7 @@ export interface DB {
   platform_orchestrator_defaults: PlatformOrchestratorDefaults;
   platform_runtime_config: PlatformRuntimeConfig;
   reminder_observation_windows: ReminderObservationWindows;
+  schema_migrations: SchemaMigrations;
   screenshot_errors: ScreenshotErrors;
   screenshots: Screenshots;
   screenshots_history: ScreenshotsHistory;

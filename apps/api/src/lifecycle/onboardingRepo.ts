@@ -26,11 +26,16 @@
  *     separately (Section 9 of this same correction round).
  *
  *  2. The real `guild_configuration_versions` + sub-tables (SHARED,
- *     Self-bot-repo migration authority) — MATERIALIZED from the buffer at
- *     `request-activation` time (`activationRequestsService.ts`), once the
- *     server-side minimum-checklist re-validation has already confirmed
- *     enough fields are known to form a genuinely valid row. This is also
- *     exactly the mechanism the TOCTOU snapshot design needs: once a
+ *     Self-bot-repo migration authority) — MATERIALIZED from the buffer the
+ *     moment `incomingChannelId`/`heroChannelId` are both known, on EVERY
+ *     save of a versioned section (`onboardingService.ts`'s
+ *     `materializeVersionedOnboardingConfigIfReady`, since the Step 10 FINAL
+ *     correction round — not just at `request-activation` time); the
+ *     `request-activation` flow (`activationRequestsService.ts`) also
+ *     defensively re-materializes once its own server-side minimum-checklist
+ *     re-validation has confirmed the same readiness, but by then it
+ *     usually just finds an already-materialized, byte-identical DRAFT. This
+ *     is also exactly the mechanism the TOCTOU snapshot design needs: once a
  *     version has been materialized and referenced by a non-terminal
  *     `dashboard_guild_activation_requests` row, any FURTHER section save
  *     must rotate onto a NEW draft version rather than mutate the
@@ -681,12 +686,18 @@ async function insertOrchestratorRow(
  * Creates (or reuses) a valid, currently-editable `DRAFT` `guild_configuration_versions`
  * row for `guildId`, then writes the buffer's known values into the real
  * `guild_config_common`/`guild_config_bunny`/`guild_config_selfbot`/
- * `guild_config_orchestrator` sub-tables — called ONLY at request-activation
- * time (see this module's header comment), once the server-side checklist
- * has already confirmed `incomingChannelId`/`heroChannelId` are both known
- * (both NOT NULL on their respective sub-tables). Rotates onto a
- * brand-new version (never mutates an existing one already referenced by a
- * non-terminal activation request) — the TOCTOU-closing mechanism.
+ * `guild_config_orchestrator` sub-tables. Called from TWO places: (1) every
+ * save of a versioned onboarding section, the moment
+ * `incomingChannelId`/`heroChannelId` are both known
+ * (`onboardingService.ts`'s `materializeVersionedOnboardingConfigIfReady` —
+ * the normal, save-time path since the Step 10 FINAL correction round); and
+ * (2) `activationRequestsService.ts`'s request-activation flow, defensively,
+ * once the server-side checklist has independently confirmed the same
+ * readiness — by then it usually finds an already-materialized,
+ * byte-identical current DRAFT rather than being the first point where
+ * channel/quota data becomes real SQL. Rotates onto a brand-new version
+ * (never mutates an existing one already referenced by a non-terminal
+ * activation request) — the TOCTOU-closing mechanism.
  *
  * Step 10 external-review correction round, Section 5/10: EVERY field not
  * touched by this call carries forward UNCHANGED from

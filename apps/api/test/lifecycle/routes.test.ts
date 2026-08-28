@@ -2036,11 +2036,13 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
 
       // First save: incoming + hero both known already materializes the
-      // draft (Section 1 of the final correction — materialization is no
-      // longer gated behind quotas) AND, per that same correction, season
-      // plan materialization runs on that channel-completion trigger too —
-      // so the guild_season_plans row is created here with default quotas,
-      // then UPDATEd (not re-created) once the quota override is saved.
+      // real config DRAFT immediately (Section 1 of the final correction —
+      // materialization is no longer gated behind quotas). guild_season_plans
+      // is a SEPARATE, non-versioned quota entity (Blocker 2, PRE-PR FINAL
+      // correction) — the hero-save's channel-completion materialization
+      // does NOT touch it (no seasonQuotas save has happened yet, so there is
+      // nothing quota-related to sync); the row is created here for the
+      // FIRST time only once seasonQuotas is actually saved.
       await patchOnboarding(admin.cookie, guildId, {
         section: "incomingChannel",
         data: { channelId: "500000000000000001" },
@@ -2067,10 +2069,10 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       };
       expect(firstPlan.quota_gc_hero).toBe(1000);
       expect(firstPlan.operational_state).toBe("ACTIVE");
-      // row_version 2: created on the hero-save's channel-completion
-      // materialization (default quotas), then updated in place when the
-      // seasonQuotas override arrived — never a second INSERT.
-      expect(firstPlan.row_version).toBe(2);
+      // row_version 1: this seasonQuotas save is the FIRST guild_season_plans
+      // write for this guild — the earlier hero-save's channel-completion
+      // materialization correctly did not touch it (Blocker 2).
+      expect(firstPlan.row_version).toBe(1);
 
       // A paired guild_season_progress row exists, all counters 0.
       const [progressRows] = await pool.query<mysql.RowDataPacket[]>(
@@ -2096,7 +2098,7 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
       const secondPlan = secondPlanRows[0] as { plan_id: string; quota_gc_hero: number; row_version: number };
       expect(secondPlan.plan_id).toBe(firstPlan.plan_id);
       expect(secondPlan.quota_gc_hero).toBe(1050);
-      expect(secondPlan.row_version).toBe(3);
+      expect(secondPlan.row_version).toBe(2);
     });
   });
 
@@ -2447,6 +2449,235 @@ describe("Step 10 — guild lifecycle, onboarding, snapshot-based approval workf
         [guildId],
       );
       expect(rows).toHaveLength(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Step 10 PRE-PR FINAL correction, Blocker 2 — `guild_configuration_versions`
+  // (versioned config DRAFT) and `guild_season_plans` (a separate,
+  // non-versioned quota/season entity) must not be conflated: a channel-only
+  // edit must never create or mutate a season-plan row, only a genuine
+  // seasonQuotas save (direct, or the one deferred consumption when quotas
+  // were saved before either required channel was known) may.
+  // -----------------------------------------------------------------------
+  describe("PRE-PR FINAL correction, Blocker 2 — guild_season_plans isolation from channel-only edits", () => {
+    // `submission_seasons.open_for_delivery_marker` is a real DB-wide UNIQUE
+    // constraint (at most one OPEN/CLOSING season at a time) — this suite's
+    // OWN season & quotas describe block above already opened one and left
+    // it OPEN, so every test below force-closes whatever is currently open
+    // first, then opens its own, guaranteeing no cross-describe-block
+    // collision regardless of execution order.
+    async function openFreshSeason(seasonId: string, periodKey: string, targetKey: string): Promise<void> {
+      await pool.query("UPDATE submission_seasons SET state = 'CLOSED' WHERE state IN ('OPEN', 'CLOSING')");
+      await pool.query(
+        `INSERT INTO submission_seasons (
+          season_id, submission_period_key, premiumplus_target_key,
+          opens_at_utc, planned_closes_at_utc, operational_closes_at_utc,
+          boundary_source, boundary_confidence, state
+        ) VALUES (?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), DATE_ADD(NOW(), INTERVAL 31 DAY), 'MANUAL', 0.99000, 'OPEN')`,
+        [seasonId, periodKey, targetKey],
+      );
+    }
+
+    async function seasonPlanRow(
+      guildId: string,
+      seasonId: string,
+    ): Promise<
+      | {
+          plan_id: string;
+          quota_gc_hero: number;
+          row_version: number;
+          created_under_guild_configuration_version_id: number;
+        }
+      | undefined
+    > {
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT plan_id, quota_gc_hero, row_version, created_under_guild_configuration_version_id FROM guild_season_plans WHERE guild_id = ? AND season_id = ?",
+        [guildId, seasonId],
+      );
+      return rows[0] as
+        | {
+            plan_id: string;
+            quota_gc_hero: number;
+            row_version: number;
+            created_under_guild_configuration_version_id: number;
+          }
+        | undefined;
+    }
+
+    async function draftVersionId2(guildId: string): Promise<number | null> {
+      const [rows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT draft_config_version_id FROM dashboard_guild_onboarding_progress WHERE guild_id = ?",
+        [guildId],
+      );
+      if (rows.length === 0) return null;
+      return (rows[0] as { draft_config_version_id: number | null }).draft_config_version_id;
+    }
+
+    it("A: channels-only, no quota section saved — a real DRAFT exists immediately, but NO guild_season_plans row is created merely by the channel saves", async () => {
+      const guildId = "600000000000000060";
+      const seasonId = "01SEASON00000000000BLOCK2A";
+      await openFreshSeason(seasonId, "SEA002A", "PPT002A");
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "incomingChannel",
+        data: { channelId: "500000000000000001" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000061" },
+      });
+
+      const versionId = await draftVersionId2(guildId);
+      expect(versionId).not.toBeNull();
+
+      expect(await seasonPlanRow(guildId, seasonId)).toBeUndefined();
+    });
+
+    it("B: quotas saved BEFORE readiness, channels saved LATER — the deferred season-plan sync fires exactly once, when the second required channel arrives", async () => {
+      const guildId = "600000000000000062";
+      const seasonId = "01SEASON00000000000BLOCK2B";
+      await openFreshSeason(seasonId, "SEA002B", "PPT002B");
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      // Quotas saved first — neither channel known yet, so no draft can
+      // exist and no season plan can reference one.
+      expect(
+        (
+          await patchOnboarding(admin.cookie, guildId, {
+            section: "seasonQuotas",
+            data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 1200 } },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(await draftVersionId2(guildId)).toBeNull();
+      expect(await seasonPlanRow(guildId, seasonId)).toBeUndefined();
+
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "incomingChannel",
+        data: { channelId: "500000000000000001" },
+      });
+      // Still not ready — hero unknown.
+      expect(await draftVersionId2(guildId)).toBeNull();
+      expect(await seasonPlanRow(guildId, seasonId)).toBeUndefined();
+
+      // Hero is the SECOND required channel: readiness flips false -> true
+      // on THIS save, and the previously-deferred seasonQuotas save is
+      // consumed exactly once, right here.
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000063" },
+      });
+
+      const versionId = await draftVersionId2(guildId);
+      expect(versionId).not.toBeNull();
+      const [nbRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT nb_gc_hero FROM guild_config_selfbot WHERE configuration_version_id = ?",
+        [versionId],
+      );
+      expect((nbRows[0] as { nb_gc_hero: number }).nb_gc_hero).toBe(1200);
+
+      const plan = await seasonPlanRow(guildId, seasonId);
+      expect(plan).toBeDefined();
+      expect(plan!.quota_gc_hero).toBe(1200);
+      expect(plan!.row_version).toBe(1);
+      expect(plan!.created_under_guild_configuration_version_id).toBe(versionId);
+    });
+
+    it("C: an unrelated channel edit AFTER readiness (no quota change) updates/rotates the DRAFT but leaves guild_season_plans completely untouched", async () => {
+      const guildId = "600000000000000064";
+      const seasonId = "01SEASON00000000000BLOCK2C";
+      await openFreshSeason(seasonId, "SEA002C", "PPT002C");
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "incomingChannel",
+        data: { channelId: "500000000000000001" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000065" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "seasonQuotas",
+        data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 1300 } },
+      });
+
+      const before = await seasonPlanRow(guildId, seasonId);
+      expect(before).toBeDefined();
+      const versionBefore = await draftVersionId2(guildId);
+
+      // An unrelated Hero re-edit AND a Community-channel set — neither is a
+      // quota edit.
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000066" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "communityChannel",
+        data: { channelId: "500000000000000067" },
+      });
+
+      // The DRAFT itself did update (still the same mutable version — proven
+      // by the still-mutable-draft tests above — but its content changed).
+      const versionAfter = await draftVersionId2(guildId);
+      expect(versionAfter).toBe(versionBefore);
+      const [heroRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT CAST(herowarbot_channel_id AS CHAR) as heroChannelId FROM guild_config_selfbot WHERE configuration_version_id = ?",
+        [versionAfter],
+      );
+      expect((heroRows[0] as { heroChannelId: string }).heroChannelId).toBe("500000000000000066");
+
+      // guild_season_plans is byte-identical to before both channel edits.
+      const after = await seasonPlanRow(guildId, seasonId);
+      expect(after).toEqual(before);
+    });
+
+    it("D: a real quota change updates guild_season_plans (versioned nb_* AND the season plan both change)", async () => {
+      const guildId = "600000000000000068";
+      const seasonId = "01SEASON00000000000BLOCK2D";
+      await openFreshSeason(seasonId, "SEA002D", "PPT002D");
+      await seedGuild(guildId);
+      const admin = await makeSession([{ id: guildId, owner: true, permissions: "0" }]);
+
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "incomingChannel",
+        data: { channelId: "500000000000000001" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "heroChannel",
+        data: { channelId: "500000000000000069" },
+      });
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "seasonQuotas",
+        data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 1400 } },
+      });
+
+      const versionId = await draftVersionId2(guildId);
+      const before = await seasonPlanRow(guildId, seasonId);
+      expect(before!.quota_gc_hero).toBe(1400);
+      expect(before!.row_version).toBe(1);
+
+      await patchOnboarding(admin.cookie, guildId, {
+        section: "seasonQuotas",
+        data: { acceptPlatformDefaults: false, quotaOverrides: { gcHero: 1450 } },
+      });
+
+      const [nbRows] = await pool.query<mysql.RowDataPacket[]>(
+        "SELECT nb_gc_hero FROM guild_config_selfbot WHERE configuration_version_id = ?",
+        [versionId],
+      );
+      expect((nbRows[0] as { nb_gc_hero: number }).nb_gc_hero).toBe(1450);
+
+      const after = await seasonPlanRow(guildId, seasonId);
+      expect(after!.plan_id).toBe(before!.plan_id);
+      expect(after!.quota_gc_hero).toBe(1450);
+      expect(after!.row_version).toBe(2);
+      expect(after!.created_under_guild_configuration_version_id).toBe(versionId);
     });
   });
 });

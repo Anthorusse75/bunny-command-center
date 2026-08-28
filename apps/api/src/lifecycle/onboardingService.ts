@@ -19,6 +19,7 @@ import {
   sectionStatuses,
   ConfigVersionRaceError,
   type Executor,
+  type OnboardingProgressRow,
 } from "./onboardingRepo.js";
 import { getLatestActivationRequestForGuild } from "./activationRequestsRepo.js";
 import { setGuildAdminRole } from "../auth/guildPolicyRepo.js";
@@ -190,6 +191,17 @@ export async function getOnboardingState(db: Kysely<DB>, guildId: string): Promi
 /** The 4 sections whose real destination is the SHARED `guild_configuration_versions` + sub-tables (never `dashboard_guild_notification_defaults`/`dashboard_guild_policy`, which are separate, non-versioned mirror-writes handled inline in `saveOnboardingSection` above). */
 const VERSIONED_SECTIONS = new Set(["incomingChannel", "heroChannel", "communityChannel", "seasonQuotas"]);
 
+/** Whether both channel columns the DRAFT-materialization readiness gate cares about are known, given a `sections` buffer snapshot (read either before or after a save — see the two call sites below for why each needs its own snapshot). */
+function channelsKnown(sections: OnboardingProgressRow["sections"]): {
+  readonly incomingKnown: boolean;
+  readonly heroKnown: boolean;
+} {
+  return {
+    incomingKnown: Boolean((sections.incomingChannel?.data as { channelId?: string } | undefined)?.channelId),
+    heroKnown: Boolean((sections.heroChannel?.data as { channelId?: string } | undefined)?.channelId),
+  };
+}
+
 /**
  * Step 10 external-review FINAL correction, Section 1: the single shared
  * save-time materialization path every VERSIONED section
@@ -220,18 +232,41 @@ const VERSIONED_SECTIONS = new Set(["incomingChannel", "heroChannel", "community
  * completed onboarding, request-activation will therefore usually find an
  * already-materialized, byte-identical current DRAFT rather than being the
  * first point where channel/quota data becomes real SQL.
+ *
+ * Step 10 PRE-PR FINAL correction, Blocker 2: `guild_configuration_versions`
+ * (this function's own job, above) and `guild_season_plans` (a separate,
+ * non-versioned operational entity — 11_GUILD_CONFIGURATION.md: "editing
+ * quotas here writes to guild_season_plans directly") must NOT be conflated.
+ * A channel-only edit (Incoming/Hero/Community) is not a quota edit and must
+ * never create or mutate a `guild_season_plans` row. The season-plan sync is
+ * therefore gated separately, on exactly TWO legitimate cases:
+ *   (a) this save's OWN triggering section is `seasonQuotas` — a direct,
+ *       real quota edit always syncs, regardless of prior readiness; or
+ *   (b) `seasonQuotas` was ALREADY saved into the buffer at some EARLIER
+ *       point (before either channel was known, so it never had anywhere
+ *       real to go yet) and THIS save is the one that just flipped readiness
+ *       from false to true — i.e. a channel arriving completes a
+ *       previously-deferred quota save, consumed exactly once, right here.
+ * `readinessBefore` must be computed from a snapshot taken BEFORE this
+ * save's own `saveOnboardingSectionData` call (see the call site) — by the
+ * time this function runs, the buffer already reflects the new value, so
+ * "was it ready before THIS specific save" cannot be reconstructed from the
+ * post-save snapshot alone. Every other channel edit that arrives once
+ * readiness was already true earlier (re-editing Hero, setting Community,
+ * etc.) correctly falls through both cases and skips the season-plan sync —
+ * the DRAFT still updates/rotates immediately, exactly as before.
  */
 async function materializeVersionedOnboardingConfigIfReady(
   db: Executor,
-  params: { readonly guildId: string; readonly authorDiscordId: string },
+  params: {
+    readonly guildId: string;
+    readonly authorDiscordId: string;
+    readonly triggerSection: string;
+    readonly readinessBefore: boolean;
+  },
 ): Promise<void> {
   const progress = await getOnboardingProgressOrEmpty(db, params.guildId);
-  const incomingKnown = Boolean(
-    (progress.sections.incomingChannel?.data as { channelId?: string } | undefined)?.channelId,
-  );
-  const heroKnown = Boolean(
-    (progress.sections.heroChannel?.data as { channelId?: string } | undefined)?.channelId,
-  );
+  const { incomingKnown, heroKnown } = channelsKnown(progress.sections);
   if (!incomingKnown || !heroKnown) {
     return;
   }
@@ -246,6 +281,14 @@ async function materializeVersionedOnboardingConfigIfReady(
     currentDraftVersionId: progress.draftConfigVersionId,
     currentDraftIsImmutable,
   });
+
+  const seasonQuotasAlreadySaved = progress.sections.seasonQuotas !== undefined;
+  const isDirectQuotaSave = params.triggerSection === "seasonQuotas";
+  const isDeferredQuotaConsumption = seasonQuotasAlreadySaved && !params.readinessBefore;
+  if (!isDirectQuotaSave && !isDeferredQuotaConsumption) {
+    return;
+  }
+
   // Separately: an eligible current season, if any, gets its own
   // guild_season_plans row created-or-updated with these same effective
   // values. If NO eligible season exists, this is a deliberate no-op — the
@@ -331,6 +374,22 @@ export async function saveOnboardingSection(
         });
       }
 
+      // Step 10 PRE-PR FINAL correction, Blocker 2: captured BEFORE this
+      // save's own `saveOnboardingSectionData` call below — the "was the
+      // DRAFT already materializable before THIS specific save" snapshot
+      // `materializeVersionedOnboardingConfigIfReady` needs to tell "a
+      // channel arriving just completed a previously-deferred quota save"
+      // apart from "both channels were already known, this is an unrelated
+      // edit" (see that function's own doc comment for the full rationale).
+      // Only computed for a VERSIONED section — every other section's save
+      // never affects channel readiness, so this would be a wasted read.
+      let readinessBeforeSave = false;
+      if (VERSIONED_SECTIONS.has(params.request.section)) {
+        const beforeProgress = await getOnboardingProgressOrEmpty(trx, params.guildId);
+        const before = channelsKnown(beforeProgress.sections);
+        readinessBeforeSave = before.incomingKnown && before.heroKnown;
+      }
+
       await saveOnboardingSectionData(trx, params.guildId, params.request);
 
       // Section 7 ("Admin role policy") mirrors into the EXISTING
@@ -379,6 +438,8 @@ export async function saveOnboardingSection(
         await materializeVersionedOnboardingConfigIfReady(trx, {
           guildId: params.guildId,
           authorDiscordId: params.actorDiscordId,
+          triggerSection: params.request.section,
+          readinessBefore: readinessBeforeSave,
         });
       }
     });
