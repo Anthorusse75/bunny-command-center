@@ -39,9 +39,13 @@ Prerequisites:
        RUNNER_ENV=TEST python database/migrate.py up
 
   3. Bunny OCR's own Python virtualenv (`02_NEW_BOT_OCR/.venv-test`, the same
-     one its own test suite uses) has the dependencies this script's import of
-     `functions.ingestion_scheduler` needs (sqlalchemy, aiomysql) — it does,
-     since that module is Bunny's own production code.
+     one its own test suite uses) has the dependencies this script needs:
+     sqlalchemy and aiomysql (for `functions.ingestion_scheduler`, Bunny's own
+     production code), plus pymysql (this script's `seed_guild_rows()` imports
+     it directly, below — currently pulled in transitively by aiomysql's own
+     dependency chain in that venv, but listed explicitly here since this
+     script's own prerequisites should not rely silently on that transitive
+     relationship).
 
 Then, from this repo's root (bunny-command-center):
 

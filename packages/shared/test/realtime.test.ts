@@ -12,9 +12,11 @@ import {
   nextTransportState,
   isPollingFallbackActive,
   isRealtimeHealthy,
+  guildLifecycleStateChangedDataSchema,
   type RealtimeTransportState,
   type SseCursorVector,
 } from "../src/realtime/index.js";
+import { lifecycleStateSchema } from "../src/types/lifecycle.js";
 
 describe("SSE event id vector encode/decode", () => {
   it("round-trips a single-source vector", () => {
@@ -361,5 +363,56 @@ describe("realtime transport state machine", () => {
   it("only LIVE counts as healthy for UI purposes", () => {
     const all: RealtimeTransportState[] = ["CONNECTING", "LIVE", "GRACE", "POLLING", "RECONNECTING"];
     expect(all.filter(isRealtimeHealthy)).toEqual(["LIVE"]);
+  });
+});
+
+describe("guildLifecycleStateChangedDataSchema (PR #7 review finding: reuses canonical discordSnowflakeSchema/lifecycleStateSchema, never a second weaker definition)", () => {
+  it("accepts a real-shape event: valid Discord snowflake + two real lifecycle states", () => {
+    const result = guildLifecycleStateChangedDataSchema.safeParse({
+      guildId: "600000000000000001",
+      previousState: "CONFIGURING",
+      lifecycleState: "PENDING_APPROVAL",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a malformed/non-Snowflake guildId", () => {
+    for (const guildId of ["not-a-guild-id", "123", "", "600000000000000001x"]) {
+      const result = guildLifecycleStateChangedDataSchema.safeParse({
+        guildId,
+        previousState: "CONFIGURING",
+        lifecycleState: "PENDING_APPROVAL",
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it("rejects an unknown previousState", () => {
+    const result = guildLifecycleStateChangedDataSchema.safeParse({
+      guildId: "600000000000000001",
+      previousState: "NOT_A_REAL_STATE",
+      lifecycleState: "PENDING_APPROVAL",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown lifecycleState", () => {
+    const result = guildLifecycleStateChangedDataSchema.safeParse({
+      guildId: "600000000000000001",
+      previousState: "CONFIGURING",
+      lifecycleState: "NOT_A_REAL_STATE",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts every canonical LifecycleState in both the previousState and lifecycleState positions", () => {
+    for (const state of lifecycleStateSchema.options) {
+      const result = guildLifecycleStateChangedDataSchema.safeParse({
+        guildId: "600000000000000001",
+        previousState: state,
+        lifecycleState: state,
+      });
+      expect(result.success).toBe(true);
+    }
   });
 });

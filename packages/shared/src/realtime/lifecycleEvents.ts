@@ -15,14 +15,22 @@
 // coincidence (`"notification"` singular isn't a namespace; only the plural
 // `"notifications"` is) — this event type avoids it deliberately instead.
 import { z } from "zod";
+import { discordSnowflakeSchema } from "../types/guilds.js";
+import { lifecycleStateSchema } from "../types/lifecycle.js";
 
 export const GUILD_LIFECYCLE_STATE_CHANGED_EVENT_TYPE = "guild_lifecycle.state_changed" as const;
 
+// PR #7 review finding: this schema previously used bare z.string().min(1)
+// for all three fields — weaker than the canonical validation this repo
+// already has for a Discord snowflake and a lifecycle state, letting a
+// malformed guildId or an unrecognized state string parse successfully at
+// this SSE boundary. Reuses the SAME schemas the rest of the codebase
+// validates against, never a second, weaker definition.
 export const guildLifecycleStateChangedDataSchema = z
   .object({
-    guildId: z.string().min(1),
-    previousState: z.string().min(1),
-    lifecycleState: z.string().min(1),
+    guildId: discordSnowflakeSchema,
+    previousState: lifecycleStateSchema,
+    lifecycleState: lifecycleStateSchema,
   })
   .strict();
 export type GuildLifecycleStateChangedData = z.infer<typeof guildLifecycleStateChangedDataSchema>;
