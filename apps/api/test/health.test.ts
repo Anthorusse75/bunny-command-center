@@ -20,6 +20,7 @@ import type { AppConfig } from "../src/config.js";
 import { runUp } from "../migrations/runner.js";
 import type { MigratorDbConfig } from "../migrations/config.js";
 import { testDiscordConfig, testSessionConfig, testSuperadminConfig } from "./helpers/testAuthConfig.js";
+import { DASHBOARD_MIGRATION_LEDGER_TABLE } from "../src/db/constants.js";
 
 const REACHABLE_DB_CONFIG = {
   host: process.env.TEST_MYSQL_HOST ?? "127.0.0.1",
@@ -97,6 +98,16 @@ async function dropSharedSchemaMigrationsTable(): Promise<void> {
   const conn = await mysql.createConnection(REACHABLE_DB_CONFIG);
   try {
     await conn.query("DROP TABLE IF EXISTS schema_migrations");
+  } finally {
+    await conn.end();
+  }
+}
+
+/** Undoes `bootstrapEmptyDashboardLedger()` - leaves the outer fixture in the same state it had before the nested shared-schema suite ran (no Dashboard ledger table at all), so this suite never depends on running last. */
+async function dropDashboardLedgerTable(): Promise<void> {
+  const conn = await mysql.createConnection(REACHABLE_DB_CONFIG);
+  try {
+    await conn.query(`DROP TABLE IF EXISTS \`${DASHBOARD_MIGRATION_LEDGER_TABLE}\``);
   } finally {
     await conn.end();
   }
@@ -195,6 +206,13 @@ describe("/healthz and /readyz (real MySQL)", () => {
       await bootstrapEmptyDashboardLedger();
     });
 
+    afterAll(async () => {
+      // Restores the outer fixture's pre-nested-suite state (no Dashboard
+      // ledger table at all) - this suite must never depend on running
+      // last, or on any other test's expectation about ledger absence.
+      await dropDashboardLedgerTable();
+    });
+
     afterEach(async () => {
       // Each case below owns its own SHARED schema_migrations fixture -
       // dropped after every test so cases never leak rows into each other
@@ -233,25 +251,27 @@ describe("/healthz and /readyz (real MySQL)", () => {
       await app.close();
     });
 
-    it("readyz: SHARED 0015 row STARTED (never completed) -> 503", async () => {
+    it("readyz: SHARED 0015 row STARTED (never completed) -> 503, unresolved-state explicitly identified", async () => {
       await seedSharedSchemaMigrationRow("0015_web_ingestion_and_guild_lifecycle", "STARTED");
       const app = await buildServer(BASE_CONFIG);
       const response = await app.inject({ method: "GET", url: "/readyz" });
       expect(response.statusCode).toBe(503);
       const body = response.json<{ status: string; reason: string }>();
       expect(body.status).toBe("not_ready");
-      expect(body.reason).toMatch(/no applied migrations/);
+      expect(body.reason).toMatch(/unresolved migration/);
+      expect(body.reason).toMatch(/0015_web_ingestion_and_guild_lifecycle=STARTED/);
       await app.close();
     });
 
-    it("readyz: SHARED 0015 row FAILED -> 503", async () => {
+    it("readyz: SHARED 0015 row FAILED -> 503, unresolved-state explicitly identified", async () => {
       await seedSharedSchemaMigrationRow("0015_web_ingestion_and_guild_lifecycle", "FAILED");
       const app = await buildServer(BASE_CONFIG);
       const response = await app.inject({ method: "GET", url: "/readyz" });
       expect(response.statusCode).toBe(503);
       const body = response.json<{ status: string; reason: string }>();
       expect(body.status).toBe("not_ready");
-      expect(body.reason).toMatch(/no applied migrations/);
+      expect(body.reason).toMatch(/unresolved migration/);
+      expect(body.reason).toMatch(/0015_web_ingestion_and_guild_lifecycle=FAILED/);
       await app.close();
     });
 
@@ -264,6 +284,41 @@ describe("/healthz and /readyz (real MySQL)", () => {
       const body = response.json<{ status: string; reason: string }>();
       expect(body.status).toBe("not_ready");
       expect(body.reason).toMatch(/highest applied shared migration 0016 exceeds/);
+      await app.close();
+    });
+
+    // -----------------------------------------------------------------
+    // Load-bearing (PR #8 external-review finding): an otherwise-compatible
+    // lower APPLIED migration must never hide a partially-applied FUTURE
+    // migration. The Self-bot migrator runs DDL statement-by-statement with
+    // no surrounding transaction (MySQL DDL implicitly commits), so a
+    // STARTED/FAILED row means the physical schema may already be
+    // partially mutated - readiness must fail closed regardless of what
+    // lower migration is already APPLIED.
+    // -----------------------------------------------------------------
+    it("readyz: 0015 APPLIED + 0016 STARTED -> 503 (unresolved future migration hides nothing)", async () => {
+      await seedSharedSchemaMigrationRow("0015_web_ingestion_and_guild_lifecycle", "APPLIED");
+      await seedSharedSchemaMigrationRow("0016_some_future_migration", "STARTED");
+      const app = await buildServer(BASE_CONFIG);
+      const response = await app.inject({ method: "GET", url: "/readyz" });
+      expect(response.statusCode).toBe(503);
+      const body = response.json<{ status: string; reason: string }>();
+      expect(body.status).toBe("not_ready");
+      expect(body.reason).toMatch(/unresolved migration/);
+      expect(body.reason).toMatch(/0016_some_future_migration=STARTED/);
+      await app.close();
+    });
+
+    it("readyz: 0015 APPLIED + 0016 FAILED -> 503 (unresolved future migration hides nothing)", async () => {
+      await seedSharedSchemaMigrationRow("0015_web_ingestion_and_guild_lifecycle", "APPLIED");
+      await seedSharedSchemaMigrationRow("0016_some_future_migration", "FAILED");
+      const app = await buildServer(BASE_CONFIG);
+      const response = await app.inject({ method: "GET", url: "/readyz" });
+      expect(response.statusCode).toBe(503);
+      const body = response.json<{ status: string; reason: string }>();
+      expect(body.status).toBe("not_ready");
+      expect(body.reason).toMatch(/unresolved migration/);
+      expect(body.reason).toMatch(/0016_some_future_migration=FAILED/);
       await app.close();
     });
   });

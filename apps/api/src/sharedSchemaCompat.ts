@@ -43,14 +43,24 @@ function versionPrefix(version: string): string {
 
 /**
  * Mirrors `vendor/self-bot-schema/src/database/schema_compat.py`'s
- * `check_schema_compatibility()` in intent: same table, same
- * `state = 'APPLIED'` filter (a `STARTED`/`FAILED` row for a migration is
- * therefore never counted as applied — an unresolved highest migration
- * simply falls back to whatever real version below it IS applied, which
- * this build's MIN/MAX range then judges on its own merits), same
- * numeric-prefix range comparison. Takes an already-open connection
- * (`readiness.ts`'s own short-lived `mysql2` connection, into the SAME
- * database the shared ledger lives in) rather than opening a second one.
+ * `check_schema_compatibility()` in intent: same table, same numeric-prefix
+ * range comparison. Takes an already-open connection (`readiness.ts`'s own
+ * short-lived `mysql2` connection, into the SAME database the shared ledger
+ * lives in) rather than opening a second one.
+ *
+ * Deliberately STRICTER than the Python original on one point (a real,
+ * external-review-confirmed gap in an earlier pass of this file): the
+ * Self-bot migrator applies each migration's DDL statement-by-statement
+ * with NO surrounding transaction (MySQL DDL implicitly commits), so a
+ * `STARTED`/`FAILED` row means the physical schema may already be
+ * partially mutated by that migration — it is not a safely-known schema,
+ * regardless of what lower migration is already `APPLIED`. A ledger like
+ * `{0015: APPLIED, 0016: FAILED}` must fail closed even though 0015 alone
+ * would be compatible: silently falling back to "highest APPLIED" would
+ * hide a partially-applied future migration from this exact check. Every
+ * `STARTED`/`FAILED` row is therefore checked FIRST and unconditionally
+ * fails readiness, before the highest-`APPLIED`-version range comparison
+ * ever runs.
  */
 export async function checkSharedSchemaCompatibility(
   conn: mysql.Connection,
@@ -67,10 +77,30 @@ export async function checkSharedSchemaCompatibility(
     };
   }
 
-  const [appliedRows] = await conn.query<mysql.RowDataPacket[]>(
-    `SELECT version FROM ${SHARED_SCHEMA_MIGRATIONS_TABLE} WHERE state = 'APPLIED'`,
+  const [unresolvedRows] = await conn.query<mysql.RowDataPacket[]>(
+    `SELECT version, state FROM ${SHARED_SCHEMA_MIGRATIONS_TABLE} WHERE state IN ('STARTED', 'FAILED')`,
   );
-  if (appliedRows.length === 0) {
+  if (unresolvedRows.length > 0) {
+    const detail = (unresolvedRows as { version: string; state: string }[])
+      .map((row) => `${row.version}=${row.state}`)
+      .join(", ");
+    return {
+      compatible: false,
+      highestAppliedVersion: null,
+      detail: `shared ${SHARED_SCHEMA_MIGRATIONS_TABLE} has unresolved migration(s), schema not safely known: ${detail}`,
+    };
+  }
+
+  // Only the single highest APPLIED version is needed - asked of MySQL
+  // directly (numeric-prefix order, never the full version string, so
+  // "0002_..." correctly sorts before "0010_...") rather than pulling every
+  // applied row into Node to sort client-side.
+  const [highestRows] = await conn.query<mysql.RowDataPacket[]>(
+    `SELECT version FROM ${SHARED_SCHEMA_MIGRATIONS_TABLE} WHERE state = 'APPLIED'
+     ORDER BY CAST(SUBSTRING_INDEX(version, '_', 1) AS UNSIGNED) DESC
+     LIMIT 1`,
+  );
+  if (highestRows.length === 0) {
     return {
       compatible: false,
       highestAppliedVersion: null,
@@ -78,10 +108,7 @@ export async function checkSharedSchemaCompatibility(
     };
   }
 
-  const versions = (appliedRows as { version: string }[])
-    .map((row) => row.version)
-    .sort((a, b) => versionPrefix(a).localeCompare(versionPrefix(b)));
-  const highest = versions[versions.length - 1]!;
+  const highest = (highestRows[0] as { version: string }).version;
   const highestPrefix = versionPrefix(highest);
 
   if (highestPrefix < SUPPORTED_SHARED_SCHEMA_MIN) {

@@ -125,8 +125,10 @@ async function main() {
     const readyResponse = await fetch(`${BASE_URL}/readyz`);
     if (readyResponse.status !== 200) {
       throw new Error(
-        `/readyz returned ${readyResponse.status} (expected 200 — real MySQL + Dashboard ` +
-          `migration ledger must already be reachable/applied): ${JSON.stringify(await readyResponse.json())}`,
+        `/readyz returned ${readyResponse.status} (expected 200 — real MySQL reachable, the ` +
+          `Dashboard migration ledger must already be applied, AND the SHARED schema_migrations ` +
+          `ledger must show a highest applied migration within sharedSchemaCompat.ts's supported ` +
+          `range): ${JSON.stringify(await readyResponse.json())}`,
       );
     }
     console.log(
