@@ -1,6 +1,7 @@
 import mysql from "mysql2/promise";
 import type { DbConfig } from "./config.js";
 import { DASHBOARD_MIGRATION_LEDGER_TABLE as LEDGER_TABLE } from "./db/constants.js";
+import { checkSharedSchemaCompatibility } from "./sharedSchemaCompat.js";
 
 export interface ReadinessResult {
   ready: boolean;
@@ -9,11 +10,14 @@ export interface ReadinessResult {
 
 /**
  * /readyz's real check (04_GLOBAL_TECHNICAL_ARCHITECTURE.md, Step 01 scope):
- * MySQL must be reachable AND the Dashboard's own migration ledger must be
- * bootstrapped and free of STARTED/FAILED rows. No shared-schema
- * SUPPORTED_SCHEMA_MAX floor is checked yet — Step 01 introduces no
- * Dashboard feature that depends on one (the first real dependency,
- * web_upload_intake, arrives in Step 07; see 06_VERSIONING_AND_COMPATIBILITY.md).
+ * MySQL must be reachable, the Dashboard's own migration ledger must be
+ * bootstrapped and free of STARTED/FAILED rows, AND — as of Step 10, the
+ * first Dashboard feature to genuinely depend on shared migration 0015
+ * (`guilds.lifecycle_state` et al.) — the SHARED `schema_migrations` ledger
+ * must show a highest applied migration within
+ * `sharedSchemaCompat.ts`'s `SUPPORTED_SHARED_SCHEMA_MIN`/`_MAX` range. A
+ * Dashboard build must never report READY against a shared schema it does
+ * not understand (06_VERSIONING_AND_COMPATIBILITY.md).
  *
  * Uses its own short-lived connection (deliberately NOT the app's shared
  * Kysely pool) with a tight connect timeout so an unreachable DB fails fast
@@ -52,6 +56,11 @@ export async function checkReadiness(config: DbConfig): Promise<ReadinessResult>
     if (badRows.length > 0) {
       const detail = badRows.map((r) => `${r.version as string}=${r.state as string}`).join(", ");
       return { ready: false, reason: `Dashboard migration ledger not clean: ${detail}` };
+    }
+
+    const sharedCompat = await checkSharedSchemaCompatibility(conn);
+    if (!sharedCompat.compatible) {
+      return { ready: false, reason: sharedCompat.detail };
     }
 
     return { ready: true };
