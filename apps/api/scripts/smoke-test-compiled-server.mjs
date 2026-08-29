@@ -16,11 +16,14 @@
  * transpilation tool in the loop, on either side of this script.
  *
  * Proves, in order: build -> launch the compiled server -> real /healthz
- * 200 -> real /readyz 200 (requires the real MySQL connection + migration
- * ledger this script's caller is responsible for having ready, matching the
+ * 200 -> real /readyz 200 (requires the real MySQL connection + BOTH
+ * migration ledgers this script's caller is responsible for having ready —
+ * the Dashboard's own AND, since Step 10, the SHARED `schema_migrations`
+ * ledger within sharedSchemaCompat.ts's supported range — matching the
  * existing CI convention: DB_* env vars, ci.yml's already-migrated
- * `bunny_command_center` database) -> a real /api/version response ->
- * SIGTERM -> clean exit (code 0, within a bounded timeout).
+ * `bunny_command_center` database) -> a real /api/version response proving
+ * the current supported shared-schema range -> SIGTERM -> clean exit (code
+ * 0, within a bounded timeout).
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -126,7 +129,10 @@ async function main() {
           `migration ledger must already be reachable/applied): ${JSON.stringify(await readyResponse.json())}`,
       );
     }
-    console.log("[smoke-test] /readyz OK — real MySQL reachable, Dashboard migration ledger clean.");
+    console.log(
+      "[smoke-test] /readyz OK — real MySQL reachable, Dashboard migration ledger clean, " +
+        "SHARED schema_migrations within the supported range.",
+    );
 
     const versionResponse = await fetch(`${BASE_URL}/api/version`);
     if (versionResponse.status !== 200) {
@@ -135,6 +141,16 @@ async function main() {
     const versionBody = await versionResponse.json();
     if (!versionBody.service || !versionBody.version) {
       throw new Error(`/api/version returned an unexpected body: ${JSON.stringify(versionBody)}`);
+    }
+    // Step 10 post-merge correction: this compiled build must report the
+    // CURRENT supported shared-schema range (apps/api/src/sharedSchemaCompat.ts),
+    // never the stale scaffold-era "0014" the endpoint used to hardcode
+    // regardless of what the submodule pin actually was.
+    if (versionBody.supportedSharedSchemaMin !== "0015" || versionBody.supportedSharedSchemaMax !== "0015") {
+      throw new Error(
+        `/api/version reported an unexpected shared-schema compatibility range (expected 0015..0015): ` +
+          `${JSON.stringify(versionBody)}`,
+      );
     }
     console.log(`[smoke-test] /api/version OK — ${JSON.stringify(versionBody)}`);
 
